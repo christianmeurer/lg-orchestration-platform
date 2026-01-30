@@ -1,6 +1,13 @@
 # LG Orchestration Platform
 
-Production-oriented LangGraph orchestration scaffold (Python) plus a restricted tool runner (Rust) for repo-aware coding, verification, and auditable execution.
+[![CI](https://github.com/christianmeurer/lg-orchestration-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/christianmeurer/lg-orchestration-platform/actions/workflows/ci.yml)
+
+LangGraph orchestration scaffold (Python) + restricted tool runner (Rust) designed for:
+
+- repo-aware coding workflows
+- deterministic tool execution
+- audit-friendly run traces
+- safe-by-default policies (runner boundary)
 
 Core docs:
 
@@ -13,6 +20,30 @@ Core docs:
 - Rust runner (restricted tools): [`rs/runner/src/main.rs`](rs/runner/src/main.rs:1)
 
 The orchestrator never executes shell commands directly; it calls the runner via HTTP.
+
+## Quickstart
+
+1) (Optional) Run the Rust tool runner
+
+```bash
+cd rs/runner
+cargo run
+```
+
+2) Run the orchestrator CLI
+
+```bash
+cd py
+uv sync
+uv run lg-orch run "summarize repo" --trace
+```
+
+3) Export the orchestration graph (Mermaid)
+
+```bash
+cd py
+uv run lg-orch export-graph
+```
 
 ## Security model (baseline)
 
@@ -29,22 +60,11 @@ Hardening to add for production:
 - Disable `git` by default in runner `exec` allowlist if not required.
 - Run runner in an OS sandbox (container / low integrity token / namespaces).
 
-Quick start (local dev):
+## Roadmap (near-term)
 
-1) Start the runner
-
-```bash
-cd rs/runner
-cargo run
-```
-
-2) Run the orchestrator (CLI)
-
-```bash
-cd py
-uv sync
-uv run python -m lg_orch.main "summarize repo"
-```
+- Make runner protocol explicitly versioned (schema ids in envelopes)
+- Add a minimal web UI for graph/timeline/artifacts (consuming run traces)
+- Add a job store for replay (SQLite → Postgres)
 
 ## Local verification
 
