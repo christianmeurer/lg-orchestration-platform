@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - name: uv sync
+        working-directory: py
+        run: uv sync
+      - name: ruff format
+        working-directory: py
+        run: uv run ruff format --check
+      - name: ruff check
+        working-directory: py
+        run: uv run ruff check
+      - name: mypy
+        working-directory: py
+        run: uv run mypy
+      - name: pytest
+        working-directory: py
+        run: uv run pytest -q
+      - name: eval canary
+        run: uv run python eval/run.py
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: cargo fmt
+        working-directory: rs
+        run: cargo fmt --check
+      - name: cargo clippy
+        working-directory: rs
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: cargo test
+        working-directory: rs
+        run: cargo test
+

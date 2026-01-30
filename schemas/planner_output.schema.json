@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/schemas/planner_output.schema.json",
+  "type": "object",
+  "required": ["steps", "verification", "rollback"],
+  "additionalProperties": false,
+  "properties": {
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "description", "tools", "expected_outcome", "files_touched"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "description": { "type": "string", "minLength": 1 },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["tool", "input"],
+              "additionalProperties": false,
+              "properties": {
+                "tool": { "type": "string", "minLength": 1 },
+                "input": { "type": "object" }
+              }
+            }
+          },
+          "expected_outcome": { "type": "string", "minLength": 1 },
+          "files_touched": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "verification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["tool", "input"],
+        "additionalProperties": false,
+        "properties": {
+          "tool": { "type": "string", "minLength": 1 },
+          "input": { "type": "object" }
+        }
+      }
+    },
+    "rollback": { "type": "string", "minLength": 1 }
+  }
+}
+

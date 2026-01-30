@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/schemas/verifier_report.schema.json",
+  "type": "object",
+  "required": ["ok", "checks"],
+  "additionalProperties": false,
+  "properties": {
+    "ok": { "type": "boolean" },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "ok", "tool", "exit_code"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "ok": { "type": "boolean" },
+          "tool": { "type": "string", "minLength": 1 },
+          "exit_code": { "type": "integer" },
+          "summary": { "type": "string" }
+        }
+      }
+    }
+  }
+}
+

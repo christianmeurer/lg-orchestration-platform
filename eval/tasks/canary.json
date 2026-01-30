@@ -1,0 +1,6 @@
+{
+  "id": "canary-001",
+  "request": "Summarize the repository structure and tell me which languages it contains.",
+  "expected_intent": "analysis"
+}
+

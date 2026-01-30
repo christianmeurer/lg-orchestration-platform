@@ -1,0 +1,28 @@
+[models.router]
+provider = "local"
+model = "deterministic"
+temperature = 0.0
+
+[models.planner]
+provider = "local"
+model = "deterministic"
+temperature = 0.0
+
+[budgets]
+max_loops = 3
+max_tool_calls_per_loop = 12
+max_patch_bytes = 200000
+tool_timeout_s = 600
+
+[policy]
+network_default = "deny"
+require_approval_for_mutations = true
+
+[runner]
+base_url = "http://127.0.0.1:8088"
+root_dir = "."
+
+[trace]
+enabled = true
+output_dir = "artifacts/runs"
+

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/schemas/tool_envelope.schema.json",
+  "type": "object",
+  "required": ["tool", "ok", "exit_code", "stdout", "stderr", "timing_ms", "artifacts"],
+  "additionalProperties": false,
+  "properties": {
+    "tool": { "type": "string", "minLength": 1 },
+    "ok": { "type": "boolean" },
+    "exit_code": { "type": "integer" },
+    "stdout": { "type": "string" },
+    "stderr": { "type": "string" },
+    "timing_ms": { "type": "integer", "minimum": 0 },
+    "artifacts": { "type": "object" }
+  }
+}
+
