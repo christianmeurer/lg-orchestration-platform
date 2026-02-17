@@ -26,7 +26,10 @@ def append_event(state: dict[str, Any], *, kind: str, data: dict[str, Any]) -> d
 def write_run_trace(*, repo_root: Path, out_dir: Path, state: dict[str, Any]) -> Path:
     run_id = str(state.get("_run_id") or uuid.uuid4().hex)
     out_dir_abs = (repo_root / out_dir).resolve()
-    out_dir_abs.mkdir(parents=True, exist_ok=True)
+    try:
+        out_dir_abs.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise OSError(f"failed to create trace dir: {out_dir_abs}") from exc
     out_path = out_dir_abs / f"run-{run_id}.json"
 
     payload = {
@@ -36,5 +39,8 @@ def write_run_trace(*, repo_root: Path, out_dir: Path, state: dict[str, Any]) ->
         "final": state.get("final"),
         "events": list(state.get("_trace_events", [])),
     }
-    out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as exc:
+        raise OSError(f"failed to write trace: {out_path}") from exc
     return out_path

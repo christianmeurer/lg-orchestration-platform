@@ -21,6 +21,7 @@ require_approval_for_mutations = true
 [runner]
 base_url = "http://127.0.0.1:8088"
 root_dir = "."
+api_key = "dev-insecure"
 
 [trace]
 enabled = true

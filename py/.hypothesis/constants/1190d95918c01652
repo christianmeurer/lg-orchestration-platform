@@ -1,0 +1,4 @@
+# file: C:\Users\chris\Projects\LG-Orchestration-Platform\py\src\lg_orch\nodes\verifier.py
+# hypothesis_version: 6.151.4
+
+['checks', 'end', 'name', 'node', 'ok', 'phase', 'start', 'verification', 'verifier', 'verifier_failed']

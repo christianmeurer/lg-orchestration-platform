@@ -1,0 +1,4 @@
+# file: C:\Users\chris\Projects\LG-Orchestration-Platform\py\src\lg_orch\nodes\executor.py
+# hypothesis_version: 6.151.4
+
+['_runner_api_key', '_runner_base_url', '_runner_enabled', 'artifacts', 'batch_execute', 'count', 'end', 'error', 'executor', 'executor_failed', 'exit_code', 'input', 'name', 'node', 'ok', 'phase', 'plan', 'start', 'stderr', 'stdout', 'steps', 'timing_ms', 'tool', 'tool_results', 'tools']

@@ -3,6 +3,9 @@ $ErrorActionPreference = "Stop"
 Write-Host "[py] uv sync"
 Push-Location py
 uv sync
+
+Write-Host "[py] pip-audit"
+uv run pip-audit
 Pop-Location
 
 Write-Host "[py] ruff + mypy + pytest"
@@ -15,6 +18,8 @@ Pop-Location
 
 Write-Host "[rs] fmt + clippy + test"
 Push-Location rs
+cargo install cargo-audit --locked
+cargo audit
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test

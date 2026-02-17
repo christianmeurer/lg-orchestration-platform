@@ -13,6 +13,9 @@ jobs:
       - name: uv sync
         working-directory: py
         run: uv sync
+      - name: pip-audit
+        working-directory: py
+        run: uv run pip-audit
       - name: ruff format
         working-directory: py
         run: uv run ruff format --check
@@ -35,6 +38,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: cargo audit
+        working-directory: rs
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
       - name: cargo fmt
         working-directory: rs
         run: cargo fmt --check

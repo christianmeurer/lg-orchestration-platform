@@ -1,0 +1,4 @@
+# file: C:\Users\chris\Projects\LG-Orchestration-Platform\py\src\lg_orch\nodes\policy_gate.py
+# hypothesis_version: 6.151.4
+
+['_budget_max_loops', '_config_policy', 'allow_network', 'budgets', 'deny', 'end', 'guards', 'loop', 'name', 'network_default', 'node', 'phase', 'policy_gate', 'remaining', 'start']

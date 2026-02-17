@@ -6,6 +6,10 @@ pushd py
 uv sync
 if errorlevel 1 exit /b 1
 
+echo [py] pip-audit
+uv run pip-audit
+if errorlevel 1 exit /b 1
+
 echo [py] ruff + mypy + pytest
 uv run ruff format --check
 if errorlevel 1 exit /b 1
@@ -19,6 +23,10 @@ popd
 
 echo [rs] fmt + clippy + test
 pushd rs
+cargo install cargo-audit --locked
+if errorlevel 1 exit /b 1
+cargo audit
+if errorlevel 1 exit /b 1
 cargo fmt --check
 if errorlevel 1 exit /b 1
 cargo clippy --all-targets --all-features -- -D warnings

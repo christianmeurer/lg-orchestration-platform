@@ -13,6 +13,7 @@ def test_batch_execute_shapes_when_runner_unavailable() -> None:
     )
     assert len(results) == 2
     for r in results:
+        assert r["artifacts"]["error"] in {"runner_unavailable", "runner_http_error"}
         assert set(r.keys()) >= {
             "tool",
             "ok",

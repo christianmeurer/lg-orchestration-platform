@@ -1,12 +1,13 @@
+mod auth;
 mod config;
 mod envelope;
 mod errors;
 mod tools;
 
-use std::net::SocketAddr;
-
 use axum::{routing::get, routing::post, Json, Router};
 use clap::Parser;
+use std::net::SocketAddr;
+use tower_http::trace::TraceLayer;
 use tracing::Level;
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -22,6 +23,12 @@ struct Args {
     bind: String,
     #[arg(long, default_value = ".")]
     root_dir: String,
+    #[arg(long, default_value = "dev")]
+    profile: String,
+    #[arg(long, default_value = "")]
+    api_key: String,
+    #[arg(long, default_value = "100")]
+    rate_limit_rps: u64,
 }
 
 async fn healthz() -> &'static str {
@@ -72,16 +79,40 @@ async fn main() -> anyhow::Result<()> {
         .json()
         .init();
 
-    let cfg = RunnerConfig::new(args.root_dir)?;
+    let api_key = if args.api_key.trim().is_empty() {
+        None
+    } else {
+        Some(args.api_key.trim().to_string())
+    };
+
+    let cfg = RunnerConfig::with_rate_limit(
+        args.root_dir,
+        Some(args.profile.as_str()),
+        api_key,
+        args.rate_limit_rps,
+    )?;
+
+    let protected = Router::new()
+        .route("/v1/tools/execute", post(execute_tool))
+        .route("/v1/tools/batch_execute", post(batch_execute_tool))
+        .route_layer(axum::middleware::from_fn_with_state(
+            cfg.clone(),
+            crate::auth::require_api_key,
+        ))
+        .route_layer(axum::middleware::from_fn_with_state(
+            cfg.clone(),
+            crate::auth::rate_limit,
+        ));
+
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/v1/capabilities", get(capabilities))
-        .route("/v1/tools/execute", post(execute_tool))
-        .route("/v1/tools/batch_execute", post(batch_execute_tool))
+        .merge(protected)
+        .layer(TraceLayer::new_for_http())
         .with_state(cfg);
 
     let addr: SocketAddr = args.bind.parse()?;
-    tracing::info!(%addr, "runner_listening");
+    tracing::info!(%addr, rate_limit_rps = args.rate_limit_rps, "runner_listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
     Ok(())

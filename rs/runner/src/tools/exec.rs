@@ -81,3 +81,56 @@ pub async fn exec(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiE
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_allowed_cmd_valid() {
+        assert!(allowed_cmd("uv"));
+        assert!(allowed_cmd("python"));
+        assert!(allowed_cmd("pytest"));
+        assert!(allowed_cmd("ruff"));
+        assert!(allowed_cmd("mypy"));
+        assert!(allowed_cmd("cargo"));
+        assert!(allowed_cmd("git"));
+    }
+
+    #[test]
+    fn test_allowed_cmd_blocked() {
+        assert!(!allowed_cmd("rm"));
+        assert!(!allowed_cmd("curl"));
+        assert!(!allowed_cmd("wget"));
+        assert!(!allowed_cmd("sh"));
+        assert!(!allowed_cmd("bash"));
+        assert!(!allowed_cmd("powershell"));
+        assert!(!allowed_cmd("cmd"));
+        assert!(!allowed_cmd("node"));
+        assert!(!allowed_cmd("npm"));
+        assert!(!allowed_cmd(""));
+    }
+
+    #[test]
+    fn test_allowed_cmd_case_sensitive() {
+        assert!(!allowed_cmd("Python"));
+        assert!(!allowed_cmd("GIT"));
+        assert!(!allowed_cmd("Cargo"));
+    }
+
+    #[tokio::test]
+    async fn test_exec_forbidden_command() {
+        let td = tempfile::tempdir().unwrap();
+        let cfg = RunnerConfig::new(td.path(), Some("dev"), None).unwrap();
+        let result = exec(&cfg, json!({"cmd": "rm", "args": ["-rf", "/"]})).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_exec_bad_input() {
+        let td = tempfile::tempdir().unwrap();
+        let cfg = RunnerConfig::new(td.path(), Some("dev"), None).unwrap();
+        let result = exec(&cfg, json!({"wrong": "fields"})).await;
+        assert!(result.is_err());
+    }
+}

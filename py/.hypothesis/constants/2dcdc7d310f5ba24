@@ -1,0 +1,4 @@
+# file: C:\Users\chris\Projects\LG-Orchestration-Platform\py\src\lg_orch\graph.py
+# hypothesis_version: 6.151.4
+
+['END', 'context_builder', 'executor', 'ingest', 'planner', 'policy_gate', 'reporter', 'verifier']

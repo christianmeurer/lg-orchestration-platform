@@ -86,7 +86,10 @@ pub async fn list_files(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope
             let p = entry.path();
             if p.is_file() {
                 let rel = p.strip_prefix(&cfg.root_dir).unwrap_or(p);
-                out.push(rel.to_string_lossy().to_string());
+                let rel_s = rel.to_string_lossy().to_string();
+                if cfg.can_read(&rel_s) {
+                    out.push(rel_s);
+                }
             }
         }
     } else {
@@ -100,7 +103,10 @@ pub async fn list_files(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope
         {
             let p = ent.path();
             let rel = p.strip_prefix(&cfg.root_dir).unwrap_or(&p);
-            out.push(rel.to_string_lossy().to_string());
+            let rel_s = rel.to_string_lossy().to_string();
+            if cfg.can_read(&rel_s) {
+                out.push(rel_s);
+            }
         }
     }
     out.sort();
@@ -191,4 +197,174 @@ pub async fn apply_patch(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelop
         json!({"changes": diffs}),
         0,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::RunnerConfig;
+    use std::fs as stdfs;
+
+    fn test_cfg() -> (tempfile::TempDir, RunnerConfig) {
+        let td = tempfile::tempdir().unwrap();
+        stdfs::create_dir_all(td.path().join("py")).unwrap();
+        let cfg = RunnerConfig::new(td.path(), Some("dev"), None).unwrap();
+        (td, cfg)
+    }
+
+    // --- resolve_under_root tests ---
+
+    #[test]
+    fn test_resolve_empty_path() {
+        let (_td, cfg) = test_cfg();
+        let result = resolve_under_root(&cfg, "");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resolve_whitespace_only_path() {
+        let (_td, cfg) = test_cfg();
+        let result = resolve_under_root(&cfg, "   ");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resolve_nul_byte() {
+        let (_td, cfg) = test_cfg();
+        let result = resolve_under_root(&cfg, "file\0.txt");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resolve_valid_path() {
+        let (td, cfg) = test_cfg();
+        stdfs::write(td.path().join("test.txt"), "hello").unwrap();
+        let result = resolve_under_root(&cfg, "test.txt");
+        assert!(result.is_ok());
+        let path = result.unwrap();
+        assert!(path.starts_with(&cfg.root_dir));
+    }
+
+    // --- read_file tests ---
+
+    #[tokio::test]
+    async fn test_read_file_success() {
+        let (td, cfg) = test_cfg();
+        stdfs::write(td.path().join("py/hello.txt"), "world").unwrap();
+        let result = read_file(&cfg, json!({"path": "py/hello.txt"})).await;
+        assert!(result.is_ok());
+        let env = result.unwrap();
+        assert!(env.ok);
+        assert_eq!(env.stdout, "world");
+    }
+
+    #[tokio::test]
+    async fn test_read_file_missing() {
+        let (_td, cfg) = test_cfg();
+        let result = read_file(&cfg, json!({"path": "missing.txt"})).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_read_file_bad_input() {
+        let (_td, cfg) = test_cfg();
+        let result = read_file(&cfg, json!({"wrong_key": 123})).await;
+        assert!(result.is_err());
+    }
+
+    // --- list_files tests ---
+
+    #[tokio::test]
+    async fn test_list_files_non_recursive() {
+        let (td, cfg) = test_cfg();
+        stdfs::write(td.path().join("py/a.txt"), "").unwrap();
+        stdfs::write(td.path().join("py/b.txt"), "").unwrap();
+        let result = list_files(&cfg, json!({"path": "py", "recursive": false})).await;
+        assert!(result.is_ok());
+        let env = result.unwrap();
+        assert!(env.ok);
+        let files: Vec<String> = serde_json::from_str(&env.stdout).unwrap();
+        assert!(files.iter().any(|f| f.contains("a.txt")));
+        assert!(files.iter().any(|f| f.contains("b.txt")));
+    }
+
+    #[tokio::test]
+    async fn test_list_files_recursive() {
+        let (td, cfg) = test_cfg();
+        stdfs::create_dir_all(td.path().join("py/sub")).unwrap();
+        stdfs::write(td.path().join("py/sub/deep.txt"), "").unwrap();
+        let result = list_files(&cfg, json!({"path": "py", "recursive": true})).await;
+        assert!(result.is_ok());
+        let env = result.unwrap();
+        let files: Vec<String> = serde_json::from_str(&env.stdout).unwrap();
+        assert!(files.iter().any(|f| f.contains("deep.txt")));
+    }
+
+    // --- apply_patch tests ---
+
+    #[tokio::test]
+    async fn test_apply_patch_add() {
+        let (_td, cfg) = test_cfg();
+        let input = json!({
+            "changes": [{"path": "py/new.txt", "op": "add", "content": "hello"}]
+        });
+        let result = apply_patch(&cfg, input).await;
+        assert!(result.is_ok());
+        let env = result.unwrap();
+        assert!(env.ok);
+    }
+
+    #[tokio::test]
+    async fn test_apply_patch_add_existing_fails() {
+        let (td, cfg) = test_cfg();
+        stdfs::write(td.path().join("py/exists.txt"), "old").unwrap();
+        let input = json!({
+            "changes": [{"path": "py/exists.txt", "op": "add", "content": "new"}]
+        });
+        let result = apply_patch(&cfg, input).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_apply_patch_update() {
+        let (td, cfg) = test_cfg();
+        stdfs::write(td.path().join("py/update.txt"), "old content").unwrap();
+        let input = json!({
+            "changes": [{"path": "py/update.txt", "op": "update", "content": "new content"}]
+        });
+        let result = apply_patch(&cfg, input).await;
+        assert!(result.is_ok());
+        let content = stdfs::read_to_string(td.path().join("py/update.txt")).unwrap();
+        assert_eq!(content, "new content");
+    }
+
+    #[tokio::test]
+    async fn test_apply_patch_update_missing_fails() {
+        let (_td, cfg) = test_cfg();
+        let input = json!({
+            "changes": [{"path": "py/missing.txt", "op": "update", "content": "x"}]
+        });
+        let result = apply_patch(&cfg, input).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_apply_patch_delete() {
+        let (td, cfg) = test_cfg();
+        stdfs::write(td.path().join("py/delete_me.txt"), "bye").unwrap();
+        let input = json!({
+            "changes": [{"path": "py/delete_me.txt", "op": "delete"}]
+        });
+        let result = apply_patch(&cfg, input).await;
+        assert!(result.is_ok());
+        assert!(!td.path().join("py/delete_me.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn test_apply_patch_empty_changes_fails() {
+        let (_td, cfg) = test_cfg();
+        let input = json!({"changes": []});
+        let result = apply_patch(&cfg, input).await;
+        assert!(result.is_err());
+    }
 }
