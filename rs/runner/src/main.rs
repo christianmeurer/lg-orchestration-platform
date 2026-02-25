@@ -40,11 +40,15 @@ async fn capabilities() -> Json<serde_json::Value> {
         "tools": [
             "health",
             "read_file",
+            "search_files",
             "list_files",
             "apply_patch",
             "exec",
+            "mcp_discover", // SOTA 2026: MCP extension endpoint stub
+            "mcp_execute"
         ],
-        "batch": true
+        "batch": true,
+        "mcp_enabled": true // Signals to orchestrator that runner supports MCP
     }))
 }
 

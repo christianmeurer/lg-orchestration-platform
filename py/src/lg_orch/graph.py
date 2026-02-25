@@ -16,6 +16,21 @@ from lg_orch.nodes import (
 from lg_orch.visualize import GraphEdge, graph_mermaid
 
 
+def route_after_verifier(state: dict[str, Any]) -> str:
+    verification = state.get("verification", {})
+    if verification.get("ok"):
+        return "reporter"
+        
+    budgets = state.get("budgets", {})
+    current_loop = budgets.get("current_loop", 1)
+    max_loops = budgets.get("max_loops", 3)
+    
+    if current_loop >= max_loops:
+        return "reporter"
+        
+    return "planner"
+
+
 def build_graph() -> Any:
     g: StateGraph = StateGraph(dict)
     g.add_node("ingest", ingest)
@@ -32,7 +47,10 @@ def build_graph() -> Any:
     g.add_edge("context_builder", "planner")
     g.add_edge("planner", "executor")
     g.add_edge("executor", "verifier")
-    g.add_edge("verifier", "reporter")
+    g.add_conditional_edges("verifier", route_after_verifier, {
+        "reporter": "reporter",
+        "planner": "planner"
+    })
     g.add_edge("reporter", END)
     return g.compile()
 
@@ -54,7 +72,8 @@ def export_mermaid() -> str:
         GraphEdge("context_builder", "planner"),
         GraphEdge("planner", "executor"),
         GraphEdge("executor", "verifier"),
-        GraphEdge("verifier", "reporter"),
+        GraphEdge("verifier", "reporter", condition="route_after_verifier (ok/max_loops)"),
+        GraphEdge("verifier", "planner", condition="route_after_verifier (retry)"),
         GraphEdge("reporter", "END"),
     ]
     return graph_mermaid(nodes=nodes, edges=edges)

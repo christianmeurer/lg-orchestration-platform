@@ -103,7 +103,32 @@ def cli(argv: list[str] | None = None) -> int:
         "_trace_enabled": trace_enabled,
         "_trace_out_dir": cfg.trace.output_dir,
     }
-    out = app.invoke(state)
+    
+    out = {}
+    print("\n--- Starting LG-Orchestration-Platform Agent ---")
+    for event in app.stream(state, stream_mode="updates"):
+        for node_name, node_state in event.items():
+            print(f"\n[Node: {node_name}]")
+            # Stream specific useful information
+            if node_name == "planner":
+                plan = node_state.get("plan", {})
+                steps = plan.get("steps", [])
+                print(f"Generated Plan with {len(steps)} steps.")
+                for s in steps:
+                    print(f" - {s.get('id')}: {s.get('description')}")
+            elif node_name == "executor":
+                tool_results = node_state.get("tool_results", [])
+                if tool_results:
+                    last_result = tool_results[-1]
+                    print(f"Executed tool: {last_result.get('tool')} (ok: {last_result.get('ok')})")
+            elif node_name == "verifier":
+                report = node_state.get("verification", {})
+                print(f"Verification ok: {report.get('ok')}")
+            elif node_name == "reporter":
+                print(f"Final output generated.")
+            out.update(node_state)
+
+    print("\n--- Final Output ---")
     sys.stdout.write(str(out.get("final", "")) + "\n")
 
     log.info(

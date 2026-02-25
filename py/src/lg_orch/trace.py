@@ -38,6 +38,7 @@ def write_run_trace(*, repo_root: Path, out_dir: Path, state: dict[str, Any]) ->
         "intent": state.get("intent"),
         "final": state.get("final"),
         "events": list(state.get("_trace_events", [])),
+        "tool_results": list(state.get("tool_results", [])),
     }
     try:
         out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

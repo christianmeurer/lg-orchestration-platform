@@ -63,6 +63,84 @@ pub async fn read_file(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope,
 }
 
 #[derive(Debug, Deserialize)]
+struct SearchFilesIn {
+    path: String,
+    regex: String,
+    #[serde(default)]
+    file_pattern: Option<String>,
+}
+
+pub async fn search_files(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiError> {
+    let inp: SearchFilesIn =
+        serde_json::from_value(input).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    
+    if !cfg.can_read(&inp.path) {
+        return Err(ApiError::Forbidden("read denied".to_string()));
+    }
+    let full = resolve_under_root(cfg, &inp.path)?;
+    
+    let re = regex::Regex::new(&inp.regex)
+        .map_err(|e| ApiError::BadRequest(format!("invalid regex: {}", e)))?;
+        
+    let glob = match inp.file_pattern {
+        Some(pat) => {
+            Some(globset::Glob::new(&pat)
+                .map_err(|e| ApiError::BadRequest(format!("invalid glob: {}", e)))?
+                .compile_matcher())
+        },
+        None => None,
+    };
+
+    let mut out: Vec<Value> = Vec::new();
+    
+    for entry in walkdir::WalkDir::new(full)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        let p = entry.path();
+        if p.is_file() {
+            let rel = p.strip_prefix(&cfg.root_dir).unwrap_or(p);
+            let rel_s = rel.to_string_lossy().to_string();
+            
+            if !cfg.can_read(&rel_s) {
+                continue;
+            }
+            
+            if let Some(ref matcher) = glob {
+                if !matcher.is_match(&rel_s) {
+                    continue;
+                }
+            }
+            
+            if let Ok(content) = std::fs::read_to_string(p) {
+                let mut matches_in_file = Vec::new();
+                for (line_idx, line) in content.lines().enumerate() {
+                    if re.is_match(line) {
+                        matches_in_file.push(json!({
+                            "line_number": line_idx + 1,
+                            "content": line
+                        }));
+                    }
+                }
+                if !matches_in_file.is_empty() {
+                    out.push(json!({
+                        "file": rel_s,
+                        "matches": matches_in_file
+                    }));
+                }
+            }
+        }
+    }
+
+    Ok(ToolEnvelope::ok(
+        "search_files",
+        serde_json::to_string_pretty(&out).unwrap_or_default(),
+        json!({"files_matched": out.len()}),
+        0,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
 struct ListFilesIn {
     path: String,
     #[serde(default)]
@@ -270,6 +348,25 @@ mod tests {
         let (_td, cfg) = test_cfg();
         let result = read_file(&cfg, json!({"wrong_key": 123})).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_search_files_success() {
+        let (td, cfg) = test_cfg();
+        stdfs::write(td.path().join("py/test1.txt"), "hello world\nline 2").unwrap();
+        stdfs::write(td.path().join("py/test2.txt"), "foo\nbar").unwrap();
+        
+        let result = search_files(&cfg, json!({
+            "path": "py",
+            "regex": "hello"
+        })).await;
+        
+        assert!(result.is_ok());
+        let env = result.unwrap();
+        assert!(env.ok);
+        assert!(env.stdout.contains("hello world"));
+        assert!(env.stdout.contains("test1.txt"));
+        assert!(!env.stdout.contains("test2.txt"));
     }
 
     // --- list_files tests ---

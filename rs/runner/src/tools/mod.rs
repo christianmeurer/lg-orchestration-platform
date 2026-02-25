@@ -23,6 +23,7 @@ pub async fn dispatch_tool(
             started.elapsed().as_millis(),
         )),
         "read_file" => fs::read_file(cfg, req.input).await,
+        "search_files" => fs::search_files(cfg, req.input).await,
         "list_files" => fs::list_files(cfg, req.input).await,
         "apply_patch" => fs::apply_patch(cfg, req.input).await,
         "exec" => exec::exec(cfg, req.input).await,

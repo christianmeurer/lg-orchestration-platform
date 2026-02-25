@@ -11,8 +11,10 @@ LangGraph orchestration scaffold (Python) + restricted tool runner (Rust) design
 
 Core docs:
 
-- [`docs/langgraph_plan.md`](docs/langgraph_plan.md:1)
-- [`docs/platform_console.md`](docs/platform_console.md:1)
+- [`docs/langgraph_plan.md`](docs/langgraph_plan.md)
+- [`docs/platform_console.md`](docs/platform_console.md)
+- [`docs/architecture.md`](docs/architecture.md) (Codebase Overview)
+- [`docs/sota_2026_plan.md`](docs/sota_2026_plan.md) (Enterprise Agentic Plan)
 
 ## Architecture
 

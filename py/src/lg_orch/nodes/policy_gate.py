@@ -30,5 +30,6 @@ def policy_gate(state: dict[str, Any]) -> dict[str, Any]:
         guards["allow_network"] = False
         guards["require_approval_for_mutations"] = True
     budgets.setdefault("loop", {"remaining": int(state.get("_budget_max_loops", 3))})
+    budgets.setdefault("max_loops", int(state.get("_budget_max_loops", 3)))
     out = {**state, "guards": guards, "budgets": budgets}
     return append_event(out, kind="node", data={"name": "policy_gate", "phase": "end"})
