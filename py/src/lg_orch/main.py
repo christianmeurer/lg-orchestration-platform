@@ -103,7 +103,7 @@ def cli(argv: list[str] | None = None) -> int:
         "_trace_enabled": trace_enabled,
         "_trace_out_dir": cfg.trace.output_dir,
     }
-    
+
     out = {}
     print("\n--- Starting LG-Orchestration-Platform Agent ---")
     for event in app.stream(state, stream_mode="updates"):
@@ -125,7 +125,7 @@ def cli(argv: list[str] | None = None) -> int:
                 report = node_state.get("verification", {})
                 print(f"Verification ok: {report.get('ok')}")
             elif node_name == "reporter":
-                print(f"Final output generated.")
+                print("Final output generated.")
             out.update(node_state)
 
     print("\n--- Final Output ---")

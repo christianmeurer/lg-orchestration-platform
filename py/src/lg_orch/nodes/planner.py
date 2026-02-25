@@ -34,7 +34,7 @@ def _classify_intent(request: str) -> str:
 def planner(state: dict[str, Any]) -> dict[str, Any]:
     log = get_logger()
     state = append_event(state, kind="node", data={"name": "planner", "phase": "start"})
-    
+
     # Increment current_loop
     budgets = state.get("budgets", {})
     if not isinstance(budgets, dict):
@@ -53,7 +53,10 @@ def planner(state: dict[str, Any]) -> dict[str, Any]:
                     description="Collect repository context.",
                     tools=[
                         ToolCall(tool="list_files", input={"path": ".", "recursive": False}),
-                        ToolCall(tool="search_files", input={"path": ".", "regex": "TODO", "file_pattern": "*.py"})
+                        ToolCall(
+                            tool="search_files",
+                            input={"path": ".", "regex": "TODO", "file_pattern": "*.py"},
+                        ),
                     ],
                     expected_outcome="Top-level repository structure and TODOs captured.",
                     files_touched=[],

@@ -73,26 +73,26 @@ struct SearchFilesIn {
 pub async fn search_files(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiError> {
     let inp: SearchFilesIn =
         serde_json::from_value(input).map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    
+
     if !cfg.can_read(&inp.path) {
         return Err(ApiError::Forbidden("read denied".to_string()));
     }
     let full = resolve_under_root(cfg, &inp.path)?;
-    
+
     let re = regex::Regex::new(&inp.regex)
         .map_err(|e| ApiError::BadRequest(format!("invalid regex: {}", e)))?;
-        
+
     let glob = match inp.file_pattern {
-        Some(pat) => {
-            Some(globset::Glob::new(&pat)
+        Some(pat) => Some(
+            globset::Glob::new(&pat)
                 .map_err(|e| ApiError::BadRequest(format!("invalid glob: {}", e)))?
-                .compile_matcher())
-        },
+                .compile_matcher(),
+        ),
         None => None,
     };
 
     let mut out: Vec<Value> = Vec::new();
-    
+
     for entry in walkdir::WalkDir::new(full)
         .into_iter()
         .filter_map(Result::ok)
@@ -101,17 +101,17 @@ pub async fn search_files(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelo
         if p.is_file() {
             let rel = p.strip_prefix(&cfg.root_dir).unwrap_or(p);
             let rel_s = rel.to_string_lossy().to_string();
-            
+
             if !cfg.can_read(&rel_s) {
                 continue;
             }
-            
+
             if let Some(ref matcher) = glob {
                 if !matcher.is_match(&rel_s) {
                     continue;
                 }
             }
-            
+
             if let Ok(content) = std::fs::read_to_string(p) {
                 let mut matches_in_file = Vec::new();
                 for (line_idx, line) in content.lines().enumerate() {
@@ -355,12 +355,16 @@ mod tests {
         let (td, cfg) = test_cfg();
         stdfs::write(td.path().join("py/test1.txt"), "hello world\nline 2").unwrap();
         stdfs::write(td.path().join("py/test2.txt"), "foo\nbar").unwrap();
-        
-        let result = search_files(&cfg, json!({
-            "path": "py",
-            "regex": "hello"
-        })).await;
-        
+
+        let result = search_files(
+            &cfg,
+            json!({
+                "path": "py",
+                "regex": "hello"
+            }),
+        )
+        .await;
+
         assert!(result.is_ok());
         let env = result.unwrap();
         assert!(env.ok);

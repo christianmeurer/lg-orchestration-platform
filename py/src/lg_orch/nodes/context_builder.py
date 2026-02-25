@@ -10,16 +10,18 @@ from lg_orch.trace import append_event
 def _generate_repo_map(root: Path, max_depth: int = 3) -> str:
     """Generates a tree-like repo map, respecting a max depth to prevent huge context."""
     lines = []
-    
+
     def _walk(dir_path: Path, prefix: str = "", current_depth: int = 0) -> None:
         if current_depth > max_depth:
             return
-            
+
         try:
-            paths = sorted(p for p in dir_path.iterdir() if p.exists() and not p.name.startswith("."))
+            paths = sorted(
+                p for p in dir_path.iterdir() if p.exists() and not p.name.startswith(".")
+            )
         except OSError:
             return
-            
+
         for i, p in enumerate(paths):
             is_last = i == len(paths) - 1
             connector = "└── " if is_last else "├── "
@@ -27,7 +29,7 @@ def _generate_repo_map(root: Path, max_depth: int = 3) -> str:
             if p.is_dir():
                 new_prefix = prefix + ("    " if is_last else "│   ")
                 _walk(p, new_prefix, current_depth + 1)
-                
+
     _walk(root)
     return "\n".join(lines)
 

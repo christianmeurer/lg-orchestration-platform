@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from typing import Any
 from dataclasses import dataclass
+from typing import Any
+
 from lg_orch.logging import get_logger
+
 
 @dataclass
 class MCPClient:
@@ -11,6 +13,7 @@ class MCPClient:
     This client manages connections to external MCP servers (e.g., Jira, GitHub, local FS)
     to dynamically discover and execute tools securely.
     """
+
     server_configs: dict[str, Any]
 
     def discover_tools(self) -> list[dict[str, Any]]:
@@ -23,7 +26,9 @@ class MCPClient:
         # In a full implementation, this uses the `mcp` library to fetch tools.
         return []
 
-    def execute_tool(self, server_name: str, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+    def execute_tool(
+        self, server_name: str, tool_name: str, args: dict[str, Any]
+    ) -> dict[str, Any]:
         """
         Executes a specific tool on a specific MCP server.
         """
@@ -37,5 +42,5 @@ class MCPClient:
             "stdout": "",
             "stderr": "MCP execution not fully implemented",
             "timing_ms": 0,
-            "artifacts": {"error": "mcp_stub"}
+            "artifacts": {"error": "mcp_stub"},
         }
