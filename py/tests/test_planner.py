@@ -80,8 +80,9 @@ def test_planner_creates_plan() -> None:
 def test_planner_plan_has_tool_calls() -> None:
     out = planner(_base_state())
     tools = out["plan"]["steps"][0]["tools"]
-    assert len(tools) == 1
+    assert len(tools) == 2
     assert tools[0]["tool"] == "list_files"
+    assert tools[1]["tool"] == "search_files"
 
 
 def test_planner_creates_trace_events() -> None:
