@@ -1,0 +1,4 @@
+# file: C:\Users\chris\Projects\LG-Orchestration-Platform\py\src\lg_orch\nodes\planner.py
+# hypothesis_version: 6.151.4
+
+['.', "[a-z0-9']+", '\\bwhat\\s+is\\b', 'add', 'analysis', 'budgets', 'change', 'code_change', 'compare', 'current_loop', 'debug', 'end', 'error', 'exception', 'explain', 'fix', 'how', 'implement', 'intent', 'latest', 'list_files', 'name', 'node', 'panic', 'path', 'phase', 'plan', 'planner', 'planner_failed', 'question', 'recursive', 'refactor', 'request', 'research', 'rollback', 'stack trace', 'start', 'step-1', 'steps', 'survey', 'verification', 'why']
