@@ -1,0 +1,4 @@
+# file: C:\Users\chris\Projects\LG-Orchestration-Platform\py\src\lg_orch\config.py
+# hypothesis_version: 6.151.4
+
+[0.0, 'LG_PROFILE', 'LG_RUNNER_API_KEY', 'allow', 'api_key', 'artifacts/runs', 'base_url', 'budgets', 'configs', 'context_condensation', 'deny', 'deterministic', 'dev', 'enabled', 'http://', 'https://', 'invalid config root', 'lint_reflection', 'local', 'local_provider', 'max_loops', 'max_patch_bytes', 'model', 'models', 'network_default', 'output_dir', 'planner', 'policy', 'provider', 'root_dir', 'router', 'routing', 'runner', 'summarization', 'temperature', 'tool_timeout_s', 'trace', 'utf-8']

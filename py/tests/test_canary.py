@@ -17,3 +17,21 @@ def test_graph_smoke() -> None:
     )
     assert "intent" in out
     assert "final" in out
+
+
+def test_graph_halts_with_loop_budget_reason() -> None:
+    app = build_graph()
+    out = app.invoke(
+        {
+            "request": "summarize repo",
+            "_repo_root": ".",
+            "_runner_base_url": "http://127.0.0.1:0",
+            "_runner_enabled": True,
+            "_budget_max_loops": 1,
+            "_config_policy": {
+                "network_default": "deny",
+                "require_approval_for_mutations": True,
+            },
+        }
+    )
+    assert out["halt_reason"] == "max_loops_exhausted"

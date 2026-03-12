@@ -5,6 +5,7 @@ __all__ = [
     "planner",
     "policy_gate",
     "reporter",
+    "router",
     "verifier",
 ]
 
@@ -14,4 +15,5 @@ from lg_orch.nodes.ingest import ingest
 from lg_orch.nodes.planner import planner
 from lg_orch.nodes.policy_gate import policy_gate
 from lg_orch.nodes.reporter import reporter
+from lg_orch.nodes.router import router
 from lg_orch.nodes.verifier import verifier

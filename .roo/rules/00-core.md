@@ -1,0 +1,3 @@
+- Be terse.
+- Read only needed files.
+- Prefer the smallest correct change.

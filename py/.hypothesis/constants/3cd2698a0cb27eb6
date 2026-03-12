@@ -1,0 +1,4 @@
+# file: C:\Users\chris\Projects\LG-Orchestration-Platform\py\src\lg_orch\tools\runner_client.py
+# hypothesis_version: 6.151.4
+
+[0.2, 2.0, 60.0, 200, 428, 2000, '/v1/tools/execute', '_client', 'approval', 'approval_required', 'artifacts', 'ast_index_summary', 'authorization', 'calls', 'diagnostics', 'error', 'exit_code', 'input', 'limit', 'max_files', 'ok', 'path_prefix', 'query', 'results', 'runner_http_error', 'runner_unavailable', 'search_codebase', 'status', 'stderr', 'stdout', 'timing_ms', 'tool']

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
 
 from lg_orch.nodes import (
@@ -11,9 +12,29 @@ from lg_orch.nodes import (
     planner,
     policy_gate,
     reporter,
+    router,
     verifier,
 )
 from lg_orch.visualize import GraphEdge, graph_mermaid
+
+
+def route_after_policy_gate(state: dict[str, Any]) -> str:
+    halt_reason = str(state.get("halt_reason", "")).strip()
+    if halt_reason == "max_loops_exhausted":
+        return "reporter"
+
+    if bool(state.get("context_reset_requested", False)):
+        return "context_builder"
+
+    retry_target = state.get("retry_target")
+    if retry_target == "router":
+        return "router"
+    if retry_target == "planner":
+        return "planner"
+    if retry_target == "context_builder":
+        return "context_builder"
+
+    return "context_builder"
 
 
 def route_after_verifier(state: dict[str, Any]) -> str:
@@ -21,21 +42,15 @@ def route_after_verifier(state: dict[str, Any]) -> str:
     if verification.get("ok"):
         return "reporter"
 
-    budgets = state.get("budgets", {})
-    current_loop = budgets.get("current_loop", 1)
-    max_loops = budgets.get("max_loops", 3)
-
-    if current_loop >= max_loops:
-        return "reporter"
-
-    return "planner"
+    return "policy_gate"
 
 
-def build_graph() -> Any:
+def build_graph(*, checkpointer: BaseCheckpointSaver[Any] | None = None) -> Any:
     g: StateGraph = StateGraph(dict)
     g.add_node("ingest", ingest)
     g.add_node("policy_gate", policy_gate)
     g.add_node("context_builder", context_builder)
+    g.add_node("router", router)
     g.add_node("planner", planner)
     g.add_node("executor", executor)
     g.add_node("verifier", verifier)
@@ -43,14 +58,28 @@ def build_graph() -> Any:
 
     g.set_entry_point("ingest")
     g.add_edge("ingest", "policy_gate")
-    g.add_edge("policy_gate", "context_builder")
-    g.add_edge("context_builder", "planner")
+    g.add_conditional_edges(
+        "policy_gate",
+        route_after_policy_gate,
+        {
+            "context_builder": "context_builder",
+            "router": "router",
+            "planner": "planner",
+            "reporter": "reporter",
+        },
+    )
+    g.add_edge("context_builder", "router")
+    g.add_edge("router", "planner")
     g.add_edge("planner", "executor")
     g.add_edge("executor", "verifier")
     g.add_conditional_edges(
-        "verifier", route_after_verifier, {"reporter": "reporter", "planner": "planner"}
+        "verifier",
+        route_after_verifier,
+        {"reporter": "reporter", "policy_gate": "policy_gate"},
     )
     g.add_edge("reporter", END)
+    if checkpointer is not None:
+        return g.compile(checkpointer=checkpointer)
     return g.compile()
 
 
@@ -59,6 +88,7 @@ def export_mermaid() -> str:
         "ingest",
         "policy_gate",
         "context_builder",
+        "router",
         "planner",
         "executor",
         "verifier",
@@ -68,11 +98,15 @@ def export_mermaid() -> str:
     edges = [
         GraphEdge("ingest", "policy_gate"),
         GraphEdge("policy_gate", "context_builder"),
-        GraphEdge("context_builder", "planner"),
+        GraphEdge("policy_gate", "router"),
+        GraphEdge("policy_gate", "planner"),
+        GraphEdge("policy_gate", "reporter"),
+        GraphEdge("context_builder", "router"),
+        GraphEdge("router", "planner"),
         GraphEdge("planner", "executor"),
         GraphEdge("executor", "verifier"),
         GraphEdge("verifier", "reporter"),
-        GraphEdge("verifier", "planner"),
+        GraphEdge("verifier", "policy_gate"),
         GraphEdge("reporter", "END"),
     ]
     return graph_mermaid(nodes=nodes, edges=edges)

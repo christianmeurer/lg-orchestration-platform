@@ -1,0 +1,4 @@
+# file: C:\Users\chris\Projects\LG-Orchestration-Platform\py\src\lg_orch\nodes\verifier.py
+# hypothesis_version: 6.151.4
+
+['\\bmissing\\b', '\\bmodule\\b|\\bfile\\b', 'artifacts', 'cannot find file', 'cannot find module', 'checks', 'code', 'column', 'context_builder', 'could not find', 'diagnostics', 'discard_reset', 'e0432', 'e0583', 'end', 'error', 'exit_code', 'f821', 'file', 'file not found', 'keep', 'line', 'lint_reflection', 'message', 'module not found', 'name', 'no such file', 'node', 'ok', 'path escapes root', 'phase', 'plan', 'plan_action', 'plan_discard_reason', 'plan_discarded', 'planner', 'read denied', 'read_denied', 'read_file', 'retry_target', 'router', 'start', 'stderr', 'tool', 'tool_results', 'unknown', 'unresolved import', 'verification', 'verification_failed', 'verifier', 'verifier_failed']

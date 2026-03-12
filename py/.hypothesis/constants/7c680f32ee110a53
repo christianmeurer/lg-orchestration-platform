@@ -1,0 +1,4 @@
+# file: C:\Users\chris\Projects\LG-Orchestration-Platform\py\src\lg_orch\nodes\context_builder.py
+# hypothesis_version: 6.151.4
+
+[200, '.', '[a-zA-Z0-9_]+', '_repo_root', '_runner_api_key', '_runner_base_url', '_runner_enabled', 'context_builder', 'end', 'has_py', 'has_rs', 'http://', 'https://', 'name', 'node', 'phase', 'py', 'repo_context', 'repo_map', 'repo_root', 'repository structure', 'request', 'router', 'rs', 'semantic_hits', 'semantic_query', 'start', 'structural_ast_map', 'summarization', 'system_prompt', 'top_level', '│   ', '└── ', '├── ']

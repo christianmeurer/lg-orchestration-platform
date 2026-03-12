@@ -1,0 +1,4 @@
+# file: C:\Users\chris\Projects\LG-Orchestration-Platform\py\src\lg_orch\nodes\ingest.py
+# hypothesis_version: 6.151.4
+
+['_', 'analysis', 'approvals', 'budgets', 'checkpoint', 'end', 'facts', 'final', 'guards', 'halt_reason', 'history_policy', 'ingest', 'intent', 'name', 'node', 'patches', 'phase', 'plan', 'plan_discard_reason', 'plan_discarded', 'provenance', 'repo_context', 'request', 'resume', 'retry_target', 'security', 'snapshots', 'telemetry', 'tool_results', 'undo', 'verification']

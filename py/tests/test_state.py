@@ -99,12 +99,16 @@ def test_verifier_report_valid() -> None:
     vr = VerifierReport(ok=True, checks=[])
     assert vr.ok is True
     assert vr.checks == []
+    assert vr.retry_target is None
+    assert vr.plan_action == "keep"
 
 
 def test_verifier_report_with_checks() -> None:
     vr = VerifierReport(
         ok=False,
         checks=[VerificationCheck(name="test", ok=False, tool="pytest", exit_code=1)],
+        retry_target="planner",
+        plan_action="keep",
     )
     assert len(vr.checks) == 1
     assert vr.ok is False
@@ -142,3 +146,27 @@ def test_orch_state_model_dump_roundtrip() -> None:
     restored = OrchState(**dumped)
     assert restored.request == "test"
     assert restored.intent == "debug"
+
+
+def test_orch_state_new_phase1_fields_defaults() -> None:
+    os_ = OrchState(request="hi")
+    assert os_.retry_target is None
+    assert os_.context_reset_requested is False
+    assert os_.plan_discarded is False
+    assert os_.plan_discard_reason == ""
+    assert os_.halt_reason == ""
+    assert os_.history_policy == {}
+    assert os_.provenance == []
+    assert os_.checkpoint == {}
+    assert os_.snapshots == []
+    assert os_.undo == {}
+    assert os_.resume == {}
+
+
+def test_orch_state_rejects_runtime_private_mcp_fields() -> None:
+    with pytest.raises(ValidationError):
+        OrchState(
+            request="run mcp",
+            _mcp_enabled=True,  # type: ignore[call-arg]
+            _mcp_servers={"mock": {"command": "python"}},  # type: ignore[call-arg]
+        )

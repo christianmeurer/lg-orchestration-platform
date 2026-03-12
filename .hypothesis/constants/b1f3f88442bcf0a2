@@ -1,0 +1,4 @@
+# file: C:\Users\chris\Projects\LG-Orchestration-Platform\py\src\lg_orch\nodes\executor.py
+# hypothesis_version: 6.151.4
+
+['_checkpoint', '_runner_api_key', '_runner_base_url', '_runner_enabled', 'artifacts', 'batch_execute', 'checkpoint', 'checkpoint_id', 'checkpoint_ns', 'client_init_failed', 'count', 'diagnostics', 'end', 'error', 'executor', 'executor_failed', 'executor_step_failed', 'exit_code', 'http://', 'https://', 'id', 'input', 'invalid_base_url', 'latest_checkpoint_id', 'latest_snapshot_id', 'name', 'node', 'ok', 'phase', 'plan', 'restored_snapshot_id', 'run_id', 'snapshot', 'snapshot_id', 'start', 'stderr', 'stdout', 'steps', 'thread_id', 'timing_ms', 'tool', 'tool_results', 'tools', 'undo']

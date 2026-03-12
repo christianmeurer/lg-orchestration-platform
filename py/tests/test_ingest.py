@@ -72,3 +72,9 @@ def test_ingest_initializes_orch_state_fields() -> None:
     assert out["plan"] is None
     assert out["tool_results"] == []
     assert out["final"] == ""
+    assert out["history_policy"] == {}
+    assert out["provenance"] == []
+    assert out["checkpoint"] == {}
+    assert out["snapshots"] == []
+    assert out["undo"] == {}
+    assert out["resume"] == {}

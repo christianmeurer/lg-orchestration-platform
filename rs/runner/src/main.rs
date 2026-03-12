@@ -1,7 +1,12 @@
+mod approval;
 mod auth;
 mod config;
+mod diagnostics;
 mod envelope;
 mod errors;
+mod indexing;
+mod sandbox;
+mod snapshots;
 mod tools;
 
 use axum::{routing::get, routing::post, Json, Router};
@@ -41,14 +46,25 @@ async fn capabilities() -> Json<serde_json::Value> {
             "health",
             "read_file",
             "search_files",
+            "search_codebase",
+            "ast_index_summary",
             "list_files",
             "apply_patch",
             "exec",
-            "mcp_discover", // SOTA 2026: MCP extension endpoint stub
+            "undo",
+            "mcp_discover",
             "mcp_execute"
         ],
         "batch": true,
-        "mcp_enabled": true // Signals to orchestrator that runner supports MCP
+        "mcp_enabled": true,
+        "mcp": {
+            "protocol": "json-rpc-2.0",
+            "methods": ["initialize", "tools/list", "tools/call"],
+            "redaction": {
+                "enabled": true,
+                "fields": ["paths", "usernames", "ip_addresses"]
+            }
+        }
     }))
 }
 
@@ -95,6 +111,7 @@ async fn main() -> anyhow::Result<()> {
         api_key,
         args.rate_limit_rps,
     )?;
+    cfg.indexing.ensure_started();
 
     let protected = Router::new()
         .route("/v1/tools/execute", post(execute_tool))

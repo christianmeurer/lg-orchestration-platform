@@ -1,0 +1,4 @@
+# file: C:\Users\chris\Projects\LG-Orchestration-Platform\py\src\lg_orch\tools\mcp_client.py
+# hypothesis_version: 6.151.4
+
+['artifacts', 'diagnostics', 'error', 'exit_code', 'mcp_discover_tools', 'mcp_execute_tool', 'mcp_stub', 'ok', 'stderr', 'stdout', 'timing_ms', 'tool']

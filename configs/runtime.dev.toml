@@ -8,22 +8,47 @@ provider = "local"
 model = "deterministic"
 temperature = 0.0
 
+[models.routing]
+local_provider = "local"
+fallback_task_classes = ["summarization", "lint_reflection", "context_condensation"]
+interactive_context_limit = 1800
+deep_planning_context_limit = 3200
+recovery_retry_threshold = 1
+default_cache_affinity = "workspace"
+
+[models.digitalocean]
+base_url = "https://inference.do-ai.run/v1"
+timeout_s = 60
+
 [budgets]
 max_loops = 3
 max_tool_calls_per_loop = 12
 max_patch_bytes = 200000
 tool_timeout_s = 600
+stable_prefix_tokens = 1600
+working_set_tokens = 1600
+tool_result_summary_chars = 480
 
 [policy]
 network_default = "deny"
 require_approval_for_mutations = true
+allowed_write_paths = ["py/**", "rs/**", "docs/**", "prompts/**", "schemas/**", "configs/**", "eval/**", "scripts/**", ".github/**"]
 
 [runner]
 base_url = "http://127.0.0.1:8088"
 root_dir = "."
 api_key = "dev-insecure"
 
+[mcp]
+enabled = false
+
 [trace]
 enabled = true
 output_dir = "artifacts/runs"
+capture_model_metadata = true
 
+[checkpoint]
+enabled = true
+db_path = "artifacts/checkpoints/langgraph.sqlite"
+namespace = "main"
+thread_prefix = "lg-orch"

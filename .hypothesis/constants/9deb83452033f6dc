@@ -1,0 +1,4 @@
+# file: C:\Users\chris\Projects\LG-Orchestration-Platform\py\src\lg_orch\logging.py
+# hypothesis_version: 6.151.4
+
+['Bearer [REDACTED]', 'CRITICAL', 'DEBUG', 'ERROR', 'INFO', 'LG_LOG_LEVEL', 'WARN', 'WARNING', '[REDACTED]', '\\bBearer\\s+[^\\s]+', 'api_key', 'apikey', 'auth', 'authorization', 'iso', 'key', 'password', 'secret', 'token']

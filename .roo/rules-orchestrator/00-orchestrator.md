@@ -1,0 +1,3 @@
+- Delegate narrowly.
+- Pass minimal context.
+- Summarize outcomes briefly.

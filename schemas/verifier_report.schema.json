@@ -2,10 +2,50 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/schemas/verifier_report.schema.json",
   "type": "object",
-  "required": ["ok", "checks"],
+  "required": ["ok", "checks", "retry_target", "plan_action"],
   "additionalProperties": false,
   "properties": {
     "ok": { "type": "boolean" },
+    "retry_target": {
+      "type": ["string", "null"],
+      "enum": ["planner", "context_builder", "router", null]
+    },
+    "plan_action": {
+      "type": "string",
+      "enum": ["keep", "amend", "discard_reset"]
+    },
+    "failure_class": { "type": "string" },
+    "failure_fingerprint": { "type": "string" },
+    "loop_summary": { "type": "string" },
+    "recovery": {
+      "type": ["object", "null"],
+      "required": [
+        "failure_class",
+        "failure_fingerprint",
+        "rationale",
+        "retry_target",
+        "context_scope",
+        "plan_action"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "failure_class": { "type": "string" },
+        "failure_fingerprint": { "type": "string" },
+        "rationale": { "type": "string" },
+        "retry_target": {
+          "type": "string",
+          "enum": ["planner", "context_builder", "router"]
+        },
+        "context_scope": {
+          "type": "string",
+          "enum": ["stable_prefix", "working_set", "full_reset"]
+        },
+        "plan_action": {
+          "type": "string",
+          "enum": ["keep", "amend", "discard_reset"]
+        }
+      }
+    },
     "checks": {
       "type": "array",
       "items": {

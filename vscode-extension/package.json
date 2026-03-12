@@ -1,0 +1,68 @@
+{
+  "name": "lg-orchestration",
+  "displayName": "Lula",
+  "description": "VS Code extension for Lula.",
+  "version": "0.0.1",
+  "publisher": "lg-orchestration",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:lgOrch.openPanel",
+    "onCommand:lgOrch.runRequest",
+    "onCommand:lgOrch.startRunner",
+    "onCommand:lgOrch.stopRunner"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "lgOrch.openPanel",
+        "title": "Lula: Open Panel"
+      },
+      {
+        "command": "lgOrch.runRequest",
+        "title": "Lula: Run Request"
+      },
+      {
+        "command": "lgOrch.startRunner",
+        "title": "Lula: Start Runner"
+      },
+      {
+        "command": "lgOrch.stopRunner",
+        "title": "Lula: Stop Runner"
+      }
+    ],
+    "configuration": {
+      "title": "Lula",
+      "properties": {
+        "lula.remoteApiBaseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Base URL for the hosted Lula remote API. When set, Run Request uses the remote API instead of local uv/cargo execution."
+        },
+        "lula.remotePollIntervalMs": {
+          "type": "number",
+          "default": 1000,
+          "minimum": 250,
+          "description": "Polling interval in milliseconds for remote run status and logs."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "npm run compile && vsce package",
+    "publish": "npm run compile && vsce publish"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.0.0",
+    "@types/node": "^20.14.10",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.5.4"
+  }
+}

@@ -74,6 +74,12 @@ def test_write_run_trace_creates_file() -> None:
             "intent": "analysis",
             "final": "done",
             "_trace_events": [{"ts_ms": 1000, "kind": "node", "data": {"name": "ingest"}}],
+            "verification": {"ok": True, "loop_summary": "verification_passed"},
+            "loop_summaries": [{"loop": 1, "summary": "fixed"}],
+            "_checkpoint": {"thread_id": "thread-a", "latest_checkpoint_id": "cp-1"},
+            "snapshots": [{"id": "snap-1"}],
+            "undo": {"available": True},
+            "provenance": [{"event": "read_file_payload_evicted", "stdout_chars": 6000}],
         }
         path = write_run_trace(repo_root=Path(td), out_dir=Path("traces"), state=state)
         assert path.exists()
@@ -84,6 +90,13 @@ def test_write_run_trace_creates_file() -> None:
         assert data["intent"] == "analysis"
         assert data["final"] == "done"
         assert len(data["events"]) == 1
+        assert data["tool_results"] == []
+        assert data["verification"]["ok"] is True
+        assert data["loop_summaries"][0]["loop"] == 1
+        assert data["checkpoint"]["thread_id"] == "thread-a"
+        assert data["snapshots"][0]["id"] == "snap-1"
+        assert data["undo"]["available"] is True
+        assert data["provenance"][0]["event"] == "read_file_payload_evicted"
 
 
 def test_write_run_trace_creates_dirs() -> None:

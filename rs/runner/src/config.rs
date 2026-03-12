@@ -5,6 +5,8 @@ use std::time::Instant;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use tokio::sync::Mutex;
 
+use crate::indexing::IndexingService;
+
 pub struct RateLimiter {
     tokens: f64,
     max_tokens: f64,
@@ -43,6 +45,7 @@ pub struct RunnerConfig {
     pub allow_write: GlobSet,
     pub api_key: Option<String>,
     pub rate_limiter: Arc<Mutex<RateLimiter>>,
+    pub indexing: Arc<IndexingService>,
 }
 
 impl std::fmt::Debug for RunnerConfig {
@@ -51,6 +54,7 @@ impl std::fmt::Debug for RunnerConfig {
             .field("root_dir", &self.root_dir)
             .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
             .field("rate_limiter", &"<RateLimiter>")
+            .field("indexing", &"<IndexingService>")
             .finish()
     }
 }
@@ -77,6 +81,7 @@ impl RunnerConfig {
         let (read_globs, write_globs) = allowlists_for_profile(profile);
         let allow_read = build_globset(&read_globs)?;
         let allow_write = build_globset(&write_globs)?;
+        let indexing = Arc::new(IndexingService::new(root_dir.clone(), allow_read.clone())?);
 
         Ok(Self {
             root_dir,
@@ -84,6 +89,7 @@ impl RunnerConfig {
             allow_write,
             api_key,
             rate_limiter: Arc::new(Mutex::new(RateLimiter::new(rate_limit_rps))),
+            indexing,
         })
     }
 

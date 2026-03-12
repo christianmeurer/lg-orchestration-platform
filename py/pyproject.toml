@@ -5,7 +5,7 @@ requires-python = ">=3.12"
 description = "LangGraph orchestration scaffold (Python) + restricted tool runner (Rust)."
 readme = "../README.md"
 license = { file = "../LICENSE" }
-authors = [{ name = "LG Orchestration Platform contributors" }]
+authors = [{ name = "Lula Platform contributors" }]
 keywords = ["langgraph", "orchestration", "agent", "tools", "rust", "python"]
 classifiers = [
   "Development Status :: 3 - Alpha",

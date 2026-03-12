@@ -1,0 +1,2 @@
+- Minimal diff.
+- Update tests or docs only when behavior changes.

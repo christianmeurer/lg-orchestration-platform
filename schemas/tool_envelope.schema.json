@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/schemas/tool_envelope.schema.json",
   "type": "object",
-  "required": ["tool", "ok", "exit_code", "stdout", "stderr", "timing_ms", "artifacts"],
+  "required": ["tool", "ok", "exit_code", "stdout", "stderr", "diagnostics", "timing_ms", "artifacts"],
   "additionalProperties": false,
   "properties": {
     "tool": { "type": "string", "minLength": 1 },
@@ -10,8 +10,184 @@
     "exit_code": { "type": "integer" },
     "stdout": { "type": "string" },
     "stderr": { "type": "string" },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["file", "message"],
+        "additionalProperties": false,
+        "properties": {
+          "file": { "type": "string" },
+          "line": { "type": ["integer", "null"], "minimum": 1 },
+          "column": { "type": ["integer", "null"], "minimum": 1 },
+          "code": { "type": ["string", "null"] },
+          "fingerprint": { "type": ["string", "null"] },
+          "message": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "isolation": {
+      "type": "object",
+      "required": ["backend", "degraded", "policy_constraints"],
+      "additionalProperties": false,
+      "properties": {
+        "backend": { "type": "string", "minLength": 1 },
+        "degraded": { "type": "boolean" },
+        "reason": { "type": ["string", "null"] },
+        "policy_constraints": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "required": ["required", "status", "operation_class"],
+      "additionalProperties": false,
+      "properties": {
+        "required": { "type": "boolean" },
+        "status": { "type": "string", "minLength": 1 },
+        "operation_class": { "type": "string", "minLength": 1 },
+        "challenge_id": { "type": ["string", "null"] },
+        "reason": { "type": ["string", "null"] }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "required": [
+        "snapshot_id",
+        "created",
+        "operation_class",
+        "git_commit",
+        "non_git_workspace"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "snapshot_id": { "type": "string", "minLength": 1 },
+        "created": { "type": "boolean" },
+        "operation_class": { "type": "string", "minLength": 1 },
+        "git_commit": { "type": "string", "minLength": 1 },
+        "non_git_workspace": { "type": "boolean" },
+        "reason": { "type": ["string", "null"] },
+        "checkpoint": {
+          "type": "object",
+          "required": ["thread_id", "checkpoint_ns"],
+          "additionalProperties": false,
+          "properties": {
+            "thread_id": { "type": "string", "minLength": 1 },
+            "checkpoint_ns": { "type": "string" },
+            "checkpoint_id": { "type": ["string", "null"] },
+            "run_id": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
+    "undo": {
+      "type": "object",
+      "required": [
+        "restored_snapshot_id",
+        "filesystem_restored",
+        "checkpoint_restored"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "requested_snapshot_id": { "type": ["string", "null"] },
+        "restored_snapshot_id": { "type": "string", "minLength": 1 },
+        "filesystem_restored": { "type": "boolean" },
+        "checkpoint_restored": { "type": "boolean" },
+        "reason": { "type": ["string", "null"] },
+        "checkpoint": {
+          "type": "object",
+          "required": ["thread_id", "checkpoint_ns"],
+          "additionalProperties": false,
+          "properties": {
+            "thread_id": { "type": "string", "minLength": 1 },
+            "checkpoint_ns": { "type": "string" },
+            "checkpoint_id": { "type": ["string", "null"] },
+            "run_id": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "required": [
+        "server_name",
+        "handshake_completed",
+        "outbound_redactions",
+        "inbound_redactions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "server_name": { "type": "string", "minLength": 1 },
+        "handshake_completed": { "type": "boolean" },
+        "outbound_redactions": {
+          "type": "object",
+          "required": ["total", "paths", "usernames", "ip_addresses"],
+          "additionalProperties": false,
+          "properties": {
+            "total": { "type": "integer", "minimum": 0 },
+            "paths": { "type": "integer", "minimum": 0 },
+            "usernames": { "type": "integer", "minimum": 0 },
+            "ip_addresses": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "inbound_redactions": {
+          "type": "object",
+          "required": ["total", "paths", "usernames", "ip_addresses"],
+          "additionalProperties": false,
+          "properties": {
+            "total": { "type": "integer", "minimum": 0 },
+            "paths": { "type": "integer", "minimum": 0 },
+            "usernames": { "type": "integer", "minimum": 0 },
+            "ip_addresses": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "route": {
+      "type": "object",
+      "required": [
+        "stage",
+        "lane",
+        "provider",
+        "model",
+        "task_class",
+        "cache_affinity",
+        "prefix_segment"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "stage": { "type": "string" },
+        "lane": { "type": "string" },
+        "provider": { "type": "string" },
+        "model": { "type": "string" },
+        "task_class": { "type": "string" },
+        "cache_affinity": { "type": "string" },
+        "prefix_segment": { "type": "string" }
+      }
+    },
     "timing_ms": { "type": "integer", "minimum": 0 },
-    "artifacts": { "type": "object" }
+    "artifacts": {
+      "oneOf": [
+        { "type": "object" },
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "language", "symbols", "snippet", "score"],
+            "additionalProperties": true,
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "language": { "type": "string", "minLength": 1 },
+              "symbols": { "type": "array", "items": { "type": "string" } },
+              "snippet": { "type": "string" },
+              "score": { "type": "number" }
+            }
+          }
+        }
+      ]
+    }
   }
 }
 

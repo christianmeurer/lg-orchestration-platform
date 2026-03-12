@@ -1,6 +1,6 @@
 # Architecture & Codebase Overview
 
-This document provides comprehensive documentation on how the LG Orchestration Platform codebase currently works. The platform is designed as a split-architecture system: a Python-based intelligent orchestrator and a Rust-based secure tool runner.
+This document provides comprehensive documentation on how the Lula Platform codebase currently works. The platform is designed as a split-architecture system: a Python-based intelligent orchestrator and a Rust-based secure tool runner.
 
 ## High-Level Design
 
@@ -45,7 +45,7 @@ The runner uses `RunnerConfig` (`rs/runner/src/config.rs`) to enforce path bound
 ### Available Tools
 The logic for tools is located in `rs/runner/src/tools/`.
 - **FS Tools (`fs.rs`)**: 
-  - `read_file`: Reads a file if within the allowed root directory.
+  - `read_file`: Reads a file if within the allowed root directory. Text files are read as UTF-8, and `.pdf` files are extracted to text before returning output.
   - `list_files`: Lists files recursively or top-level.
   - `apply_patch`: Adds, updates, or deletes files safely.
 - **Exec Tool (`exec.rs`)**:

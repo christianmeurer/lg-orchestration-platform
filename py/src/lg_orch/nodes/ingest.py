@@ -20,6 +20,19 @@ _ORCH_DEFAULTS: dict[str, Any] = {
     "approvals": {},
     "security": {},
     "telemetry": {},
+    "route": None,
+    "retry_target": None,
+    "context_reset_requested": False,
+    "plan_discarded": False,
+    "plan_discard_reason": "",
+    "halt_reason": "",
+    "loop_summaries": [],
+    "history_policy": {},
+    "provenance": [],
+    "checkpoint": {},
+    "snapshots": [],
+    "undo": {},
+    "resume": {},
 }
 
 

@@ -1,6 +1,6 @@
 # Platform Console (Visualization Scheme)
 
-This document defines a simple, extensible visualization scheme for the LG Orchestration Platform.
+This document defines a simple, extensible visualization scheme for the Lula Platform.
 
 ## Goals
 
@@ -33,6 +33,20 @@ Example trace location:
 
 - `artifacts/runs/run-<run_id>.json`
 
+Console-style runtime view:
+
+- `uv run python -m lg_orch.main run "<request>" --view console --trace`
+
+Trace dashboard renderer:
+
+- `uv run python -m lg_orch.main trace-view artifacts/runs/run-<run_id>.json`
+- `uv run python -m lg_orch.main trace-view artifacts/runs/run-<run_id>.json --format html --output artifacts/site/run-<run_id>.html`
+
+Static site renderer:
+
+- `uv run python -m lg_orch.main trace-site artifacts/runs --output-dir artifacts/site`
+- Open `artifacts/site/index.html` in a browser.
+
 ## 3) Artifacts view
 
 Artifacts are referenced from the trace and/or exist on disk:
@@ -40,6 +54,7 @@ Artifacts are referenced from the trace and/or exist on disk:
 - patches/diffs (future)
 - verification reports (future)
 - runner stdout/stderr envelopes (present in `tool_results`)
+- copied raw trace JSON under `artifacts/site/traces/` when `trace-site` is used
 
 ## 4) Config switches
 
@@ -62,8 +77,5 @@ output_dir = "artifacts/runs"
 - Add an HTTP API exposing:
   - `/v1/runs` list
   - `/v1/runs/{run_id}` trace
-- Add a small web UI that renders:
-  - Mermaid graph
-  - timeline from trace events
-  - artifacts explorer
+- Evolve the static site into a served web UI with filtering, replay, and richer artifact browsing
 

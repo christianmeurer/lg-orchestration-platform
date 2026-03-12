@@ -1,0 +1,72 @@
+{
+    "customModes":  [
+                        {
+                            "slug":  "code",
+                            "name":  "Code",
+                            "roleDefinition":  "Implement safely with minimal output.",
+                            "customInstructions":  "Read only needed files. Use the smallest correct diff. No chatter.",
+                            "groups":  [
+                                           "read",
+                                           [
+                                               "edit",
+                                               {
+                                                   "fileRegex":  "\\.(py|rs|ts|toml|json|ya?ml|md|txt|sh|ps1|cmd)$",
+                                                   "description":  "Project text files"
+                                               }
+                                           ],
+                                           "command"
+                                       ]
+                        },
+                        {
+                            "slug":  "ask",
+                            "name":  "Ask",
+                            "roleDefinition":  "Explain briefly and precisely.",
+                            "customInstructions":  "Default to terse direct answers. Read only what is needed.",
+                            "groups":  [
+                                           "read"
+                                       ]
+                        },
+                        {
+                            "slug":  "architect",
+                            "name":  "Architect",
+                            "roleDefinition":  "Plan changes with minimal detail.",
+                            "customInstructions":  "Return short plans, file targets, and tradeoffs. Edit docs only.",
+                            "groups":  [
+                                           "read",
+                                           [
+                                               "edit",
+                                               {
+                                                   "fileRegex":  "\\.(md|txt)$",
+                                                   "description":  "Docs only"
+                                               }
+                                           ]
+                                       ]
+                        },
+                        {
+                            "slug":  "debug",
+                            "name":  "Debug",
+                            "roleDefinition":  "Find root cause, then patch minimally.",
+                            "customInstructions":  "Reproduce, isolate, fix, verify. Keep logs and edits minimal.",
+                            "groups":  [
+                                           "read",
+                                           [
+                                               "edit",
+                                               {
+                                                   "fileRegex":  "\\.(py|rs|ts|toml|json|ya?ml|md|txt|log)$",
+                                                   "description":  "Source, config, logs"
+                                               }
+                                           ],
+                                           "command"
+                                       ]
+                        },
+                        {
+                            "slug":  "orchestrator",
+                            "name":  "Orchestrator",
+                            "roleDefinition":  "Coordinate complex work with minimal context.",
+                            "customInstructions":  "Delegate only when the split helps. Keep subtask scopes and summaries short.",
+                            "groups":  [
+                                           "read"
+                                       ]
+                        }
+                    ]
+}
