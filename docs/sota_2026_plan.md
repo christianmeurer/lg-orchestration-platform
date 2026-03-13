@@ -153,10 +153,7 @@ Targets:
 - [`docs/platform_console.md`](platform_console.md)
 - [`docs/sota_2026_plan.md`](sota_2026_plan.md)
 
-Goal:
-
-- Align docs with the actual graph, router, trace, and checkpoint behavior.
-- Freeze a realistic baseline before adding new product surface.
+Status: **Completed**. Docs have been aligned with the actual graph, router, trace, and checkpoint behavior.
 
 ### Wave 2: first usable product surface
 
@@ -167,10 +164,7 @@ Targets:
 - [`py/src/lg_orch/visualize.py`](../py/src/lg_orch/visualize.py)
 - new minimal UI/API files
 
-Goal:
-
-- Turn existing graph export and trace artifacts into a first usable run viewer.
-- Start with graph, timeline, final output, and tool results rather than a full control plane.
+Status: **Completed**. The existing graph export and trace artifacts have been packaged into a first usable run viewer (SPA + Trace Site). The UI supports displaying the graph, timeline, final output, and tool results.
 
 ### Wave 3: run API and persistence
 

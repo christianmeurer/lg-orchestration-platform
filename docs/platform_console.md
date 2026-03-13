@@ -21,8 +21,8 @@ Render by pasting the output into any Mermaid renderer.
 
 Each run emits a trace file (JSON) containing an ordered event list.
 
-- Trace implementation: [`write_run_trace()`](../py/src/lg_orch/trace.py:29)
-- Node events emitted in: [`ingest()`](../py/src/lg_orch/nodes/ingest.py:8), [`policy_gate()`](../py/src/lg_orch/nodes/policy_gate.py:8), [`context_builder()`](../py/src/lg_orch/nodes/context_builder.py:9), [`planner()`](../py/src/lg_orch/nodes/planner.py:21), [`executor()`](../py/src/lg_orch/nodes/executor.py:8), [`verifier()`](../py/src/lg_orch/nodes/verifier.py:8), [`reporter()`](../py/src/lg_orch/nodes/reporter.py:8)
+- Trace implementation: [`write_run_trace()`](../py/src/lg_orch/trace.py:26)
+- Node events emitted in: [`ingest()`](../py/src/lg_orch/nodes/ingest.py:8), [`policy_gate()`](../py/src/lg_orch/nodes/policy_gate.py:8), [`context_builder()`](../py/src/lg_orch/nodes/context_builder.py:9), [`router()`](../py/src/lg_orch/nodes/router.py:8), [`planner()`](../py/src/lg_orch/nodes/planner.py:21), [`executor()`](../py/src/lg_orch/nodes/executor.py:8), [`verifier()`](../py/src/lg_orch/nodes/verifier.py:8), [`reporter()`](../py/src/lg_orch/nodes/reporter.py:8)
 
 Event kinds:
 

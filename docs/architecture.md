@@ -22,12 +22,13 @@ The state of the agent is managed using Pydantic models defined in `py/src/lg_or
 ### Graph Topology
 The agent's thought process is defined as a directed graph in `py/src/lg_orch/graph.py`. The nodes represent steps in the workflow:
 1. **ingest**: The entry point. Normalizes the request.
-2. **policy_gate**: Enforces budgets and allowlists before proceeding.
-3. **context_builder**: Gathers repository context and files.
-4. **planner**: Analyzes the context and generates a structured `PlannerOutput` containing steps and tool calls.
-5. **executor**: Uses the `RunnerClient` (`py/src/lg_orch/tools/runner_client.py`) to dispatch planned tool calls to the Rust runner over HTTP.
-6. **verifier**: Executes verification commands (like `pytest` or `cargo test`) via the runner to ensure changes are correct.
-7. **reporter**: Summarizes the final output and presents it to the user.
+2. **policy_gate**: Enforces budgets (e.g. `max_loops`) and allowlists. Conditionally routes back to `context_builder`, `router`, `planner`, or proceeds to `reporter` if budgets are exhausted.
+3. **context_builder**: Gathers repository context, AST summaries, and semantic hits.
+4. **router**: Decides model routing lanes based on task and context needs.
+5. **planner**: Analyzes the context and generates a structured `PlannerOutput` containing steps and tool calls.
+6. **executor**: Uses the `RunnerClient` (`py/src/lg_orch/tools/runner_client.py`) to dispatch planned tool calls to the Rust runner over HTTP.
+7. **verifier**: Evaluates the results of the execution. If verification fails, it routes back to `policy_gate` for context reset and retry (forming a bounded verify/retry loop). If successful, it proceeds to `reporter`.
+8. **reporter**: Summarizes the final output and presents it to the user.
 
 ### Tool Client
 The Python side never executes shell commands or writes files directly. Instead, it uses `RunnerClient` to send requests to the Rust server. It uses `httpx` and `tenacity` for resilient HTTP communication.
@@ -59,8 +60,8 @@ Both sides of the codebase are heavily tested:
 ## Getting Started / Run Flow
 When a user issues a command via the CLI (`uv run lg-orch run "task"`):
 1. The Python CLI initializes the LangGraph state.
-2. The orchestrator progresses through the nodes (ingest -> policy -> context -> plan).
+2. The orchestrator progresses through the nodes (ingest -> policy -> context -> router -> plan).
 3. The `executor` node hits the Rust runner's `/v1/tools/batch_execute` endpoint.
 4. The Rust runner validates the request against its sandbox rules and performs the action, returning standard output, standard error, and exit codes.
-5. The `verifier` checks the outcome.
-6. The `reporter` prints the final result.
+5. The `verifier` checks the outcome. If tools fail or the loop budget isn't exhausted, execution loops back to `policy_gate` for another iteration, effectively updating state and planning further actions.
+6. The `reporter` prints the final result once verification passes or max loops are exhausted.

@@ -567,7 +567,8 @@ def _api_http_response(
         if method != "GET":
             return _json_response(405, {"error": "method_not_allowed"})
         from lg_orch.visualize import render_run_viewer_spa
-        html = render_run_viewer_spa(api_base_url="")
+        from lg_orch.graph import export_mermaid
+        html = render_run_viewer_spa(api_base_url="", mermaid_graph=export_mermaid())
         body = html.encode("utf-8")
         return 200, "text/html; charset=utf-8", body
 

@@ -129,21 +129,27 @@ All runtime config lives in `configs/runtime.{dev|stage|prod}.toml`.
 ## Orchestration graph
 
 ```
-ingest → router → context_builder → planner
-                                       ↓
-                                  policy_gate
-                                       ↓
-                                   executor
-                                       ↓
-                                   verifier ──(retry)──→ context_builder
-                                       │                       ↑
-                                       └──(discard_reset)──────┘
-                                       │
-                                       ↓
-                                   reporter
+        ingest
+          ↓
+     policy_gate ──────────────┐ (budgets exhausted)
+          ↓ (conditionally)    │
+  context_builder              │
+          ↓                    │
+       router                  │
+          ↓                    │
+       planner                 │
+          ↓                    │
+      executor                 │
+          ↓                    │
+      verifier                 │
+          ↓ (retry)            │
+     [policy_gate]             │
+          │ (success)          │
+          ↓                    ↓
+       reporter ────────────> END
 ```
 
-Recovery routing: verifier classifies failures into `verification_failed`, `architecture_mismatch`, `budget_exceeded`, `test_failure_post_change`, `repeated_verification_failure`, and `acceptance_criteria_unmet`. Each class routes to the correct retry target with a structured `RecoveryPacket`.
+Recovery routing: `verifier` checks the outcome. If tools fail, it routes back to `policy_gate` for a bounded retry loop. `policy_gate` enforces loop budgets (`max_loops`). If budgets allow, `policy_gate` routes to `context_builder`, `router`, or `planner` based on the requested retry target. If budgets are exhausted or the verification succeeds, execution proceeds to `reporter`.
 
 ## Memory subsystems
 

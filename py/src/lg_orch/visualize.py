@@ -408,13 +408,22 @@ def render_trace_site_index_html(runs: list[dict[str, Any]]) -> str:
     )
 
 
-def render_run_viewer_spa(*, api_base_url: str = "") -> str:
+def render_run_viewer_spa(*, api_base_url: str = "", mermaid_graph: str = "") -> str:
     """
     Render a single-page application HTML that queries the live /v1/runs API.
     api_base_url: base URL for API calls (empty = same origin).
     """
     safe_base = api_base_url.rstrip("/")
-    return "".join(
+    mermaid_script = ""
+    if mermaid_graph:
+        mermaid_script = (
+            '<script type="module">\n'
+            'import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";\n'
+            'mermaid.initialize({ startOnLoad: true, theme: "neutral" });\n'
+            "</script>"
+        )
+
+    html_str = "".join(
         [
             "<!DOCTYPE html>\n",
             '<html lang="en">\n',
@@ -486,6 +495,7 @@ def render_run_viewer_spa(*, api_base_url: str = "") -> str:
             "</div>\n",
             "<script>\n",
             f'const API = "{safe_base}";\n',
+            f'window.mermaidGraph = {json.dumps(mermaid_graph.strip()) if mermaid_graph else "null"};\n',
             r"""
 let _selectedRunId = null;
 let _listTimer = null;
@@ -638,8 +648,16 @@ function renderDetail(run) {
     }
   }
 
+  if (window.mermaidGraph) {
+      html += `<div class="card"><h2>Graph</h2><pre class="mermaid">${esc(window.mermaidGraph)}</pre></div>`;
+  }
+
   html += `<div id="logs-section"></div>`;
   document.getElementById('detail-panel').innerHTML = html;
+  
+  if (window.mermaid) {
+      setTimeout(() => window.mermaid.run(), 50);
+  }
 
   if (inProgress) {
     _detailTimer = setTimeout(() => loadDetail(run.run_id), 2000);
@@ -705,3 +723,7 @@ scheduleList();
             "</html>\n",
         ]
     )
+
+    if mermaid_script:
+        return html_str.replace("</body>\n", f"{mermaid_script}\n</body>\n")
+    return html_str
