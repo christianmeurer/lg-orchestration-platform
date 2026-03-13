@@ -1,3 +1,10 @@
+# Required secrets for e2e-smoke job:
+#   MODEL_ACCESS_KEY          — DigitalOcean or compatible model API key
+#   OPENAI_COMPATIBLE_API_KEY — Optional: OpenAI-compatible endpoint key
+#   LG_REMOTE_API_BEARER_TOKEN — Optional: Remote API bearer token for integration tests
+#
+# The e2e-smoke job is skipped automatically when MODEL_ACCESS_KEY is not set
+# (e.g. on forks or PRs from external contributors).
 name: CI
 
 on:
@@ -53,3 +60,25 @@ jobs:
         run: docker build -t lg-orch:ci .
       - name: Build Python-only image
         run: docker build -f Dockerfile.python -t lg-orch-python:ci .
+
+  e2e-smoke:
+    runs-on: ubuntu-latest
+    if: ${{ secrets.MODEL_ACCESS_KEY != '' }}
+    needs: [python-tests]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh && echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install dependencies
+        run: uv sync --project ./py --python 3.12
+      - name: E2E smoke (live model)
+        env:
+          LG_E2E: "1"
+          LG_PROFILE: dev
+          MODEL_ACCESS_KEY: ${{ secrets.MODEL_ACCESS_KEY }}
+          DIGITAL_OCEAN_MODEL_ACCESS_KEY: ${{ secrets.MODEL_ACCESS_KEY }}
+          OPENAI_COMPATIBLE_API_KEY: ${{ secrets.OPENAI_COMPATIBLE_API_KEY }}
+          LG_REMOTE_API_BEARER_TOKEN: ${{ secrets.LG_REMOTE_API_BEARER_TOKEN }}
+        run: cd py && uv run pytest tests/test_e2e.py -v --tb=short

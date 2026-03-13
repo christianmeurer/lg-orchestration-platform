@@ -1,0 +1,30 @@
+name: E2E Live
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_endpoint:
+        description: "DigitalOcean or OpenAI-compatible model endpoint base URL"
+        required: false
+        default: "https://inference.do-ai.run/v1"
+
+jobs:
+  e2e-live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh && echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install dependencies
+        run: uv sync --project ./py --python 3.12
+      - name: E2E live model tests
+        env:
+          LG_E2E: "1"
+          LG_PROFILE: dev
+          MODEL_ACCESS_KEY: ${{ secrets.MODEL_ACCESS_KEY }}
+          DIGITAL_OCEAN_MODEL_ACCESS_KEY: ${{ secrets.MODEL_ACCESS_KEY }}
+          OPENAI_COMPATIBLE_API_KEY: ${{ secrets.OPENAI_COMPATIBLE_API_KEY }}
+          LG_MODEL_ENDPOINT: ${{ github.event.inputs.model_endpoint }}
+        run: cd py && uv run pytest tests/test_e2e.py -v --tb=long -s

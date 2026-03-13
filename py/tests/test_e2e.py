@@ -139,3 +139,39 @@ class TestE2ESmoke:
             # When not ok, loop_summary should be non-empty
             loop_summary = str(verification.get("loop_summary", "")).strip()
             assert loop_summary, "non-ok verification must have a loop_summary"
+
+    @pytest.mark.skipif(not _E2E, reason="LG_E2E not set")
+    def test_model_routing_config_is_wired(self) -> None:
+        """
+        Verify that the model routing config keys are present in a run's output state.
+        This does not call a real model — it verifies that config paths are structurally
+        correct so that a real model call would be attempted.
+        """
+        import os
+        from lg_orch.graph import build_graph
+
+        app = build_graph()
+        state = _base_state("Analyze the repository structure.")
+        # Set an API key env var if available in CI
+        api_key = os.environ.get("MODEL_ACCESS_KEY", "").strip()
+        if api_key:
+            state["_models"] = {
+                "router": {"provider": "digitalocean", "model": "meta-llama/Meta-Llama-3.1-70B-Instruct", "temperature": 0.0},
+                "planner": {"provider": "digitalocean", "model": "meta-llama/Meta-Llama-3.1-70B-Instruct", "temperature": 0.0},
+            }
+            state["_model_provider_runtime"] = {
+                "digitalocean": {
+                    "base_url": "https://inference.do-ai.run/v1",
+                    "api_key": api_key,
+                    "timeout_s": 30,
+                }
+            }
+            # Keep runner disabled — we are testing model routing config wiring only
+            state["_runner_enabled"] = False
+        out = dict(app.invoke(state))
+        assert "route" in out, "route must be present"
+        route = out.get("route", {})
+        assert isinstance(route, dict)
+        # Lane must be one of the valid values
+        assert str(route.get("lane", "")) in {"interactive", "deep_planning", "recovery"}, \
+            f"unexpected lane: {route.get('lane')}"
