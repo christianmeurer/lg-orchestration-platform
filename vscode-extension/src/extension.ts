@@ -6,9 +6,6 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as vscode from 'vscode';
 
-const RUNNER_BIND = '127.0.0.1:8088';
-const RUNNER_BASE_URL = 'http://127.0.0.1:8088';
-const RUNNER_API_KEY = 'dev-insecure';
 const DEFAULT_REMOTE_POLL_INTERVAL_MS = 1000;
 const LOG_LIMIT = 1000;
 
@@ -17,7 +14,18 @@ const COMMANDS = {
   runRequest: 'lgOrch.runRequest',
   startRunner: 'lgOrch.startRunner',
   stopRunner: 'lgOrch.stopRunner',
+  openRunHistory: 'lgOrch.openRunHistory',
+  clearRunHistory: 'lgOrch.clearRunHistory',
 } as const;
+
+interface RunHistoryEntry {
+  runId: string;
+  request: string;
+  status: string;
+  startedAt: string;
+  tracePath: string | null;
+  finalOutput: string;
+}
 
 interface TraceSummary {
   tracePath: string | null;
@@ -32,6 +40,9 @@ interface ViewModel {
   latestTracePath: string;
   finalOutput: string;
   logs: string;
+  runHistory: RunHistoryEntry[];
+  showInlineDiff: boolean;
+  inlineDiff: string;
 }
 
 interface RemoteRunDetails {
@@ -55,10 +66,12 @@ class LgOrchExtension {
   private readonly logLines: string[] = [];
   private latestTracePath: string | null = null;
   private latestFinalOutput = '';
+  private latestInlineDiff = '';
   private runnerStatus = 'stopped';
   private requestStatus = 'idle';
   private requestRunning = false;
   private activeRemoteRunId: string | null = null;
+  private readonly runHistory: RunHistoryEntry[] = [];
 
   public constructor(private readonly context: vscode.ExtensionContext) { }
 
@@ -75,6 +88,13 @@ class LgOrchExtension {
       }),
       vscode.commands.registerCommand(COMMANDS.runRequest, async (request: unknown) => {
         await this.runRequest(typeof request === 'string' ? request : undefined);
+      }),
+      vscode.commands.registerCommand(COMMANDS.openRunHistory, async () => {
+        await this.openPanel();
+      }),
+      vscode.commands.registerCommand(COMMANDS.clearRunHistory, () => {
+        this.runHistory.splice(0, this.runHistory.length);
+        this.refresh();
       }),
     );
   }
@@ -128,6 +148,10 @@ class LgOrchExtension {
       case 'stopRunner':
         await this.stopRunner();
         return;
+      case 'clearRunHistory':
+        this.runHistory.splice(0, this.runHistory.length);
+        this.refresh();
+        return;
       default:
         return;
     }
@@ -148,24 +172,36 @@ class LgOrchExtension {
       return;
     }
 
-    const cwd = path.join(workspaceRoot, 'rs');
-    const args = [
-      'run',
-      '--',
-      '--bind',
-      RUNNER_BIND,
-      '--root-dir',
-      workspaceRoot,
-      '--profile',
-      'dev',
-      '--api-key',
-      RUNNER_API_KEY,
-    ];
+    const binaryPath = this.getRunnerBinaryPath();
+    let command: string;
+    let args: string[];
+    let cwd: string;
+
+    if (binaryPath) {
+      command = binaryPath;
+      args = [
+        '--bind', this.getRunnerBindAddress(),
+        '--root-dir', workspaceRoot,
+        '--profile', 'dev',
+        '--api-key', this.getRunnerApiKey(),
+      ];
+      cwd = workspaceRoot;
+    } else {
+      command = 'cargo';
+      args = [
+        'run', '--',
+        '--bind', this.getRunnerBindAddress(),
+        '--root-dir', workspaceRoot,
+        '--profile', 'dev',
+        '--api-key', this.getRunnerApiKey(),
+      ];
+      cwd = path.join(workspaceRoot, 'rs');
+    }
 
     this.runnerStatus = 'starting';
-    this.appendLog(`[runner] starting: cargo ${args.join(' ')}`);
+    this.appendLog(`[runner] starting: ${command} ${args.join(' ')}`);
 
-    const child = spawn('cargo', args, {
+    const child = spawn(command, args, {
       cwd,
       detached: process.platform !== 'win32',
       env: process.env,
@@ -253,6 +289,7 @@ class LgOrchExtension {
     this.activeRemoteRunId = null;
     this.latestTracePath = null;
     this.latestFinalOutput = '';
+    this.latestInlineDiff = '';
     this.appendLog(`[run] request: ${request}`);
     this.refresh();
 
@@ -268,6 +305,18 @@ class LgOrchExtension {
       this.appendLog(`[run] failed: ${asErrorMessage(error)}`);
     } finally {
       this.requestRunning = false;
+      const maxHistory = this.getMaxRunHistory();
+      this.runHistory.push({
+        runId: this.activeRemoteRunId ?? `local-${Date.now()}`,
+        request: request || '',
+        status: this.requestStatus,
+        startedAt: new Date().toISOString(),
+        tracePath: this.latestTracePath,
+        finalOutput: this.latestFinalOutput,
+      });
+      if (this.runHistory.length > maxHistory) {
+        this.runHistory.splice(0, this.runHistory.length - maxHistory);
+      }
       this.activeRemoteRunId = null;
       this.refresh();
     }
@@ -293,7 +342,7 @@ class LgOrchExtension {
       '--view',
       'classic',
       '--runner-base-url',
-      RUNNER_BASE_URL,
+      this.getRunnerBaseUrl(),
     ];
     const runCode = await this.runCommand('cli', 'uv', runArgs, pyDir);
     const summary = await this.findLatestTrace(workspaceRoot);
@@ -430,6 +479,33 @@ class LgOrchExtension {
     });
   }
 
+  private getRunnerBindAddress(): string {
+    return vscode.workspace.getConfiguration('lula').get<string>('runnerBindAddress', '127.0.0.1:8088').trim() || '127.0.0.1:8088';
+  }
+
+  private getRunnerBaseUrl(): string {
+    const bind = this.getRunnerBindAddress();
+    return `http://${bind}`;
+  }
+
+  private getRunnerApiKey(): string {
+    return vscode.workspace.getConfiguration('lula').get<string>('runnerApiKey', 'dev-insecure').trim() || 'dev-insecure';
+  }
+
+  private getRunnerBinaryPath(): string {
+    return vscode.workspace.getConfiguration('lula').get<string>('runnerBinaryPath', '').trim();
+  }
+
+  private isShowInlineDiff(): boolean {
+    return vscode.workspace.getConfiguration('lula').get<boolean>('showInlineDiff', true);
+  }
+
+  private getMaxRunHistory(): number {
+    const val = vscode.workspace.getConfiguration('lula').get<number>('maxRunHistory', 20);
+    if (!Number.isFinite(val) || val < 1) return 20;
+    return Math.min(val, 200);
+  }
+
   private getRemoteApiBaseUrl(): string | null {
     const raw = vscode.workspace.getConfiguration('lula').get<string>('remoteApiBaseUrl', '').trim();
     if (!raw) {
@@ -482,9 +558,41 @@ class LgOrchExtension {
 
     if (detail.trace_ready === true && isRecord(detail.trace)) {
       this.latestFinalOutput = this.formatOutput(detail.trace.final);
+      if (this.isShowInlineDiff()) {
+        this.latestInlineDiff = this.extractInlineDiff(detail.trace);
+      }
     }
 
     this.refresh();
+  }
+
+  private extractInlineDiff(traceData: unknown): string {
+    if (!isRecord(traceData)) return '';
+    const toolResults = Array.isArray(traceData.tool_results) ? traceData.tool_results : [];
+    const patches: string[] = [];
+    for (const result of toolResults) {
+      if (!isRecord(result)) continue;
+      if (String(result.tool || '').includes('apply_patch') && Boolean(result.ok)) {
+        const input = isRecord(result.input) ? result.input : {};
+        const patch = typeof input.patch === 'string' ? input.patch.trim() : '';
+        const changes = Array.isArray(input.changes) ? input.changes : [];
+        if (patch) {
+          patches.push(patch);
+        } else {
+          for (const change of changes) {
+            if (isRecord(change)) {
+              const content = typeof change.patch === 'string' ? change.patch.trim()
+                : typeof change.content === 'string' ? change.content.trim() : '';
+              const filePath = typeof change.path === 'string' ? change.path : '(unknown)';
+              if (content) {
+                patches.push(`--- ${filePath}\n${content}`);
+              }
+            }
+          }
+        }
+      }
+    }
+    return patches.join('\n\n---\n\n');
   }
 
   private appendRemoteLogs(payload: RemoteRunLogs, seenCount: number): number {
@@ -749,6 +857,9 @@ class LgOrchExtension {
       latestTracePath: this.latestTracePath ?? '(none)',
       finalOutput: this.latestFinalOutput || '(empty)',
       logs: this.logLines.length > 0 ? this.logLines.join('\n') : '(no logs yet)',
+      runHistory: [...this.runHistory].reverse(),
+      showInlineDiff: this.isShowInlineDiff(),
+      inlineDiff: this.latestInlineDiff,
     };
   }
 
@@ -825,6 +936,12 @@ class LgOrchExtension {
         white-space: pre-wrap;
         word-break: break-word;
       }
+
+      .run-history { display: flex; flex-direction: column; gap: 4px; }
+      .run-entry { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; padding: 4px 8px; background: var(--vscode-textCodeBlock-background); border-radius: 4px; font-size: 11px; }
+      .run-entry .status-ok { color: var(--vscode-testing-iconPassed); }
+      .run-entry .status-fail { color: var(--vscode-testing-iconFailed); }
+      .run-entry .status-other { color: var(--vscode-descriptionForeground); }
     </style>
   </head>
   <body>
@@ -848,6 +965,16 @@ class LgOrchExtension {
     <section>
       <h2>Final Output</h2>
       <pre id="finalOutput"></pre>
+    </section>
+
+    <section id="diffSection" style="display:none">
+      <h2>Inline Diff</h2>
+      <pre id="inlineDiff"></pre>
+    </section>
+
+    <section>
+      <h2>Run History <button id="clearHistory" style="font-size:10px;padding:2px 6px">Clear</button></h2>
+      <div id="runHistory" class="run-history"></div>
     </section>
 
     <section>
@@ -875,6 +1002,10 @@ class LgOrchExtension {
         }
       });
 
+      function escapeHtml(text) {
+        return String(text).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      }
+
       window.addEventListener('message', (event) => {
         const state = event.data;
         document.getElementById('workspace').textContent = 'Workspace: ' + state.workspaceRoot;
@@ -885,6 +1016,30 @@ class LgOrchExtension {
         document.getElementById('finalOutput').textContent = state.finalOutput;
         logs.textContent = state.logs;
         logs.scrollTop = logs.scrollHeight;
+
+        const diffSection = document.getElementById('diffSection');
+        const inlineDiff = document.getElementById('inlineDiff');
+        if (state.showInlineDiff && state.inlineDiff) {
+          inlineDiff.textContent = state.inlineDiff;
+          diffSection.style.display = '';
+        } else {
+          diffSection.style.display = 'none';
+        }
+
+        const historyContainer = document.getElementById('runHistory');
+        historyContainer.innerHTML = '';
+        for (const entry of (state.runHistory || [])) {
+          const div = document.createElement('div');
+          div.className = 'run-entry';
+          const statusClass = entry.status === 'succeeded' ? 'status-ok'
+            : entry.status === 'failed' ? 'status-fail' : 'status-other';
+          div.innerHTML = '<span class="' + statusClass + '">' + escapeHtml(entry.status) + '</span><span title="' + escapeHtml(entry.request) + '">' + escapeHtml(entry.request.length > 60 ? entry.request.slice(0, 60) + '...' : entry.request) + '</span><span>' + escapeHtml(entry.startedAt.slice(11, 19)) + '</span>';
+          historyContainer.appendChild(div);
+        }
+      });
+
+      document.getElementById('clearHistory').addEventListener('click', () => {
+        vscodeApi.postMessage({ type: 'clearRunHistory' });
       });
     </script>
   </body>
