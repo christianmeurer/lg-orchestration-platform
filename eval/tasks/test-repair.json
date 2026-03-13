@@ -1,0 +1,9 @@
+{
+  "id": "test-repair-001",
+  "request": "Fix the failing unit tests after the recent refactor.",
+  "expected_intent": "code_change",
+  "expected_recovery_packet_present": false,
+  "expected_acceptance_ok": false,
+  "require_final": false,
+  "description": "A test-repair request should route as code_change. With no runner, no patch is applied so test_failure_post_change will not trigger — this tests intent classification only."
+}

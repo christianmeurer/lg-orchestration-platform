@@ -11,6 +11,30 @@ from lg_orch.state import RecoveryAction, RecoveryPacket, VerificationCheck, Ver
 from lg_orch.tools import RunnerClient
 from lg_orch.trace import append_event
 
+_TEST_FAILURE_HINTS = (
+    "assert",
+    "assertion",
+    "test_",
+    "tests/",
+    "test failed",
+    "expected",
+    "got",
+    "does not match",
+    "mismatch",
+    "expected value",
+    "pytest",
+    "unittest",
+    "FAILED",
+    "test suite",
+)
+
+_PATCH_APPLIED_HINTS = (
+    "apply_patch",
+    "patch_applied",
+    "file_written",
+    "write_file",
+)
+
 _ARCH_MISMATCH_HINTS = (
     "no such file",
     "cannot find module",
@@ -119,6 +143,43 @@ def _is_architecture_mismatch(
     )
 
 
+def _is_test_failure_post_change(
+    *,
+    tool: str,
+    diagnostics: list[dict[str, Any]],
+    stderr: str,
+    stdout: str,
+    artifacts: dict[str, Any],
+    tool_results: list[dict[str, Any]],
+) -> bool:
+    """
+    Returns True when:
+    1. The failing tool looks like a test runner (run_tests, pytest, cargo test, etc.)
+    2. AND a patch was applied earlier in the same loop (apply_patch succeeded in tool_results)
+    """
+    tool_lower = tool.strip().lower()
+    is_test_tool = (
+        tool_lower in {"run_tests", "pytest", "cargo_test", "test_runner"}
+        or "test" in tool_lower
+    )
+    if not is_test_tool:
+        all_text = " ".join([
+            _diagnostic_summary(d) for d in diagnostics
+        ] + [stderr, stdout]).lower()
+        is_test_tool = any(hint in all_text for hint in _TEST_FAILURE_HINTS)
+
+    if not is_test_tool:
+        return False
+
+    # Check that a patch was applied and succeeded earlier in this loop
+    patch_applied = any(
+        str(r.get("tool", "")).strip().lower() in {"apply_patch", "write_file"}
+        and bool(r.get("ok", False))
+        for r in tool_results
+    )
+    return patch_applied
+
+
 def _classify_retry(
     tool_results: list[dict[str, Any]],
     *,
@@ -164,6 +225,27 @@ def _classify_retry(
                     "plan_action": "amend",
                 },
                 error_tag,
+            )
+
+        # Check for test failure post-change (Reflect phase)
+        if _is_test_failure_post_change(
+            tool=tool,
+            diagnostics=diagnostics,
+            stderr=stderr,
+            stdout=str(result.get("stdout", "")),
+            artifacts=artifacts,
+            tool_results=tool_results,
+        ):
+            return (
+                {
+                    "failure_class": "test_failure_post_change",
+                    "failure_fingerprint": fingerprint,
+                    "rationale": "test failed after a patch was applied; planner should generate a test-repair step",
+                    "retry_target": "planner",
+                    "context_scope": "working_set",
+                    "plan_action": "amend",
+                },
+                "test_failure_post_change",
             )
 
         if current_loop >= 2:

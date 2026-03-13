@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from lg_orch.nodes.verifier import verifier
+from lg_orch.nodes.verifier import _classify_retry, _is_test_failure_post_change, verifier
 
 
 def _base_state(**overrides: Any) -> dict[str, Any]:
@@ -244,3 +244,94 @@ def test_verifier_fails_when_acceptance_criteria_are_unmet() -> None:
     assert out["verification"]["acceptance_ok"] is False
     assert out["verification"]["failure_class"] == "acceptance_criteria_unmet"
     assert out["verification"]["acceptance_checks"][0]["detail"] == "repo_context_missing"
+
+
+# --- PDF #4: Reflect-phase test repair routing ---
+
+def _patch_ok() -> dict[str, Any]:
+    return {
+        "tool": "apply_patch",
+        "ok": True,
+        "exit_code": 0,
+        "stdout": "patch applied",
+        "stderr": "",
+        "diagnostics": [],
+        "timing_ms": 1,
+        "artifacts": {},
+    }
+
+
+def test_is_test_failure_post_change_true() -> None:
+    result = _is_test_failure_post_change(
+        tool="run_tests",
+        diagnostics=[],
+        stderr="",
+        stdout="FAILED tests/test_foo.py::test_bar",
+        artifacts={},
+        tool_results=[_patch_ok()],
+    )
+    assert result is True
+
+
+def test_is_test_failure_post_change_false_no_patch() -> None:
+    result = _is_test_failure_post_change(
+        tool="run_tests",
+        diagnostics=[],
+        stderr="",
+        stdout="FAILED tests/test_foo.py::test_bar",
+        artifacts={},
+        tool_results=[],
+    )
+    assert result is False
+
+
+def test_is_test_failure_post_change_false_non_test_tool() -> None:
+    result = _is_test_failure_post_change(
+        tool="compile",
+        diagnostics=[],
+        stderr="build failed",
+        stdout="",
+        artifacts={},
+        tool_results=[_patch_ok()],
+    )
+    assert result is False
+
+
+def test_classify_retry_returns_test_failure_post_change() -> None:
+    tool_results: list[dict[str, Any]] = [
+        _patch_ok(),
+        {
+            "tool": "run_tests",
+            "ok": False,
+            "exit_code": 1,
+            "stdout": "FAILED tests/test_foo.py::test_bar",
+            "stderr": "",
+            "diagnostics": [],
+            "timing_ms": 1,
+            "artifacts": {},
+        },
+    ]
+    recovery, label = _classify_retry(tool_results, current_loop=0)
+    assert label == "test_failure_post_change"
+    assert recovery["failure_class"] == "test_failure_post_change"
+    assert recovery["plan_action"] == "amend"
+    assert recovery["retry_target"] == "planner"
+
+
+def test_classify_retry_budget_exceeded_takes_priority() -> None:
+    tool_results: list[dict[str, Any]] = [
+        _patch_ok(),
+        {
+            "tool": "run_tests",
+            "ok": False,
+            "exit_code": 1,
+            "stdout": "FAILED tests/test_foo.py::test_bar",
+            "stderr": "",
+            "diagnostics": [],
+            "timing_ms": 1,
+            "artifacts": {"error": "tool_call_budget_exceeded"},
+        },
+    ]
+    recovery, label = _classify_retry(tool_results, current_loop=0)
+    assert label == "tool_call_budget_exceeded"
+    assert recovery["failure_class"] == "budget_exceeded"
