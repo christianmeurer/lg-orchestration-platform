@@ -53,13 +53,17 @@ async fn capabilities() -> Json<serde_json::Value> {
             "exec",
             "undo",
             "mcp_discover",
-            "mcp_execute"
+            "mcp_execute",
+            "mcp_resources_list",
+            "mcp_resource_read",
+            "mcp_prompts_list",
+            "mcp_prompt_get"
         ],
         "batch": true,
         "mcp_enabled": true,
         "mcp": {
             "protocol": "json-rpc-2.0",
-            "methods": ["initialize", "tools/list", "tools/call"],
+            "methods": ["initialize", "tools/list", "tools/call", "resources/list", "resources/read", "prompts/list", "prompts/get"],
             "redaction": {
                 "enabled": true,
                 "fields": ["paths", "usernames", "ip_addresses"]

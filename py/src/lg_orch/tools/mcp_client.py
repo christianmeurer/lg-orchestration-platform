@@ -226,3 +226,161 @@ class MCPClient:
         )
         return env
 
+    def list_resources(self, server_name: str) -> list[dict[str, Any]]:
+        """Call mcp_resources_list for the given server. Returns [] on any error."""
+        log = get_logger()
+        try:
+            payload = {
+                "server_name": server_name,
+                "server": self._server_payload(server_name),
+            }
+        except ValueError as exc:
+            log.warning("mcp_list_resources_config_invalid", server=server_name, error=str(exc))
+            return []
+
+        env = self.runner_client.execute_tool(tool="mcp_resources_list", input=payload)
+        if not bool(env.get("ok", False)):
+            log.warning("mcp_list_resources_failed", server=server_name, error=str(env.get("stderr", "")))
+            return []
+
+        stdout = env.get("stdout", "")
+        if not isinstance(stdout, str) or not stdout.strip():
+            return []
+        try:
+            resources = json.loads(stdout)
+        except Exception:
+            return []
+        if not isinstance(resources, list):
+            return []
+        return [r for r in resources if isinstance(r, dict)]
+
+    def read_resource(self, server_name: str, resource_uri: str) -> dict[str, Any]:
+        """Call mcp_resource_read for the given server and URI. Returns {} on any error."""
+        log = get_logger()
+        try:
+            payload = {
+                "server_name": server_name,
+                "resource_uri": resource_uri,
+                "server": self._server_payload(server_name),
+            }
+        except ValueError as exc:
+            log.warning("mcp_read_resource_config_invalid", server=server_name, error=str(exc))
+            return {}
+
+        env = self.runner_client.execute_tool(tool="mcp_resource_read", input=payload)
+        if not bool(env.get("ok", False)):
+            log.warning("mcp_read_resource_failed", server=server_name, uri=resource_uri, error=str(env.get("stderr", "")))
+            return {}
+
+        stdout = env.get("stdout", "")
+        if not isinstance(stdout, str) or not stdout.strip():
+            return {}
+        try:
+            result = json.loads(stdout)
+        except Exception:
+            return {}
+        return result if isinstance(result, dict) else {}
+
+    def list_prompts(self, server_name: str) -> list[dict[str, Any]]:
+        """Call mcp_prompts_list for the given server. Returns [] on any error."""
+        log = get_logger()
+        try:
+            payload = {
+                "server_name": server_name,
+                "server": self._server_payload(server_name),
+            }
+        except ValueError as exc:
+            log.warning("mcp_list_prompts_config_invalid", server=server_name, error=str(exc))
+            return []
+
+        env = self.runner_client.execute_tool(tool="mcp_prompts_list", input=payload)
+        if not bool(env.get("ok", False)):
+            log.warning("mcp_list_prompts_failed", server=server_name, error=str(env.get("stderr", "")))
+            return []
+
+        stdout = env.get("stdout", "")
+        if not isinstance(stdout, str) or not stdout.strip():
+            return []
+        try:
+            prompts = json.loads(stdout)
+        except Exception:
+            return []
+        if not isinstance(prompts, list):
+            return []
+        return [p for p in prompts if isinstance(p, dict)]
+
+    def get_prompt(
+        self,
+        server_name: str,
+        prompt_name: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Call mcp_prompt_get for the given server and prompt name. Returns {} on any error."""
+        log = get_logger()
+        try:
+            payload = {
+                "server_name": server_name,
+                "prompt_name": prompt_name,
+                "arguments": arguments or {},
+                "server": self._server_payload(server_name),
+            }
+        except ValueError as exc:
+            log.warning("mcp_get_prompt_config_invalid", server=server_name, error=str(exc))
+            return {}
+
+        env = self.runner_client.execute_tool(tool="mcp_prompt_get", input=payload)
+        if not bool(env.get("ok", False)):
+            log.warning("mcp_get_prompt_failed", server=server_name, prompt=prompt_name, error=str(env.get("stderr", "")))
+            return {}
+
+        stdout = env.get("stdout", "")
+        if not isinstance(stdout, str) or not stdout.strip():
+            return {}
+        try:
+            result = json.loads(stdout)
+        except Exception:
+            return {}
+        return result if isinstance(result, dict) else {}
+
+    def summarize_capabilities(self) -> dict[str, Any]:
+        """
+        Returns a summary of the MCP surface area available across all servers.
+        tools_count: total discovered tools
+        resources_count: total discovered resources (requires runner)
+        prompts_count: total discovered prompts (requires runner)
+        servers: list of {server_name, tools, resources, prompts}
+        """
+        servers: list[dict[str, Any]] = []
+        total_tools = 0
+        total_resources = 0
+        total_prompts = 0
+
+        for server_name in sorted(self.server_configs.keys()):
+            try:
+                self._server_payload(server_name)
+            except ValueError:
+                continue
+
+            tools_data = self.discover_tools()
+            server_tools = [t for t in tools_data if t.get("server_name") == server_name and not t.get("_schema_hash_mismatch")]
+            resources = self.list_resources(server_name)
+            prompts = self.list_prompts(server_name)
+
+            total_tools += len(server_tools)
+            total_resources += len(resources)
+            total_prompts += len(prompts)
+
+            servers.append({
+                "server_name": server_name,
+                "tools": len(server_tools),
+                "resources": len(resources),
+                "prompts": len(prompts),
+            })
+
+        return {
+            "tools_count": total_tools,
+            "resources_count": total_resources,
+            "prompts_count": total_prompts,
+            "servers": servers,
+        }
+

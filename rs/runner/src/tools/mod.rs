@@ -78,6 +78,10 @@ pub async fn dispatch_tool(
         "undo" => fs::undo(cfg, input).await,
         "mcp_discover" => mcp::mcp_discover(cfg, input).await,
         "mcp_execute" => mcp::mcp_execute(cfg, input).await,
+        "mcp_resources_list" => mcp::mcp_resources_list(cfg, input).await,
+        "mcp_resource_read" => mcp::mcp_resource_read(cfg, input).await,
+        "mcp_prompts_list" => mcp::mcp_prompts_list(cfg, input).await,
+        "mcp_prompt_get" => mcp::mcp_prompt_get(cfg, input).await,
         other => Err(ApiError::BadRequest(format!("unknown tool: {other}"))),
     };
     match out {

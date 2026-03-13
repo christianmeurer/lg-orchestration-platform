@@ -48,6 +48,38 @@ struct McpExecuteIn {
     server: McpServerConfigIn,
 }
 
+#[derive(Debug, Deserialize)]
+struct McpResourcesListIn {
+    server_name: String,
+    server: McpServerConfigIn,
+    #[serde(default)]
+    list_params: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct McpResourceReadIn {
+    server_name: String,
+    resource_uri: String,
+    server: McpServerConfigIn,
+}
+
+#[derive(Debug, Deserialize)]
+struct McpPromptsListIn {
+    server_name: String,
+    server: McpServerConfigIn,
+    #[serde(default)]
+    list_params: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct McpPromptGetIn {
+    server_name: String,
+    prompt_name: String,
+    #[serde(default = "default_args")]
+    arguments: Value,
+    server: McpServerConfigIn,
+}
+
 fn default_args() -> Value {
     json!({})
 }
@@ -551,6 +583,199 @@ pub async fn mcp_execute(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelop
     }
 }
 
+pub async fn mcp_resources_list(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiError> {
+    let inp: McpResourcesListIn =
+        serde_json::from_value(input).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    let server_name = inp.server_name.trim().to_string();
+    if server_name.is_empty() {
+        return Err(ApiError::BadRequest("server_name is required".to_string()));
+    }
+
+    let mut outbound_stats = RedactionStats::default();
+    let mut inbound_stats = RedactionStats::default();
+
+    let list_params_raw = inp.list_params.unwrap_or_else(|| json!({}));
+    let list_params = redact_value(&list_params_raw, &mut outbound_stats);
+
+    let mut client = McpStdioClient::connect(cfg, &inp.server).await?;
+    initialize(&mut client).await?;
+    let result = client.send_request("resources/list", list_params).await?;
+    let result_redacted = redact_value(&result, &mut inbound_stats);
+
+    let resources = result_redacted
+        .get("resources")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(vec![]));
+
+    Ok(ToolEnvelope::ok(
+        "mcp_resources_list",
+        serde_json::to_string_pretty(&resources).unwrap_or_default(),
+        json!({
+            "server_name": server_name,
+            "method": "resources/list",
+            "result": result_redacted,
+            "redaction": {
+                "outbound": outbound_stats.into_metadata(),
+                "inbound": inbound_stats.into_metadata()
+            }
+        }),
+        0,
+    )
+    .with_mcp(McpMetadata {
+        server_name,
+        handshake_completed: true,
+        outbound_redactions: outbound_stats.into_metadata(),
+        inbound_redactions: inbound_stats.into_metadata(),
+    }))
+}
+
+pub async fn mcp_resource_read(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiError> {
+    let inp: McpResourceReadIn =
+        serde_json::from_value(input).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    let server_name = inp.server_name.trim().to_string();
+    if server_name.is_empty() {
+        return Err(ApiError::BadRequest("server_name is required".to_string()));
+    }
+    let resource_uri = inp.resource_uri.trim().to_string();
+    if resource_uri.is_empty() {
+        return Err(ApiError::BadRequest("resource_uri is required".to_string()));
+    }
+
+    let mut outbound_stats = RedactionStats::default();
+    let mut inbound_stats = RedactionStats::default();
+
+    let uri_redacted = redact_string(&resource_uri, &mut outbound_stats);
+
+    let mut client = McpStdioClient::connect(cfg, &inp.server).await?;
+    initialize(&mut client).await?;
+    let result = client
+        .send_request("resources/read", json!({"uri": uri_redacted}))
+        .await?;
+    let result_redacted = redact_value(&result, &mut inbound_stats);
+
+    Ok(ToolEnvelope::ok(
+        "mcp_resource_read",
+        serde_json::to_string_pretty(&result_redacted).unwrap_or_default(),
+        json!({
+            "server_name": server_name,
+            "resource_uri": uri_redacted,
+            "method": "resources/read",
+            "result": result_redacted,
+            "redaction": {
+                "outbound": outbound_stats.into_metadata(),
+                "inbound": inbound_stats.into_metadata()
+            }
+        }),
+        0,
+    )
+    .with_mcp(McpMetadata {
+        server_name,
+        handshake_completed: true,
+        outbound_redactions: outbound_stats.into_metadata(),
+        inbound_redactions: inbound_stats.into_metadata(),
+    }))
+}
+
+pub async fn mcp_prompts_list(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiError> {
+    let inp: McpPromptsListIn =
+        serde_json::from_value(input).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    let server_name = inp.server_name.trim().to_string();
+    if server_name.is_empty() {
+        return Err(ApiError::BadRequest("server_name is required".to_string()));
+    }
+
+    let mut outbound_stats = RedactionStats::default();
+    let mut inbound_stats = RedactionStats::default();
+
+    let list_params_raw = inp.list_params.unwrap_or_else(|| json!({}));
+    let list_params = redact_value(&list_params_raw, &mut outbound_stats);
+
+    let mut client = McpStdioClient::connect(cfg, &inp.server).await?;
+    initialize(&mut client).await?;
+    let result = client.send_request("prompts/list", list_params).await?;
+    let result_redacted = redact_value(&result, &mut inbound_stats);
+
+    let prompts = result_redacted
+        .get("prompts")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(vec![]));
+
+    Ok(ToolEnvelope::ok(
+        "mcp_prompts_list",
+        serde_json::to_string_pretty(&prompts).unwrap_or_default(),
+        json!({
+            "server_name": server_name,
+            "method": "prompts/list",
+            "result": result_redacted,
+            "redaction": {
+                "outbound": outbound_stats.into_metadata(),
+                "inbound": inbound_stats.into_metadata()
+            }
+        }),
+        0,
+    )
+    .with_mcp(McpMetadata {
+        server_name,
+        handshake_completed: true,
+        outbound_redactions: outbound_stats.into_metadata(),
+        inbound_redactions: inbound_stats.into_metadata(),
+    }))
+}
+
+pub async fn mcp_prompt_get(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiError> {
+    let inp: McpPromptGetIn =
+        serde_json::from_value(input).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    let server_name = inp.server_name.trim().to_string();
+    if server_name.is_empty() {
+        return Err(ApiError::BadRequest("server_name is required".to_string()));
+    }
+    let prompt_name = inp.prompt_name.trim().to_string();
+    if prompt_name.is_empty() {
+        return Err(ApiError::BadRequest("prompt_name is required".to_string()));
+    }
+
+    let mut outbound_stats = RedactionStats::default();
+    let mut inbound_stats = RedactionStats::default();
+
+    let redacted_args = redact_value(&inp.arguments, &mut outbound_stats);
+
+    let mut client = McpStdioClient::connect(cfg, &inp.server).await?;
+    initialize(&mut client).await?;
+    let result = client
+        .send_request(
+            "prompts/get",
+            json!({"name": prompt_name, "arguments": redacted_args}),
+        )
+        .await?;
+    let result_redacted = redact_value(&result, &mut inbound_stats);
+
+    Ok(ToolEnvelope::ok(
+        "mcp_prompt_get",
+        serde_json::to_string_pretty(&result_redacted).unwrap_or_default(),
+        json!({
+            "server_name": server_name,
+            "prompt_name": prompt_name,
+            "method": "prompts/get",
+            "result": result_redacted,
+            "redaction": {
+                "outbound": outbound_stats.into_metadata(),
+                "inbound": inbound_stats.into_metadata()
+            }
+        }),
+        0,
+    )
+    .with_mcp(McpMetadata {
+        server_name,
+        handshake_completed: true,
+        outbound_redactions: outbound_stats.into_metadata(),
+        inbound_redactions: inbound_stats.into_metadata(),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -560,7 +785,7 @@ mod tests {
 
     fn mock_mcp_server_script(temp_dir: &Path) -> PathBuf {
         let script = temp_dir.join("mock_mcp_server.py");
-        let content = r#"import json
+        let content = r##"import json
 import sys
 
 
@@ -679,6 +904,54 @@ while True:
         )
         continue
 
+    if method == "resources/list":
+        write_message({
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "resources": [
+                    {"uri": "file:///repo/README.md", "name": "README", "mimeType": "text/markdown"}
+                ]
+            }
+        })
+        continue
+
+    if method == "resources/read":
+        uri = params.get("uri", "")
+        write_message({
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "contents": [{"uri": uri, "mimeType": "text/plain", "text": "# Mock Resource Content"}]
+            }
+        })
+        continue
+
+    if method == "prompts/list":
+        write_message({
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "prompts": [
+                    {"name": "summarize", "description": "Summarize a file", "arguments": [{"name": "path", "required": True}]}
+                ]
+            }
+        })
+        continue
+
+    if method == "prompts/get":
+        name = params.get("name", "")
+        args = params.get("arguments", {})
+        write_message({
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "description": f"Prompt: {name}",
+                "messages": [{"role": "user", "content": {"type": "text", "text": f"Summarize: {args}"}}]
+            }
+        })
+        continue
+
     if req_id is not None:
         write_message(
             {
@@ -687,7 +960,7 @@ while True:
                 "error": {"code": -32601, "message": "Method not found"},
             }
         )
-"#;
+"##;
         std::fs::write(&script, content).expect("write mock mcp server");
         script
     }
@@ -826,6 +1099,135 @@ while True:
         assert!(mcp_meta.outbound_redactions.paths >= 1);
         assert!(mcp_meta.outbound_redactions.usernames >= 1);
         assert!(mcp_meta.outbound_redactions.ip_addresses >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_mcp_resources_list_returns_resources() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let script = mock_mcp_server_script(td.path());
+        let cfg = RunnerConfig::new(td.path(), Some("dev"), None).expect("runner config");
+
+        let env = mcp_resources_list(
+            &cfg,
+            json!({
+                "server_name": "mock",
+                "server": {
+                    "command": "python",
+                    "args": [script.to_string_lossy().to_string()]
+                }
+            }),
+        )
+        .await
+        .expect("mcp_resources_list should succeed");
+
+        assert!(env.ok);
+        assert!(env.stdout.contains("README"));
+        let mcp = env.mcp.expect("mcp metadata");
+        assert!(mcp.handshake_completed);
+    }
+
+    #[tokio::test]
+    async fn test_mcp_resource_read_returns_contents() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let script = mock_mcp_server_script(td.path());
+        let cfg = RunnerConfig::new(td.path(), Some("dev"), None).expect("runner config");
+
+        let env = mcp_resource_read(
+            &cfg,
+            json!({
+                "server_name": "mock",
+                "resource_uri": "file:///repo/README.md",
+                "server": {
+                    "command": "python",
+                    "args": [script.to_string_lossy().to_string()]
+                }
+            }),
+        )
+        .await
+        .expect("mcp_resource_read should succeed");
+
+        assert!(env.ok);
+        assert!(env.stdout.contains("Mock Resource Content"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_prompts_list_returns_prompts() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let script = mock_mcp_server_script(td.path());
+        let cfg = RunnerConfig::new(td.path(), Some("dev"), None).expect("runner config");
+
+        let env = mcp_prompts_list(
+            &cfg,
+            json!({
+                "server_name": "mock",
+                "server": {
+                    "command": "python",
+                    "args": [script.to_string_lossy().to_string()]
+                }
+            }),
+        )
+        .await
+        .expect("mcp_prompts_list should succeed");
+
+        assert!(env.ok);
+        assert!(env.stdout.contains("summarize"));
+    }
+
+    #[tokio::test]
+    async fn test_mcp_prompt_get_returns_messages() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let script = mock_mcp_server_script(td.path());
+        let cfg = RunnerConfig::new(td.path(), Some("dev"), None).expect("runner config");
+
+        let env = mcp_prompt_get(
+            &cfg,
+            json!({
+                "server_name": "mock",
+                "prompt_name": "summarize",
+                "arguments": {"path": "README.md"},
+                "server": {
+                    "command": "python",
+                    "args": [script.to_string_lossy().to_string()]
+                }
+            }),
+        )
+        .await
+        .expect("mcp_prompt_get should succeed");
+
+        assert!(env.ok);
+        let parsed: Value = serde_json::from_str(&env.stdout).expect("stdout json");
+        assert!(parsed.get("messages").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_mcp_resources_list_requires_server_name() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let cfg = RunnerConfig::new(td.path(), Some("dev"), None).expect("runner config");
+        let result = mcp_resources_list(
+            &cfg,
+            json!({
+                "server_name": "",
+                "server": {"command": "python", "args": ["-V"]}
+            }),
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_mcp_resource_read_requires_uri() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let cfg = RunnerConfig::new(td.path(), Some("dev"), None).expect("runner config");
+        let result = mcp_resource_read(
+            &cfg,
+            json!({
+                "server_name": "mock",
+                "resource_uri": "",
+                "server": {"command": "python", "args": ["-V"]}
+            }),
+        )
+        .await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]

@@ -184,3 +184,124 @@ def test_summarize_tools_excludes_mismatch_sentinels() -> None:
     assert "bad_server" in result["mismatch_servers"]
     assert result["tool_count"] == 1
 
+
+# ---------------------------------------------------------------------------
+# list_resources / read_resource / list_prompts / get_prompt
+# ---------------------------------------------------------------------------
+
+def test_list_resources_returns_list() -> None:
+    runner = _runner_mock()
+    resources_payload = json.dumps([{"uri": "file:///repo/README.md", "name": "README"}])
+    with patch.object(
+        RunnerClient,
+        "execute_tool",
+        return_value={"ok": True, "stdout": resources_payload},
+    ):
+        client = MCPClient(
+            runner_client=runner,
+            server_configs={"s1": {"command": "python", "args": []}},
+        )
+        result = client.list_resources("s1")
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert result[0]["name"] == "README"
+
+
+def test_list_resources_returns_empty_on_error() -> None:
+    runner = _runner_mock()
+    with patch.object(
+        RunnerClient,
+        "execute_tool",
+        return_value={"ok": False, "stderr": "something failed"},
+    ):
+        client = MCPClient(
+            runner_client=runner,
+            server_configs={"s1": {"command": "python", "args": []}},
+        )
+        result = client.list_resources("s1")
+    assert result == []
+
+
+def test_read_resource_returns_dict() -> None:
+    runner = _runner_mock()
+    contents = {"contents": [{"uri": "file:///x", "text": "hello"}]}
+    with patch.object(
+        RunnerClient,
+        "execute_tool",
+        return_value={"ok": True, "stdout": json.dumps(contents)},
+    ):
+        client = MCPClient(
+            runner_client=runner,
+            server_configs={"s1": {"command": "python", "args": []}},
+        )
+        result = client.read_resource("s1", "file:///x")
+    assert isinstance(result, dict)
+    assert "contents" in result
+
+
+def test_list_prompts_returns_list() -> None:
+    runner = _runner_mock()
+    prompts_payload = json.dumps([{"name": "summarize", "description": "Summarize"}])
+    with patch.object(
+        RunnerClient,
+        "execute_tool",
+        return_value={"ok": True, "stdout": prompts_payload},
+    ):
+        client = MCPClient(
+            runner_client=runner,
+            server_configs={"s1": {"command": "python", "args": []}},
+        )
+        result = client.list_prompts("s1")
+    assert isinstance(result, list)
+    assert result[0]["name"] == "summarize"
+
+
+def test_get_prompt_returns_dict() -> None:
+    runner = _runner_mock()
+    prompt_result = {"description": "Prompt: summarize", "messages": [{"role": "user"}]}
+    with patch.object(
+        RunnerClient,
+        "execute_tool",
+        return_value={"ok": True, "stdout": json.dumps(prompt_result)},
+    ):
+        client = MCPClient(
+            runner_client=runner,
+            server_configs={"s1": {"command": "python", "args": []}},
+        )
+        result = client.get_prompt("s1", "summarize", {"path": "README.md"})
+    assert isinstance(result, dict)
+    assert "messages" in result
+
+
+def test_summarize_capabilities_returns_counts() -> None:
+    runner = _runner_mock()
+    tools_payload = json.dumps([{"name": "echo", "description": "Echo"}])
+    resources_payload = json.dumps([{"uri": "file:///repo/README.md", "name": "README"}])
+    prompts_payload = json.dumps([{"name": "summarize"}])
+
+    call_count = {"n": 0}
+
+    def side_effect(**kwargs: object) -> dict[str, object]:
+        tool = kwargs.get("tool", "")
+        call_count["n"] += 1
+        if tool == "mcp_discover":
+            return {"ok": True, "stdout": tools_payload}
+        if tool == "mcp_resources_list":
+            return {"ok": True, "stdout": resources_payload}
+        if tool == "mcp_prompts_list":
+            return {"ok": True, "stdout": prompts_payload}
+        return {"ok": False, "stderr": "unexpected"}
+
+    with patch.object(RunnerClient, "execute_tool", side_effect=side_effect):
+        client = MCPClient(
+            runner_client=runner,
+            server_configs={"s1": {"command": "python", "args": []}},
+        )
+        caps = client.summarize_capabilities()
+
+    assert "tools_count" in caps
+    assert "resources_count" in caps
+    assert "prompts_count" in caps
+    assert caps["resources_count"] == 1
+    assert caps["prompts_count"] == 1
+
