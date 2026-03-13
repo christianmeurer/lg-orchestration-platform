@@ -1,11 +1,11 @@
 [models.router]
-provider = "local"
-model = "deterministic"
+provider = "openai_compatible"
+model = "gpt-4o"
 temperature = 0.0
 
 [models.planner]
-provider = "local"
-model = "deterministic"
+provider = "openai_compatible"
+model = "gpt-4o"
 temperature = 0.0
 
 [models.routing]

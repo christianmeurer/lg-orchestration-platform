@@ -582,6 +582,11 @@ def cli(argv: list[str] | None = None) -> int:
                 "base_url": cfg.models.digitalocean.base_url,
                 "api_key": cfg.models.digitalocean.api_key,
                 "timeout_s": cfg.models.digitalocean.timeout_s,
+            },
+            "openai_compatible": {
+                "base_url": cfg.models.openai_compatible.base_url,
+                "api_key": cfg.models.openai_compatible.api_key,
+                "timeout_s": cfg.models.openai_compatible.timeout_s,
             }
         },
         "_budget_max_loops": cfg.budgets.max_loops,
