@@ -16,10 +16,25 @@
     "onCommand:lgOrch.startRunner",
     "onCommand:lgOrch.stopRunner",
     "onCommand:lgOrch.openRunHistory",
-    "onCommand:lgOrch.clearRunHistory"
+    "onCommand:lgOrch.clearRunHistory",
+    "onChatParticipant:lula"
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "chatParticipants": [
+      {
+        "id": "lula",
+        "name": "lula",
+        "description": "Talk to the Lula Orchestration Platform",
+        "isDefault": true,
+        "commands": [
+          {
+            "name": "run",
+            "description": "Execute an agentic coding task"
+          }
+        ]
+      }
+    ],
     "commands": [
       {
         "command": "lgOrch.openPanel",
@@ -44,6 +59,10 @@
       {
         "command": "lgOrch.clearRunHistory",
         "title": "Lula: Clear Run History"
+      },
+      {
+        "command": "lgOrch.viewInlineDiff",
+        "title": "Lula: View Inline Diff"
       }
     ],
     "configuration": {
