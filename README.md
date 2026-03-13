@@ -1,193 +1,271 @@
 # Lula Platform
 
-[![CI](https://github.com/christianmeurer/lg-orchestration-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/christianmeurer/lg-orchestration-platform/actions/workflows/ci.yml)
+[![CI](https://github.com/christianmeurer/Lula/actions/workflows/ci.yml/badge.svg)](https://github.com/christianmeurer/Lula/actions/workflows/ci.yml)
 
-A production-grade LangGraph orchestration scaffold (Python) paired with a high-trust restricted tool runner (Rust). Lula is designed for advanced agentic behavior within secure enterprise environments.
+A production-grade LangGraph orchestration platform (Python) paired with a high-trust restricted tool runner (Rust). Lula is designed for advanced autonomous coding and analysis workflows within secure enterprise environments.
 
-Key Features:
-- **Repo-aware coding workflows** with intelligent context mapping
-- **Iterative Reflection Loops** for autonomous self-correction (Verifier ↺ Planner)
-- **Interactive Streaming** of agent thoughts and tool executions
-- **Model Context Protocol (MCP)** integration for dynamic tool discovery
-- **Deterministic tool execution** (`search_files`, `apply_patch`, `read_file`) within a strict Rust sandbox
-- **Audit-friendly run traces** (JSON checkpointing)
+## What Lula is
 
-Core docs:
+Lula is a full-stack agentic coding platform with:
 
-- [`docs/langgraph_plan.md`](docs/langgraph_plan.md)
-- [`docs/platform_console.md`](docs/platform_console.md)
-- [`docs/architecture.md`](docs/architecture.md) (Codebase Overview)
-- [`docs/sota_2026_plan.md`](docs/sota_2026_plan.md) (Enterprise Agentic Plan)
+- **Autonomous plan/execute/verify/recover loops** — explicit recovery contracts, failure fingerprinting, loop summaries, and acceptance criteria
+- **Heterogeneous model routing** — `interactive`, `deep_planning`, and `recovery` lanes with compression pressure, cache affinity, and latency sensitivity
+- **Algorithmic context compression** — stable-prefix / working-set split, token budgets, salience-scored fact packs
+- **Full MCP protocol surface** — `tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, `prompts/get` with zero-trust schema hash pinning
+- **Episodic + procedural memory** — cross-session recovery facts and verified tool sequences persisted in SQLite
+- **Hardened Rust runner** — Linux namespace isolation (`unshare`), command allowlist, approval gates, redaction pipeline
+- **Live run API** — `RemoteAPIService` with durable SQLite run store, multi-user namespace isolation, rate limiting, and a frontend SPA at `GET /`
+- **VS Code extension** — configurable settings, inline diff, run history, remote API polling
+- **GitHub Actions CI** — Python lint/type/test, Rust clippy/test/fmt, Docker build, optional E2E with secrets
 
 ## Architecture
 
-- Python orchestrator (LangGraph): [`py/src/lg_orch/graph.py`](py/src/lg_orch/graph.py)
-- Rust runner (restricted tools & MCP client): [`rs/runner/src/main.rs`](rs/runner/src/main.rs)
-
-The orchestrator never executes shell commands directly; it delegates execution safely to the Rust runner over HTTP.
+```
+┌──────────────────────────────────────────────┐
+│              VS Code Extension               │
+│  (remote API polling, inline diff, history)  │
+└────────────────────┬─────────────────────────┘
+                     │ HTTP
+┌────────────────────▼─────────────────────────┐
+│          RemoteAPIService (Python)           │
+│  /v1/runs  · /healthz  · GET / (SPA)        │
+│  SQLite run store · multi-user namespaces    │
+│  rate limiter · bearer auth                  │
+└────────────────────┬─────────────────────────┘
+                     │ subprocess
+┌────────────────────▼─────────────────────────┐
+│        LangGraph Orchestrator (Python)       │
+│  router → context_builder → planner          │
+│       → policy_gate → executor               │
+│       → verifier → reporter                  │
+│                                              │
+│  Episodic memory  · Procedural cache         │
+│  Context compression  · Recovery contracts   │
+└────────────────────┬─────────────────────────┘
+                     │ HTTP
+┌────────────────────▼─────────────────────────┐
+│            Rust Runner (lg-runner)           │
+│  exec (unshare sandbox)  · apply_patch       │
+│  read_file  · search_files  · ast_index      │
+│  mcp_discover  · mcp_execute                 │
+│  mcp_resources_list  · mcp_resource_read     │
+│  mcp_prompts_list  · mcp_prompt_get          │
+│  approval gates  · redaction pipeline        │
+└──────────────────────────────────────────────┘
+```
 
 ## Quickstart
 
-1) (Optional) Run the Rust tool runner
+### 1. Start the Rust runner
 
 ```bash
-cd rs/runner
-cargo run
+cd rs
+cargo run -- --bind 127.0.0.1:8088 --root-dir . --api-key dev-insecure
 ```
 
-2) Run the orchestrator CLI (Interactive Streaming is enabled by default)
+### 2. Run the orchestrator CLI
 
 ```bash
 cd py
 uv sync
-uv run lg-orch run "summarize repo" --trace
+uv run lg-orch run "summarize the repository structure" --trace
 ```
 
-3) Export the orchestration graph (Mermaid)
+### 3. Start the remote API with live run viewer
 
 ```bash
 cd py
-uv run lg-orch export-graph
+uv run lg-orch serve-api --host 0.0.0.0 --port 8001
 ```
 
-## DigitalOcean Serverless Inference (Claude Code-style planning)
+Open `http://localhost:8001` in a browser for the SPA run viewer.
 
-The planner node can call DigitalOcean Serverless Inference through its OpenAI-compatible endpoint when the planner model provider is set to a non-local value.
-
-1) Configure model routing in [`configs/runtime.dev.toml`](configs/runtime.dev.toml:1):
-
-```toml
-[models.planner]
-provider = "remote_digitalocean"
-model = "anthropic-claude-4.6-sonnet"
-temperature = 0.1
-
-[models.digitalocean]
-base_url = "https://inference.do-ai.run/v1"
-timeout_s = 60
-```
-
-2) Set your model access key in the environment (preferred):
+### 4. Run with a real model (DigitalOcean Serverless)
 
 ```bash
-set MODEL_ACCESS_KEY=your_digitalocean_model_access_key
-```
+export MODEL_ACCESS_KEY=your_do_model_key
 
-3) Run the orchestrator:
+# Configure model in configs/runtime.dev.toml:
+# [models.planner]
+# provider = "digitalocean"
+# model = "meta-llama/Meta-Llama-3.1-70B-Instruct"
 
-```bash
 cd py
-uv run lg-orch run "implement a small feature and verify tests" --trace
+uv run lg-orch run "implement a new helper function" --trace
 ```
 
-Notes:
-- If the planner completion fails or the API key is missing, planner falls back to deterministic local planning.
-- The configured serverless endpoint is OpenAI-compatible (`/chat/completions`) and defaults to `https://inference.do-ai.run/v1`.
-- Model access keys can also be provided with `DIGITAL_OCEAN_MODEL_ACCESS_KEY`.
-
-## Trace dashboards
-
-Generate a trace during a run:
+### 5. Run with a generic OpenAI-compatible endpoint
 
 ```bash
+export OPENAI_COMPATIBLE_API_KEY=your_key
+
+# Configure in configs/runtime.dev.toml:
+# [models.openai_compatible]
+# base_url = "https://api.openai.com/v1"
+
 cd py
-uv run lg-orch run "summarize repo" --trace
+uv run lg-orch run "analyze the repository" --trace
 ```
 
-Render a single trace as HTML:
+## Configuration reference
+
+All runtime config lives in `configs/runtime.{dev|stage|prod}.toml`.
+
+| Section | Key fields |
+|---------|-----------|
+| `[models.router]` | `provider`, `model`, `temperature` |
+| `[models.planner]` | `provider`, `model`, `temperature` |
+| `[models.digitalocean]` | `base_url`, `timeout_s` |
+| `[models.openai_compatible]` | `base_url`, `timeout_s` |
+| `[models.routing]` | `local_provider`, `interactive_context_limit`, `deep_planning_context_limit`, `recovery_retry_threshold`, `default_cache_affinity` |
+| `[budgets]` | `max_loops`, `max_tool_calls_per_loop`, `max_patch_bytes`, `stable_prefix_tokens`, `working_set_tokens` |
+| `[policy]` | `network_default`, `require_approval_for_mutations`, `allowed_write_paths` |
+| `[runner]` | `base_url`, `root_dir`, `api_key` |
+| `[mcp]` | `enabled`, `servers.*` (with optional `schema_hash` for zero-trust pinning) |
+| `[remote_api]` | `auth_mode`, `rate_limit_rps`, `run_store_path`, `procedure_cache_path`, `default_namespace` |
+| `[checkpoint]` | `enabled`, `db_path`, `namespace` |
+| `[trace]` | `enabled`, `output_dir`, `capture_model_metadata` |
+
+## Orchestration graph
+
+```
+ingest → router → context_builder → planner
+                                       ↓
+                                  policy_gate
+                                       ↓
+                                   executor
+                                       ↓
+                                   verifier ──(retry)──→ context_builder
+                                       │                       ↑
+                                       └──(discard_reset)──────┘
+                                       │
+                                       ↓
+                                   reporter
+```
+
+Recovery routing: verifier classifies failures into `verification_failed`, `architecture_mismatch`, `budget_exceeded`, `test_failure_post_change`, `repeated_verification_failure`, and `acceptance_criteria_unmet`. Each class routes to the correct retry target with a structured `RecoveryPacket`.
+
+## Memory subsystems
+
+| Subsystem | Storage | Scope |
+|-----------|---------|-------|
+| Working context | In-state | Current run |
+| Loop summaries + facts | In-state | Current run |
+| Episodic recovery facts | SQLite (`run_store_path`) | Cross-session |
+| Procedural cache | SQLite (`procedure_cache_path`) | Cross-session |
+| Checkpoints | SQLite (`checkpoint.db_path`) | Resumable runs |
+
+## Security
+
+- **Rust runner sandbox**: Linux namespace isolation via `unshare --pid --mount --net --fork` when `LG_RUNNER_LINUX_NAMESPACE_ENABLED=1`; falls back to process-level isolation.
+- **MCP zero-trust**: optional `schema_hash` per server in config; runner refuses to inject tools if hash mismatches.
+- **Constant-time auth**: bearer token comparison uses XOR-fold to prevent timing side-channels.
+- **Redaction pipeline**: runner strips paths, usernames, and IP addresses from MCP responses before returning to orchestrator.
+- **Approval gates**: `apply_patch` and state-modifying `exec` calls require explicit approval tokens.
+- **Rate limiting**: token-bucket rate limiter on remote API (`rate_limit_rps`).
+- **Circuit breaker**: `InferenceClient` opens after 5 consecutive failures; retries 429/5xx with backoff.
+
+## Run API endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | Live SPA run viewer |
+| `GET` | `/ui` | Same as `/` |
+| `GET` | `/healthz` | Health check |
+| `GET` | `/v1/runs` | List runs |
+| `POST` | `/v1/runs` | Create run |
+| `GET` | `/v1/runs/{id}` | Run detail + trace |
+| `GET` | `/v1/runs/{id}/logs` | Stdout logs |
+| `POST` | `/v1/runs/{id}/cancel` | Cancel run |
+
+## VS Code extension
+
+The extension (`vscode-extension/`) provides:
+- Run requests via command palette or panel input
+- Local runner launch (`cargo run` or pre-built binary via `lula.runnerBinaryPath`)
+- Remote API mode with live status polling
+- Inline diff of `apply_patch` results
+- Run history (last N runs, configurable)
+- All values configurable via VS Code settings — no hardcoded addresses or keys
+
+Settings: `lula.runnerBindAddress`, `lula.runnerApiKey`, `lula.runnerBinaryPath`, `lula.remoteApiBaseUrl`, `lula.remoteApiBearerToken`, `lula.showInlineDiff`, `lula.maxRunHistory`.
+
+## Docker deployment
 
 ```bash
-cd py
-uv run lg-orch trace-view ../artifacts/runs/run-<run_id>.json --format html --output ../artifacts/site/run-<run_id>.html
+# Full image (Rust runner + Python API)
+docker build -t lula:latest .
+
+# Python-only image (API tier, no Rust build)
+docker build -f Dockerfile.python -t lula-api:latest .
 ```
 
-Build a static dashboard site from all run traces:
+Environment variables for production containers:
 
-```bash
-cd py
-uv run lg-orch trace-site ../artifacts/runs --output-dir ../artifacts/site
+```
+LG_PROFILE=prod
+MODEL_ACCESS_KEY=<model key>
+LG_RUNNER_API_KEY=<runner key>
+LG_REMOTE_API_AUTH_MODE=bearer
+LG_REMOTE_API_BEARER_TOKEN=<api token>
+LG_REMOTE_API_RATE_LIMIT_RPS=60
+LG_RUNNER_LINUX_NAMESPACE_ENABLED=1
 ```
 
-Open [`artifacts/site/index.html`](artifacts/site/index.html) in a browser to browse generated dashboards and raw trace JSON.
-
-## Security model (baseline)
-
-- Root directory sandbox enforced by runner: requests resolve safely under `root_dir`.
-- Tool allowlist:
-  - FS: `read_file`, `list_files`, `apply_patch`, `search_files`
-  - Exec: `exec` with strict command allowlist in [`allowed_cmd()`](rs/runner/src/tools/exec.rs)
-  - MCP: `mcp_discover`, `mcp_execute`
-- Network is denied by default (policy key exists in config).
-
-Hardening to add for production:
-
-- Path allowlist/denylist enforcement (glob-based) for write operations.
-- Require explicit approval before `apply_patch` (orchestrator-side gate).
-- Disable `git` by default in runner `exec` allowlist if not required.
-- Run runner in an OS sandbox (container / low integrity token / namespaces).
-
-## Roadmap (near-term)
-
-- Implement complete JSON-RPC for MCP tool bridging
-- Evolve the static trace dashboard into a served web UI and run API
-- Add a job store for replay (SQLite → Postgres)
-
-## Local verification
-
-- Windows: [`scripts/dev.cmd`](scripts/dev.cmd)
-- PowerShell: [`scripts/dev.ps1`](scripts/dev.ps1)
-- Bash: [`scripts/dev.sh`](scripts/dev.sh)
-
-## Local full-platform bootstrap (Windows)
-
-Use [`scripts/bootstrap_local.cmd`](scripts/bootstrap_local.cmd) to launch the Rust runner, wait for health, sync Python deps, and run the orchestrator in one command.
+## Azure deployment
 
 ```bat
-scripts\bootstrap_local.cmd "implement a small feature and verify tests"
+set AZ_RESOURCE_GROUP=rg-lula
+set AZ_ACR_NAME=acrlula
+set AZ_CONTAINERAPP_NAME=lula
+set LG_REMOTE_API_AUTH_MODE=bearer
+set LG_REMOTE_API_BEARER_TOKEN=choose-a-token
+set LG_RUNNER_API_KEY=choose-a-runner-key
+set MODEL_ACCESS_KEY=your_model_key
+scripts\azure_deploy_personal.cmd
 ```
 
-What it does:
-- Starts runner on `127.0.0.1:8088`
-- Waits for `http://127.0.0.1:8088/healthz`
-- Runs `uv sync` in `py/`
-- Runs `uv run lg-orch run ... --trace`
+## CI
 
-Notes:
-- Uses `LG_PROFILE=dev` by default unless already set.
-- Uses runner API key `dev-insecure` to match dev config.
-- If `MODEL_ACCESS_KEY` is missing, planner remote mode falls back to deterministic local planning.
+GitHub Actions (`.github/workflows/ci.yml`):
+- `python-tests`: ruff lint, mypy, pytest (350 tests)
+- `rust-tests`: clippy, cargo test (108 tests), fmt check
+- `docker-build`: combined and Python-only image builds
+- `e2e-smoke`: E2E smoke tests against live model (gated on `MODEL_ACCESS_KEY` secret)
+- `e2e.yml`: manual `workflow_dispatch` for full live model E2E
 
-## Azure personal hosting
+## Local development
 
-[`Dockerfile`](Dockerfile) and [`scripts/start_remote_stack.sh`](scripts/start_remote_stack.sh) package the repo into a single personal-use container. The runner stays on `127.0.0.1:8088` inside the container and the public entrypoint is `uv run lg-orch serve-api` on port `8001` or `PORT` / `WEBSITES_PORT`.
+```bash
+# Windows
+scripts\dev.cmd
 
-1. Set deployment variables and any secrets in your shell:
+# PowerShell
+scripts\dev.ps1
 
-   ```bat
-   set AZ_RESOURCE_GROUP=rg-lula-personal
-   set AZ_ACR_NAME=acrlulapersonal
-   set AZ_CONTAINERAPP_NAME=lula-personal
-   set LG_REMOTE_API_AUTH_MODE=bearer
-   set LG_REMOTE_API_BEARER_TOKEN=choose-a-remote-api-token
-   set LG_RUNNER_API_KEY=choose-a-runner-key
-   set MODEL_ACCESS_KEY=your_model_key
-   ```
+# Bash
+scripts/dev.sh
 
-2. Build and deploy with [`scripts/azure_deploy_personal.cmd`](scripts/azure_deploy_personal.cmd). Hardened default is Azure Container Apps:
+# Full bootstrap (start runner + run orchestrator)
+scripts\bootstrap_local.cmd "your request here"
+```
 
-   ```bat
-   set AZ_DEPLOY_TARGET=containerapp
-   scripts\azure_deploy_personal.cmd
-   ```
+## Trace viewer
 
-3. Point the VS Code extension settings `lula.remoteApiBaseUrl` and `lula.remoteApiBearerToken` at the deployed endpoint and token. In VM mode the helper exposes HTTP directly unless you place it behind a TLS terminator or reverse proxy.
+```bash
+# Render single trace as HTML
+uv run lg-orch trace-view artifacts/runs/run-<id>.json --format html
 
-Notes:
-- Hardened default is Azure Container Apps with edge TLS in front of it.
-- VM mode remains useful for lab use, with `Standard_D2s_v5` Spot as the recommended cost-efficient default.
-- Public VM exposure is not production-ready by itself; add TLS and access control in front of the remote API.
-- Set `AZ_DEPLOY_TARGET=containerapp` to keep using Azure Container Apps.
-- The same image also fits Azure App Service custom containers if `WEBSITES_PORT=8001` is configured.
-- Keep secrets in environment variables or Azure configuration, not in repo files.
+# Build static site from all traces
+uv run lg-orch trace-site artifacts/runs --output-dir artifacts/site
 
+# Serve live trace viewer
+uv run lg-orch trace-serve artifacts/runs --port 8000
+```
 
+## Core documentation
+
+- [`docs/architecture.md`](docs/architecture.md) — subsystem overview
+- [`docs/sota_2026_plan.md`](docs/sota_2026_plan.md) — roadmap and gap analysis
+- [`docs/platform_console.md`](docs/platform_console.md) — console and API reference
+- [`docs/langgraph_plan.md`](docs/langgraph_plan.md) — LangGraph design notes
