@@ -12,6 +12,7 @@ use std::collections::HashSet;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxBackend {
     MicroVmEphemeral,
+    LinuxNamespace,
     SafeFallback,
 }
 
@@ -19,6 +20,7 @@ pub enum SandboxBackend {
 pub enum SandboxPreference {
     Auto,
     PreferMicroVm,
+    PreferLinuxNamespace,
     SafeFallbackOnly,
 }
 
@@ -31,9 +33,16 @@ pub struct MicroVmSettings {
 }
 
 #[derive(Debug, Clone)]
+pub struct LinuxNamespaceSettings {
+    pub enabled: bool,
+    pub unshare_bin: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
 pub struct SandboxPolicy {
     pub preference: SandboxPreference,
     pub microvm: MicroVmSettings,
+    pub linux_namespace: LinuxNamespaceSettings,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +57,7 @@ impl SandboxResolution {
     pub fn to_isolation_metadata(&self) -> IsolationMetadata {
         let backend = match self.backend {
             SandboxBackend::MicroVmEphemeral => "microvm_ephemeral",
+            SandboxBackend::LinuxNamespace => "linux_namespace",
             SandboxBackend::SafeFallback => "safe_fallback",
         };
         IsolationMetadata {
@@ -72,6 +82,9 @@ impl SandboxPolicy {
                 let normalized = v.trim().to_ascii_lowercase();
                 match normalized.as_str() {
                     "microvm" | "prefer_microvm" => SandboxPreference::PreferMicroVm,
+                    "namespace" | "linux_namespace" | "prefer_linux_namespace" => {
+                        SandboxPreference::PreferLinuxNamespace
+                    }
                     "safe" | "safe_fallback" | "fallback" => SandboxPreference::SafeFallbackOnly,
                     _ => SandboxPreference::Auto,
                 }
@@ -79,7 +92,7 @@ impl SandboxPolicy {
             Err(_) => SandboxPreference::Auto,
         };
 
-        let enabled = env::var("LG_RUNNER_MICROVM_ENABLED")
+        let microvm_enabled = env::var("LG_RUNNER_MICROVM_ENABLED")
             .ok()
             .map(|v| parse_bool(&v))
             .unwrap_or(false);
@@ -99,13 +112,28 @@ impl SandboxPolicy {
             .filter(|v| !v.is_empty())
             .map(PathBuf::from);
 
+        let ns_enabled = env::var("LG_RUNNER_LINUX_NAMESPACE_ENABLED")
+            .ok()
+            .map(|v| parse_bool(&v))
+            .unwrap_or(false);
+        let unshare_bin = env::var("LG_RUNNER_UNSHARE_BIN")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| Some(PathBuf::from("/usr/bin/unshare")));
+
         Self {
             preference,
             microvm: MicroVmSettings {
-                enabled,
+                enabled: microvm_enabled,
                 firecracker_bin,
                 kernel_image,
                 rootfs_image,
+            },
+            linux_namespace: LinuxNamespaceSettings {
+                enabled: ns_enabled,
+                unshare_bin,
             },
         }
     }
@@ -128,23 +156,101 @@ impl SandboxPolicy {
             };
         }
 
-        if let Some(reason) = self.microvm_unavailable_reason() {
-            policy_constraints.push("backend=safe_fallback_degraded".to_string());
+        if self.preference == SandboxPreference::PreferLinuxNamespace {
+            if let Some(reason) = self.namespace_unavailable_reason() {
+                policy_constraints.push("backend=safe_fallback_degraded".to_string());
+                return SandboxResolution {
+                    backend: SandboxBackend::SafeFallback,
+                    degraded: true,
+                    reason: Some(reason),
+                    policy_constraints,
+                };
+            }
+            policy_constraints.push("backend=linux_namespace_unshare".to_string());
+            policy_constraints.push("network_isolation=true".to_string());
             return SandboxResolution {
-                backend: SandboxBackend::SafeFallback,
-                degraded: true,
-                reason: Some(reason),
+                backend: SandboxBackend::LinuxNamespace,
+                degraded: false,
+                reason: None,
                 policy_constraints,
             };
         }
 
-        policy_constraints.push("backend=microvm_ephemeral_firecracker_style".to_string());
+        if self.preference == SandboxPreference::PreferMicroVm {
+            if let Some(reason) = self.microvm_unavailable_reason() {
+                // try namespace before fallback
+                if let Some(ns_reason) = self.namespace_unavailable_reason() {
+                    policy_constraints.push("backend=safe_fallback_degraded".to_string());
+                    return SandboxResolution {
+                        backend: SandboxBackend::SafeFallback,
+                        degraded: true,
+                        reason: Some(format!("{reason}; {ns_reason}")),
+                        policy_constraints,
+                    };
+                }
+                policy_constraints.push("backend=linux_namespace_unshare".to_string());
+                policy_constraints.push("network_isolation=true".to_string());
+                return SandboxResolution {
+                    backend: SandboxBackend::LinuxNamespace,
+                    degraded: true,
+                    reason: Some(reason),
+                    policy_constraints,
+                };
+            }
+            policy_constraints.push("backend=microvm_ephemeral_firecracker_style".to_string());
+            return SandboxResolution {
+                backend: SandboxBackend::MicroVmEphemeral,
+                degraded: false,
+                reason: None,
+                policy_constraints,
+            };
+        }
+
+        // Auto
+        if self.microvm_unavailable_reason().is_none() {
+            policy_constraints.push("backend=microvm_ephemeral_firecracker_style".to_string());
+            return SandboxResolution {
+                backend: SandboxBackend::MicroVmEphemeral,
+                degraded: false,
+                reason: None,
+                policy_constraints,
+            };
+        }
+
+        if let Some(ns_reason) = self.namespace_unavailable_reason() {
+            policy_constraints.push("backend=safe_fallback_degraded".to_string());
+            return SandboxResolution {
+                backend: SandboxBackend::SafeFallback,
+                degraded: true,
+                reason: Some(ns_reason),
+                policy_constraints,
+            };
+        }
+
+        policy_constraints.push("backend=linux_namespace_unshare".to_string());
+        policy_constraints.push("network_isolation=true".to_string());
         SandboxResolution {
-            backend: SandboxBackend::MicroVmEphemeral,
+            backend: SandboxBackend::LinuxNamespace,
             degraded: false,
             reason: None,
             policy_constraints,
         }
+    }
+
+    fn namespace_unavailable_reason(&self) -> Option<String> {
+        if !self.linux_namespace.enabled {
+            return Some("linux_namespace_disabled".to_string());
+        }
+        if cfg!(target_os = "windows") {
+            return Some("linux_namespace_requires_linux".to_string());
+        }
+        let Some(unshare) = self.linux_namespace.unshare_bin.as_ref() else {
+            return Some("unshare_binary_not_configured".to_string());
+        };
+        if !unshare.exists() {
+            return Some("unshare_binary_not_found".to_string());
+        }
+        None
     }
 
     fn microvm_unavailable_reason(&self) -> Option<String> {
@@ -234,18 +340,30 @@ mod verify {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_safe_fallback_explicit_policy() {
-        let policy = SandboxPolicy {
-            preference: SandboxPreference::SafeFallbackOnly,
+    fn make_policy(
+        preference: SandboxPreference,
+        microvm_enabled: bool,
+        ns_enabled: bool,
+        ns_bin: Option<PathBuf>,
+    ) -> SandboxPolicy {
+        SandboxPolicy {
+            preference,
             microvm: MicroVmSettings {
-                enabled: true,
+                enabled: microvm_enabled,
                 firecracker_bin: None,
                 kernel_image: None,
                 rootfs_image: None,
             },
-        };
+            linux_namespace: LinuxNamespaceSettings {
+                enabled: ns_enabled,
+                unshare_bin: ns_bin,
+            },
+        }
+    }
 
+    #[test]
+    fn test_safe_fallback_explicit_policy() {
+        let policy = make_policy(SandboxPreference::SafeFallbackOnly, true, false, None);
         let resolution = policy.resolve_backend();
         assert_eq!(resolution.backend, SandboxBackend::SafeFallback);
         assert!(!resolution.degraded);
@@ -254,16 +372,7 @@ mod tests {
 
     #[test]
     fn test_microvm_preferred_degrades_with_reason() {
-        let policy = SandboxPolicy {
-            preference: SandboxPreference::PreferMicroVm,
-            microvm: MicroVmSettings {
-                enabled: true,
-                firecracker_bin: None,
-                kernel_image: None,
-                rootfs_image: None,
-            },
-        };
-
+        let policy = make_policy(SandboxPreference::PreferMicroVm, true, false, None);
         let resolution = policy.resolve_backend();
         assert_eq!(resolution.backend, SandboxBackend::SafeFallback);
         assert!(resolution.degraded);
@@ -273,18 +382,9 @@ mod tests {
     #[test]
     fn test_policy_constraints_always_nonempty() {
         for policy in [
-            SandboxPolicy {
-                preference: SandboxPreference::SafeFallbackOnly,
-                microvm: MicroVmSettings { enabled: false, firecracker_bin: None, kernel_image: None, rootfs_image: None },
-            },
-            SandboxPolicy {
-                preference: SandboxPreference::Auto,
-                microvm: MicroVmSettings { enabled: false, firecracker_bin: None, kernel_image: None, rootfs_image: None },
-            },
-            SandboxPolicy {
-                preference: SandboxPreference::PreferMicroVm,
-                microvm: MicroVmSettings { enabled: true, firecracker_bin: None, kernel_image: None, rootfs_image: None },
-            },
+            make_policy(SandboxPreference::SafeFallbackOnly, false, false, None),
+            make_policy(SandboxPreference::Auto, false, false, None),
+            make_policy(SandboxPreference::PreferMicroVm, true, false, None),
         ] {
             let resolution = policy.resolve_backend();
             assert!(!resolution.policy_constraints.is_empty());
@@ -293,15 +393,8 @@ mod tests {
 
     #[test]
     fn test_microvm_backend_never_degraded() {
-        // Only way to get MicroVmEphemeral is if microvm is fully configured;
-        // in that case degraded must be false (tested via the invariant path).
-        // Here we verify the contrapositive: SafeFallback can be degraded.
-        let policy = SandboxPolicy {
-            preference: SandboxPreference::PreferMicroVm,
-            microvm: MicroVmSettings { enabled: true, firecracker_bin: None, kernel_image: None, rootfs_image: None },
-        };
+        let policy = make_policy(SandboxPreference::PreferMicroVm, true, false, None);
         let resolution = policy.resolve_backend();
-        // microvm bins not configured → SafeFallback degraded
         assert_eq!(resolution.backend, SandboxBackend::SafeFallback);
         assert!(resolution.degraded);
         assert!(resolution.reason.is_some());
@@ -309,13 +402,58 @@ mod tests {
 
     #[test]
     fn test_degraded_always_has_reason() {
-        let policy = SandboxPolicy {
-            preference: SandboxPreference::Auto,
-            microvm: MicroVmSettings { enabled: true, firecracker_bin: None, kernel_image: None, rootfs_image: None },
-        };
+        let policy = make_policy(SandboxPreference::Auto, true, false, None);
         let resolution = policy.resolve_backend();
         if resolution.degraded {
             assert!(resolution.reason.is_some());
         }
+    }
+
+    #[test]
+    fn test_linux_namespace_explicit_policy() {
+        // /bin/sh exists on all Unix systems; use it as a stand-in for unshare
+        let bin = PathBuf::from("/bin/sh");
+        if !bin.exists() {
+            return; // skip on Windows CI
+        }
+        let policy = make_policy(
+            SandboxPreference::PreferLinuxNamespace,
+            false,
+            true,
+            Some(bin),
+        );
+        let resolution = policy.resolve_backend();
+        assert_eq!(resolution.backend, SandboxBackend::LinuxNamespace);
+        assert!(!resolution.degraded);
+        assert!(resolution.reason.is_none());
+    }
+
+    #[test]
+    fn test_linux_namespace_disabled_degrades() {
+        let policy = make_policy(
+            SandboxPreference::PreferLinuxNamespace,
+            false,
+            false,
+            None,
+        );
+        let resolution = policy.resolve_backend();
+        assert_eq!(resolution.backend, SandboxBackend::SafeFallback);
+        assert!(resolution.degraded);
+        assert_eq!(
+            resolution.reason.as_deref(),
+            Some("linux_namespace_disabled")
+        );
+    }
+
+    #[test]
+    fn test_auto_prefers_namespace_over_fallback() {
+        let bin = PathBuf::from("/bin/sh");
+        if !bin.exists() {
+            return; // skip on Windows CI
+        }
+        let policy = make_policy(SandboxPreference::Auto, false, true, Some(bin));
+        let resolution = policy.resolve_backend();
+        assert_eq!(resolution.backend, SandboxBackend::LinuxNamespace);
+        assert!(!resolution.degraded);
     }
 }

@@ -11,7 +11,7 @@ use crate::config::RunnerConfig;
 use crate::diagnostics::parse_structured_diagnostics;
 use crate::envelope::{Diagnostic, ToolEnvelope};
 use crate::errors::ApiError;
-use crate::sandbox::SandboxPolicy;
+use crate::sandbox::{SandboxBackend, SandboxPolicy};
 use crate::tools::snapshot_for_operation;
 
 const STDERR_ARTIFACT_MAX_CHARS: usize = 8_000;
@@ -93,9 +93,26 @@ pub async fn exec(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiE
         .map(|p| super::fs::resolve_under_root(cfg, p))
         .transpose()?;
 
-    let mut c = Command::new(cmd);
-    c.args(&inp.args)
-        .stdin(Stdio::null())
+    let mut c;
+    match sandbox_resolution.backend {
+        SandboxBackend::LinuxNamespace => {
+            let unshare_path = sandbox_policy
+                .linux_namespace
+                .unshare_bin
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "/usr/bin/unshare".to_string());
+            c = Command::new(&unshare_path);
+            c.args(["--pid", "--mount", "--net", "--fork", "--"])
+                .arg(cmd)
+                .args(&inp.args);
+        }
+        _ => {
+            c = Command::new(cmd);
+            c.args(&inp.args);
+        }
+    }
+    c.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(cwd) = cwd {
@@ -300,5 +317,23 @@ mod tests {
         let (s, truncated) = truncate_chars("abcdefghij", 5);
         assert_eq!(s, "abcde");
         assert!(truncated);
+    }
+
+    #[tokio::test]
+    async fn test_exec_sandbox_resolution_recorded_in_artifacts() {
+        let td = tempfile::tempdir().unwrap();
+        let cfg = RunnerConfig::new(td.path(), Some("dev"), None).unwrap();
+        let result = exec(&cfg, json!({"cmd": "git", "args": ["--version"]})).await;
+        // git --version should succeed; if not available in CI, it may fail with Other
+        match result {
+            Ok(env) => {
+                let artifacts = env.artifacts;
+                assert!(artifacts.get("isolation_backend").is_some());
+            }
+            Err(ApiError::Other(_)) => {
+                // git not available in this environment; acceptable
+            }
+            Err(e) => panic!("unexpected error: {e:?}"),
+        }
     }
 }
