@@ -1,0 +1,4 @@
+# file: C:\Users\chris\Projects\LG-Orchestration-Platform\py\src\lg_orch\state.py
+# hypothesis_version: 6.151.4
+
+['amend', 'analysis', 'code_change', 'context_builder', 'debug', 'deep_planning', 'discard_reset', 'failure', 'forbid', 'full_reset', 'interactive', 'keep', 'local', 'planner', 'question', 'recovery', 'refactor', 'remote', 'research', 'router', 'stable_prefix', 'success', 'verifier', 'working_set']

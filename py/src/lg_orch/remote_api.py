@@ -11,7 +11,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -30,7 +30,7 @@ _REQUEST_ID_HEADER = "X-Request-ID"
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _non_empty_str(raw: object) -> str | None:
@@ -664,10 +664,10 @@ def serve_remote_api(*, repo_root: Path, host: str, port: int) -> int:
     )
 
     class RemoteAPIRequestHandler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802
+        def do_GET(self) -> None:
             self._handle_request(method="GET")
 
-        def do_POST(self) -> None:  # noqa: N802
+        def do_POST(self) -> None:
             self._handle_request(method="POST")
 
         def _handle_request(self, *, method: str) -> None:

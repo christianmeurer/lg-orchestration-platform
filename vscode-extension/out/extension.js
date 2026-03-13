@@ -65,10 +65,22 @@ class LgOrchExtension {
     requestRunning = false;
     activeRemoteRunId = null;
     runHistory = [];
+    chatParticipant;
     constructor(context) {
         this.context = context;
     }
     register() {
+        const diffProvider = new (class {
+            provideTextDocumentContent(uri) {
+                const params = new URLSearchParams(uri.query);
+                const traceContent = params.get('diffContent');
+                return traceContent ? decodeURIComponent(traceContent) : 'No diff available.';
+            }
+        })();
+        this.context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('lula-diff', diffProvider));
+        this.chatParticipant = vscode.chat.createChatParticipant('lula', this.handleChatRequest.bind(this));
+        this.chatParticipant.iconPath = new vscode.ThemeIcon('hubot');
+        this.context.subscriptions.push(this.chatParticipant);
         this.context.subscriptions.push(vscode.commands.registerCommand(COMMANDS.openPanel, async () => {
             await this.openPanel();
         }), vscode.commands.registerCommand(COMMANDS.startRunner, async () => {
@@ -82,12 +94,37 @@ class LgOrchExtension {
         }), vscode.commands.registerCommand(COMMANDS.clearRunHistory, () => {
             this.runHistory.splice(0, this.runHistory.length);
             this.refresh();
+        }), vscode.commands.registerCommand('lgOrch.viewInlineDiff', (uri) => {
+            vscode.commands.executeCommand('vscode.open', uri);
         }));
     }
     async dispose() {
         await this.stopRunner(false);
         this.panel?.dispose();
         this.panel = undefined;
+    }
+    async handleChatRequest(request, context, response, token) {
+        if (request.command === 'run' || !request.command) {
+            response.progress('Starting Lula task...');
+            const success = await this.runRequestCore(request.prompt, (msg) => {
+                response.progress(msg);
+            }, token);
+            if (success && this.latestFinalOutput) {
+                response.markdown(`\n\n**Run Complete**\n\n\`\`\`\n${this.latestFinalOutput}\n\`\`\``);
+                if (this.latestInlineDiff) {
+                    const encodedDiff = encodeURIComponent(this.latestInlineDiff);
+                    const uri = vscode.Uri.parse(`lula-diff:diff.patch?diffContent=${encodedDiff}`);
+                    response.markdown(`\n\n[View Patch](command:lgOrch.viewInlineDiff?${encodeURIComponent(JSON.stringify([uri]))})`);
+                }
+            }
+            else if (token.isCancellationRequested) {
+                response.markdown(`\n\n*Run Cancelled*`);
+            }
+            else {
+                response.markdown(`\n\n*Run Failed or produced no output.* Check the Lula webview for detailed logs.`);
+            }
+            return { metadata: { command: request.command } };
+        }
     }
     async openPanel() {
         if (this.panel) {
@@ -230,18 +267,24 @@ class LgOrchExtension {
     }
     async runRequest(initialRequest) {
         await this.openPanel();
+        await this.runRequestCore(initialRequest);
+    }
+    async runRequestCore(initialRequest, progressCallback, token) {
         if (this.requestRunning) {
             this.appendLog('[run] request already in progress');
-            return;
+            return false;
         }
         const workspaceRoot = this.getWorkspaceRoot();
         if (!workspaceRoot) {
-            return;
+            return false;
         }
         const request = await this.resolveRequest(initialRequest);
         if (!request) {
             this.appendLog('[run] canceled');
-            return;
+            return false;
+        }
+        if (token?.isCancellationRequested) {
+            return false;
         }
         this.requestRunning = true;
         this.requestStatus = 'starting';
@@ -250,14 +293,16 @@ class LgOrchExtension {
         this.latestFinalOutput = '';
         this.latestInlineDiff = '';
         this.appendLog(`[run] request: ${request}`);
+        progressCallback?.('Initializing run...');
         this.refresh();
+        let success = false;
         try {
             const remoteApiBaseUrl = this.getRemoteApiBaseUrl();
             if (remoteApiBaseUrl) {
-                await this.runRemoteRequest(request, remoteApiBaseUrl);
+                success = await this.runRemoteRequest(request, remoteApiBaseUrl, progressCallback, token);
             }
             else {
-                await this.runLocalRequest(request, workspaceRoot);
+                success = await this.runLocalRequest(request, workspaceRoot, progressCallback, token);
             }
         }
         catch (error) {
@@ -281,15 +326,17 @@ class LgOrchExtension {
             this.activeRemoteRunId = null;
             this.refresh();
         }
+        return success;
     }
-    async runLocalRequest(request, workspaceRoot) {
+    async runLocalRequest(request, workspaceRoot, progressCallback, token) {
         const pyDir = path.join(workspaceRoot, 'py');
         this.requestStatus = 'running';
+        progressCallback?.('Running local request...');
         const syncCode = await this.runCommand('uv-sync', 'uv', ['sync'], pyDir);
-        if (syncCode !== 0) {
+        if (syncCode !== 0 || token?.isCancellationRequested) {
             this.requestStatus = 'failed';
-            this.appendLog('[run] uv sync failed');
-            return;
+            this.appendLog('[run] uv sync failed or cancelled');
+            return false;
         }
         const runArgs = [
             'run',
@@ -302,6 +349,9 @@ class LgOrchExtension {
             '--runner-base-url',
             this.getRunnerBaseUrl(),
         ];
+        // Check cancellation before long run
+        if (token?.isCancellationRequested)
+            return false;
         const runCode = await this.runCommand('cli', 'uv', runArgs, pyDir);
         const summary = await this.findLatestTrace(workspaceRoot);
         this.latestTracePath = summary.tracePath;
@@ -315,11 +365,13 @@ class LgOrchExtension {
         if (runCode !== 0) {
             this.requestStatus = 'failed';
             this.appendLog('[run] command failed');
-            return;
+            return false;
         }
         this.requestStatus = 'succeeded';
+        progressCallback?.('Run succeeded.');
+        return true;
     }
-    async runRemoteRequest(request, remoteApiBaseUrl) {
+    async runRemoteRequest(request, remoteApiBaseUrl, progressCallback, token) {
         const pollIntervalMs = this.getRemotePollIntervalMs();
         const remoteApiBearerToken = this.getRemoteApiBearerToken();
         this.appendLog(`[remote] using API: ${remoteApiBaseUrl}`);
@@ -332,11 +384,19 @@ class LgOrchExtension {
         const runId = this.readRemoteRunId(created);
         this.activeRemoteRunId = runId;
         this.appendLog(`[remote] run started: ${runId}`);
+        progressCallback?.(`Run started on remote server: ${runId}`);
         this.applyRemoteRunDetails(created);
         let logCount = 0;
         while (true) {
+            if (token?.isCancellationRequested) {
+                await this.cancelRemoteRun(remoteApiBaseUrl, runId);
+                break;
+            }
             const detail = await this.requestJson('GET', `${remoteApiBaseUrl}/v1/runs/${encodeURIComponent(runId)}`, undefined, remoteApiBearerToken);
             this.applyRemoteRunDetails(detail);
+            if (detail.status && typeof detail.status === 'string') {
+                progressCallback?.(`Status: ${detail.status}`);
+            }
             const logs = await this.requestJson('GET', `${remoteApiBaseUrl}/v1/runs/${encodeURIComponent(runId)}/logs`, undefined, remoteApiBearerToken);
             logCount = this.appendRemoteLogs(logs, logCount);
             if (!isRemoteRunInProgress(this.requestStatus)) {
@@ -350,6 +410,10 @@ class LgOrchExtension {
         if (typeof finalDetail.exit_code === 'number') {
             this.appendLog(`[remote] completed exit_code=${finalDetail.exit_code}`);
         }
+        if (token?.isCancellationRequested) {
+            return false;
+        }
+        return finalDetail.status === 'succeeded' || finalDetail.exit_code === 0 || !!finalDetail.trace;
     }
     async cancelRemoteRun(remoteApiBaseUrl, runId) {
         const remoteApiBearerToken = this.getRemoteApiBearerToken();

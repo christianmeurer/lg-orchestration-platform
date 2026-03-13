@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -138,7 +138,7 @@ class RunStore:
 
     def upsert_recovery_facts(self, run_id: str, facts: list[dict[str, Any]]) -> None:
         """Persist recovery facts from a run. Only facts with a non-empty fingerprint are stored."""
-        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         rows: list[tuple[Any, ...]] = []
         for fact in facts:
             if not isinstance(fact, dict):

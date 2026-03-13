@@ -5,7 +5,11 @@ from pathlib import Path
 from typing import Any
 
 from lg_orch.logging import get_logger
-from lg_orch.memory import build_context_layers, ensure_history_policy, prune_pre_verification_history
+from lg_orch.memory import (
+    build_context_layers,
+    ensure_history_policy,
+    prune_pre_verification_history,
+)
 from lg_orch.model_routing import record_model_route
 from lg_orch.tools import MCPClient, RunnerClient
 from lg_orch.trace import append_event

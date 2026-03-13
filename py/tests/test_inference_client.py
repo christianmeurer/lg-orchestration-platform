@@ -1,10 +1,9 @@
 """Tests for InferenceClient HTTP 429/5xx retry and circuit-breaker."""
 from __future__ import annotations
 
-import threading
 import time
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -12,11 +11,10 @@ import pytest
 import lg_orch.tools.inference_client as ic_mod
 from lg_orch.tools.inference_client import (
     InferenceClient,
-    _CircuitBreaker,
     _breakers,
     _breakers_lock,
+    _CircuitBreaker,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

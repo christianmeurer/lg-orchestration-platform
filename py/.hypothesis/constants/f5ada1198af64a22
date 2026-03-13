@@ -1,0 +1,4 @@
+# file: C:\Users\chris\Projects\LG-Orchestration-Platform\py\src\lg_orch\tools\mcp_client.py
+# hypothesis_version: 6.151.4
+
+[',', ':', '_actual_hash', '_expected_hash', '_schema_hash', 'args', 'arguments', 'command', 'cwd', 'description', 'env', 'inputSchema', 'input_schema', 'mcp_discover', 'mcp_discover_failed', 'mcp_discover_tools', 'mcp_execute', 'mcp_execute_tool', 'mcp_prompt_get', 'mcp_prompts_list', 'mcp_resource_read', 'mcp_resources_list', 'mismatch_servers', 'name', 'ok', 'prompt_name', 'prompts', 'prompts_count', 'resource_uri', 'resources', 'resources_count', 'schema_hash', 'server', 'server_count', 'server_name', 'servers', 'stderr', 'stdout', 'summary', 'timeout_s', 'tool_count', 'tool_name', 'tools', 'tools_count', 'unknown', 'utf-8']

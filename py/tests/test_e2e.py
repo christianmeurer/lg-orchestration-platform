@@ -11,10 +11,10 @@ Run with:
 from __future__ import annotations
 
 import os
-import pytest
 from pathlib import Path
 from typing import Any
 
+import pytest
 
 _E2E = os.environ.get("LG_E2E", "").strip() in {"1", "true", "yes"}
 
@@ -148,6 +148,7 @@ class TestE2ESmoke:
         correct so that a real model call would be attempted.
         """
         import os
+
         from lg_orch.graph import build_graph
 
         app = build_graph()

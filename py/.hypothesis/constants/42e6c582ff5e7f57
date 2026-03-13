@@ -1,0 +1,4 @@
+# file: C:\Users\chris\Projects\LG-Orchestration-Platform\py\src\lg_orch\tools\inference_client.py
+# hypothesis_version: 6.151.4
+
+[0.0, 0.2, 1.0, 2.0, 30.0, 429, 500, 1000, 1200, '/chat/completions', '_client', 'affinity', 'application/json', 'authorization', 'cache', 'choices', 'circuit_open', 'closed', 'content', 'content-type', 'half_open', 'invalid first choice', 'max_tokens', 'message', 'messages', 'missing content', 'missing message', 'model', 'open', 'prefix', 'provider', 'request-id', 'retry-after', 'role', 'system', 'temperature', 'usage', 'user', 'x-model-provider']

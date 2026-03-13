@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
-
-import pytest
 
 from lg_orch.procedure_cache import ProcedureCache, _canonical_procedure_name
 

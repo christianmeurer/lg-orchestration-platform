@@ -1,0 +1,4 @@
+# file: C:\Users\chris\Projects\LG-Orchestration-Platform\py\src\lg_orch\meta_graph.py
+# hypothesis_version: 6.151.4
+
+['Execution failed.', 'No plan executed.', 'active_tasks', 'completed_tasks', 'continue', 'end', 'error', 'failed_tasks', 'failure', 'final', 'final_report', 'meta_evaluator', 'meta_plan', 'meta_planner', 'ok', 'repo_context', 'request', 'root', 'sub_agent_executor', 'success', 'task_dispatcher', 'task_results', 'verification']

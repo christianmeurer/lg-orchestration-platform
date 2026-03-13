@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import importlib
+import json
 from typing import Any
 
 import pytest
