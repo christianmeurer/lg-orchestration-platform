@@ -66,3 +66,7 @@ run_store_path = "artifacts/remote-api/runs.sqlite"
 rate_limit_rps = 0
 procedure_cache_path = "artifacts/remote-api/procedures.sqlite"
 default_namespace = ""
+  
+[vericoding]  
+enabled = true  
+extensions = [".rs"] 

@@ -20,6 +20,7 @@ from lg_orch.config import (
     RemoteAPIConfig,
     Runner,
     Trace,
+    VericodingConfig,
     load_config,
 )
 
@@ -309,6 +310,7 @@ def test_appconfig_frozen() -> None:
             namespace="main",
             thread_prefix="lg-orch",
         ),
+        vericoding=VericodingConfig(enabled=True, extensions=(".rs",)),
     )
     with pytest.raises(AttributeError):
         cfg.profile = "prod"  # type: ignore[misc]

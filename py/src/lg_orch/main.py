@@ -601,6 +601,8 @@ def cli(argv: list[str] | None = None) -> int:
         "_trace_capture_model_metadata": cfg.trace.capture_model_metadata,
         "_run_store_path": cfg.remote_api.run_store_path or "",
         "_procedure_cache_path": cfg.remote_api.procedure_cache_path or "",
+        "_vericoding_enabled": cfg.vericoding.enabled,
+        "_vericoding_extensions": list(cfg.vericoding.extensions),
     }
     if request_id:
         state["_request_id"] = request_id

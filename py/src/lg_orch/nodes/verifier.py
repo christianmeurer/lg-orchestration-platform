@@ -180,6 +180,87 @@ def _is_test_failure_post_change(
     return patch_applied
 
 
+def _requires_formal_verification(state: dict[str, Any], tool_results: list[dict[str, Any]]) -> list[str]:
+    if not state.get("_vericoding_enabled", False):
+        return []
+
+    extensions = tuple(state.get("_vericoding_extensions", [".rs"]))
+    files_to_verify: list[str] = []
+
+    for result in tool_results:
+        if str(result.get("tool", "")) == "apply_patch" and result.get("ok"):
+            input_payload = result.get("input", {})
+            if isinstance(input_payload, dict):
+                changes = input_payload.get("changes", [])
+                for change in changes:
+                    if isinstance(change, dict):
+                        path = str(change.get("path", ""))
+                        if path.endswith(extensions) and path not in files_to_verify:
+                            files_to_verify.append(path)
+
+    return files_to_verify
+
+
+def _run_formal_verification(
+    state: dict[str, Any],
+    files_to_verify: list[str],
+    route_metadata: dict[str, Any]
+) -> dict[str, Any] | None:
+    if not files_to_verify:
+        return None
+
+    runner_base_url = str(state.get("_runner_base_url", "http://127.0.0.1:8088"))
+    api_key = state.get("_runner_api_key")
+    request_id = state.get("_request_id")
+    api_key_s = str(api_key).strip() if api_key is not None else None
+    request_id_s = str(request_id).strip() if request_id is not None else None
+
+    from lg_orch.tools import RunnerClient
+    client = RunnerClient(base_url=runner_base_url, api_key=api_key_s, request_id=request_id_s)
+
+    try:
+        args = ["test", "--all", "--features", "verify"]
+
+        call: dict[str, Any] = {
+            "tool": "exec",
+            "input": {
+                "cmd": "cargo",
+                "args": args,
+                "timeout_s": 120,
+                "_route": route_metadata
+            }
+        }
+
+        results = client.batch_execute_tools(calls=[call])
+        if results:
+             result = results[0]
+             if not result.get("ok"):
+                 return {
+                     "tool": "formal_verification",
+                     "ok": False,
+                     "exit_code": result.get("exit_code", 1),
+                     "stdout": result.get("stdout", ""),
+                     "stderr": f"Formal Verification Failed:\n{result.get('stderr', '')}",
+                     "diagnostics": result.get("diagnostics", []),
+                     "artifacts": {"error": "formal_verification_failed", "files": files_to_verify},
+                     "route": route_metadata
+                 }
+        return None
+    except Exception as e:
+         return {
+             "tool": "formal_verification",
+             "ok": False,
+             "exit_code": 1,
+             "stdout": "",
+             "stderr": f"Failed to execute formal verification: {str(e)}",
+             "diagnostics": [],
+             "artifacts": {"error": "formal_verification_execution_error"},
+             "route": route_metadata
+         }
+    finally:
+        client.close()
+
+
 def _classify_retry(
     tool_results: list[dict[str, Any]],
     *,
@@ -214,6 +295,20 @@ def _classify_retry(
             )
 
         error_tag = str(artifacts.get("error", "")).strip().lower()
+
+        if error_tag == "formal_verification_failed":
+             return (
+                 {
+                     "failure_class": "formal_verification_failed",
+                     "failure_fingerprint": fingerprint,
+                     "rationale": "Symbolic proof checker rejected the implementation. The logic must be mathematically verified.",
+                     "retry_target": "planner",
+                     "context_scope": "working_set",
+                     "plan_action": "amend",
+                 },
+                 "formal_verification_failed",
+             )
+
         if error_tag in {"tool_call_budget_exceeded", "patch_size_budget_exceeded"}:
             return (
                 {
@@ -607,6 +702,15 @@ def verifier(state: dict[str, Any]) -> dict[str, Any]:
                 "route": tool_routing_metadata(state, stage="verifier"),
             }
         )
+
+    files_to_verify = _requires_formal_verification(state, tool_results)
+    if files_to_verify and bool(state.get("_runner_enabled", True)):
+        verification_failure = _run_formal_verification(state, files_to_verify, tool_routing_metadata(state, stage="verifier"))
+        if verification_failure:
+             tool_results.append(verification_failure)
+             log.info("formal_verification_failed", files=files_to_verify)
+        else:
+             log.info("formal_verification_passed", files=files_to_verify)
 
     checks = _build_checks(tool_results)
     has_failures = len(checks) > 0

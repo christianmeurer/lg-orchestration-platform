@@ -180,8 +180,8 @@ class Models:
     router: ModelEndpoint
     planner: ModelEndpoint
     routing: ModelRouting
-    digitalocean: "DigitalOceanServerless"
-    openai_compatible: "OpenAICompatibleServerless"
+    digitalocean: DigitalOceanServerless
+    openai_compatible: OpenAICompatibleServerless
 
 
 @dataclass(frozen=True)
@@ -199,6 +199,12 @@ class OpenAICompatibleServerless:
 
 
 @dataclass(frozen=True)
+class VericodingConfig:
+    enabled: bool
+    extensions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class AppConfig:
     profile: str
     models: Models
@@ -209,6 +215,7 @@ class AppConfig:
     trace: Trace
     remote_api: RemoteAPIConfig
     checkpoint: Checkpoint
+    vericoding: VericodingConfig
 
 
 def _parse_float(value: object, *, default: float) -> float:
@@ -400,6 +407,7 @@ def load_config(*, repo_root: Path) -> AppConfig:
     trace_raw = raw.get("trace", {})
     remote_api_raw = raw.get("remote_api", {})
     checkpoint_raw = raw.get("checkpoint", {})
+    vericoding_raw = raw.get("vericoding", {})
     if not isinstance(models_raw, dict):
         raise ConfigError("missing/invalid models")
     if not isinstance(budgets_raw, dict):
@@ -416,6 +424,8 @@ def load_config(*, repo_root: Path) -> AppConfig:
         raise ConfigError("missing/invalid remote_api")
     if not isinstance(checkpoint_raw, dict):
         raise ConfigError("missing/invalid checkpoint")
+    if not isinstance(vericoding_raw, dict):
+        raise ConfigError("missing/invalid vericoding")
 
     budgets = Budgets(
         max_loops=_require_int(budgets_raw, "max_loops"),
@@ -677,6 +687,11 @@ def load_config(*, repo_root: Path) -> AppConfig:
         thread_prefix=checkpoint_thread_prefix_raw.strip(),
     )
 
+    vericoding = VericodingConfig(
+        enabled=_get_bool(vericoding_raw, "enabled", default=False),
+        extensions=_optional_str_tuple(vericoding_raw, "extensions") or (".rs",),
+    )
+
     return AppConfig(
         profile=profile,
         models=models,
@@ -687,4 +702,5 @@ def load_config(*, repo_root: Path) -> AppConfig:
         trace=trace,
         remote_api=remote_api,
         checkpoint=checkpoint,
+        vericoding=vericoding,
     )
