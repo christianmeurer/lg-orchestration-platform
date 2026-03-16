@@ -482,8 +482,14 @@ def load_config(*, repo_root: Path) -> AppConfig:
         if not isinstance(api_key, str) or not api_key.strip():
             raise ConfigError("missing/invalid runner.api_key")
         api_key = api_key.strip()
+
+    # Allow LG_RUNNER_BASE_URL to override the configured base_url so that
+    # the runner can be an external k8s service without rebuilding the image.
+    runner_base_url_env = os.environ.get("LG_RUNNER_BASE_URL", "").strip()
+    runner_base_url = runner_base_url_env if runner_base_url_env else _require_str(runner_raw, "base_url")
+
     runner = Runner(
-        base_url=_require_str(runner_raw, "base_url"),
+        base_url=runner_base_url,
         root_dir=_require_str(runner_raw, "root_dir"),
         api_key=api_key,
     )

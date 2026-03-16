@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lula-runner
+  namespace: lula-orch
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lula-runner
+  template:
+    metadata:
+      labels:
+        app: lula-runner
+    spec:
+      runtimeClassName: gvisor
+      nodeSelector:
+        sandbox: gvisor
+      tolerations:
+        - key: sandbox
+          operator: Equal
+          value: gvisor
+          effect: NoSchedule
+      imagePullSecrets:
+        - name: docr-secret
+      containers:
+        - name: lula-runner
+          image: registry.digitalocean.com/lula-orch/lula-orch:latest
+          command: ["/app/rs/target/release/lg-runner"]
+          args:
+            - --bind
+            - "0.0.0.0:8088"
+            - --root-dir
+            - /app
+            - --profile
+            - prod
+          ports:
+            - containerPort: 8088
+          env:
+            - name: LG_RUNNER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: lula-secrets
+                  key: LG_RUNNER_API_KEY
+            # Enable Linux namespace isolation inside the gVisor sandbox
+            - name: LG_RUNNER_LINUX_NAMESPACE_ENABLED
+              value: "0"  # unshare not available inside gVisor; gVisor itself provides isolation
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8088
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8088
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+          securityContext:
+            runAsNonRoot: false
+            readOnlyRootFilesystem: false
+            allowPrivilegeEscalation: false

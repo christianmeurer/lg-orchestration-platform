@@ -1,5 +1,5 @@
 name: lula-orch
-region: nyc3
+region: nyc
 services:
   - name: api
     image:
@@ -24,6 +24,7 @@ services:
         value: bearer
       - key: LG_REMOTE_API_TRUST_FORWARDED_HEADERS
         value: "true"
+      # Secrets — set values in the DO console or via doctl after first deploy.
       - key: LG_REMOTE_API_BEARER_TOKEN
         scope: RUN_TIME
         type: SECRET
@@ -36,6 +37,8 @@ services:
       - key: MODEL_ACCESS_KEY
         scope: RUN_TIME
         type: SECRET
+      # Model routing — combined image starts runner internally at 127.0.0.1:8088.
+      # For an external k8s runner set LG_RUNNER_BASE_URL to the service URL.
       - key: LG_PLANNER_PROVIDER
         value: digitalocean
       - key: LG_PLANNER_MODEL
