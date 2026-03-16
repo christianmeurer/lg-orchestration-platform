@@ -6,12 +6,12 @@
 
 [models.router]
 provider = "digitalocean"
-model = "openai/gpt-4o-mini"
+model = "openai-gpt-4o-mini"
 temperature = 0.0
 
 [models.planner]
 provider = "digitalocean"
-model = "openai/gpt-4.1"
+model = "openai-gpt-4.1"
 temperature = 0.2
 
 [models.routing]

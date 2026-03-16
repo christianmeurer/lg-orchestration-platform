@@ -42,8 +42,8 @@ services:
       - key: LG_PLANNER_PROVIDER
         value: digitalocean
       - key: LG_PLANNER_MODEL
-        value: openai/gpt-4.1
+        value: openai-gpt-4.1
       - key: LG_ROUTER_PROVIDER
         value: digitalocean
       - key: LG_ROUTER_MODEL
-        value: openai/gpt-4o-mini
+        value: openai-gpt-4o-mini
