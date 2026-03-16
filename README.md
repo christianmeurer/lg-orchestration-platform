@@ -4,6 +4,8 @@
 
 A production-grade LangGraph orchestration platform (Python) paired with a high-trust restricted tool runner (Rust). Lula is designed for advanced autonomous coding and analysis workflows within secure enterprise environments.
 
+**Live deployment:** `https://lula-orch-y4t77.ondigitalocean.app` (DigitalOcean App Platform — DO Gradient AI inference, `openai-gpt-4.1` planner, `openai-gpt-4o-mini` router)
+
 ## What Lula is
 
 Lula is a full-stack agentic coding platform with:
@@ -294,10 +296,56 @@ uv run lg-orch trace-site artifacts/runs --output-dir artifacts/site
 uv run lg-orch trace-serve artifacts/runs --port 8000
 ```
 
+## What has been built (completed waves)
+
+| Wave | What shipped |
+|---|---|
+| 1 — Docs sync | `README.md`, `docs/architecture.md`, `docs/platform_console.md` aligned with actual code |
+| 2 — First product surface | SPA run viewer, trace dashboard, Mermaid graph export, console renderer |
+| 3 — Run API + persistence | `RemoteAPIService`, SQLite run store, durable run listing, trace-backed detail views, cancellation |
+| 4 — Provider expansion + routing | DigitalOcean Gradient AI + OpenAI-compatible providers, lane-aware routing, inference telemetry (latency, usage, cache headers) |
+| 5 — Agent quality | Recovery packets, loop summaries, stable-prefix/working-set context compression with provenance, episodic recovery facts, procedural cache, eval suite |
+| Deployment fixes | `LG_RUNNER_BASE_URL` env override, k8s runner split (`infra/k8s/runner-deployment.yaml` + `runner-service.yaml`), `do_deploy.sh` EV-ref preservation, DO model slug correction (`openai-gpt-4.1`), `runner.api_key` optional |
+
+## Roadmap
+
+### Wave 6 — execution quality, streaming, distribution (next)
+
+| Item | File | Impact |
+|---|---|---|
+| Concurrent Rust batch fan-out | [`rs/runner/src/main.rs`](rs/runner/src/main.rs) | Remove primary throughput bottleneck — replace serial tool loop with `tokio::JoinSet` |
+| Streaming inference wired to interactive lane | [`py/src/lg_orch/tools/inference_client.py`](py/src/lg_orch/tools/inference_client.py) | `chat_completion_stream()` exists, needs wiring to planner/router nodes |
+| VSCode extension activation | [`vscode-extension/src/extension.ts`](vscode-extension/src/extension.ts) | Distribution channel: run status, verifier report panel, approval buttons |
+| Outcome quality benchmark | [`eval/run.py`](eval/run.py) + new `eval/tasks/real_world_repair.json` | Measure pass rate on known-good bug-fix tasks, not only structural behavior |
+
+### Wave 7 — SOTA platform UX/UI
+
+The most sophisticated agentic backend is invisible without a product-quality interface. Wave 7 targets a 2026-level immersive developer experience:
+
+1. **Live run console with streaming timeline** — WebSocket/SSE-backed view; each graph node pulses as it activates, tool calls appear in real-time, lane is highlighted
+2. **Animated agent graph visualization** — Mermaid or D3 force graph with active-node highlighting, edge animation in data-flow direction, recovery routing made visible
+3. **Inline diff and verifier panel** — GitHub-style syntax-highlighted unified diff for `apply_patch` results; approval/reject buttons inline in the activity stream
+4. **Run history and full-text search** — persistent left-panel run history with request text, duration, verification status, model used
+5. **Design-system-quality layout** — Tailwind CSS + shadcn/ui (no Node.js build step in runtime image), VS Code dark theme parity, semantic color coding, responsive 1024–1440px
+6. **VS Code extension premium UX** — vscode-webview-ui-toolkit, respects active color theme, inline gutter diffs, agent activity in sidebar
+
+Design references: Vercel AI Playground (streaming token viz), Replit Ghostwriter (live agent trace), Cursor composer (multi-file diff approval), Linear (motion design polish).
+
+### Future pillars (from [`docs/sota_2026_plan.md`](docs/sota_2026_plan.md) §9)
+
+| Pillar | Current state | Next step |
+|---|---|---|
+| Neurosymbolic vericoding | Verus stubs in `sandbox.rs`, `--features verify` in Cargo | Wire `cargo test --features verify` into verifier for changed `.rs` files |
+| Tripartite memory | Episodic facts + procedure cache in SQLite | SQLite FTS for semantic cross-session recall |
+| Cross-repo orchestration | `MetaOrchState` + `meta_graph.py` present | Git-worktree isolation + dependency-ordered sub-agent scheduler |
+| Self-healing test loop | `test_failure_post_change` in verifier | Test-repair as first-class plan step |
+| k8s hardware sandbox | gVisor manifests + deploy script ready | Provision DOKS cluster for enterprise deployment |
+
 ## Core documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — subsystem overview
 - [`docs/deployment_digitalocean.md`](docs/deployment_digitalocean.md) — DigitalOcean App Platform and DOKS deployment guide
-- [`docs/sota_2026_plan.md`](docs/sota_2026_plan.md) — roadmap and gap analysis
+- [`docs/sota_2026_plan.md`](docs/sota_2026_plan.md) — roadmap and gap analysis (Waves 1–7)
 - [`docs/platform_console.md`](docs/platform_console.md) — console and API reference
 - [`docs/langgraph_plan.md`](docs/langgraph_plan.md) — LangGraph design notes
+- [`docs/Innovative Agentic Coding Tool Concepts.pdf`](docs/Innovative%20Agentic%20Coding%20Tool%20Concepts.pdf) — field research: five next-generation architecture pillars

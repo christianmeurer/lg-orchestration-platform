@@ -230,14 +230,48 @@ Targets:
 - [`py/src/lg_orch/tools/inference_client.py`](../py/src/lg_orch/tools/inference_client.py)
 - [`vscode-extension/src/extension.ts`](../vscode-extension/src/extension.ts)
 - [`eval/run.py`](../eval/run.py)
-- new `eval/tasks/swe_bench_lite.json` or equivalent real-world benchmark fixture
+- new `eval/tasks/real_world_repair.json` (curated 10-task bug-fix benchmark)
 
 Goal:
 
 1. **Concurrent batch execution in the Rust runner.** Replace the serial `for` loop in `batch_execute_tool` with a `tokio::JoinSet` fan-out. This is a single-file change that removes the primary throughput bottleneck for multi-tool plans.
-2. **Streaming inference path.** Add an SSE or chunked-response path to `inference_client.py` so that long LLM calls stream tokens into state incrementally rather than blocking the graph step. Required for any interactive lane use.
+2. **Streaming inference wired into the interactive lane.** `InferenceClient.chat_completion_stream()` is already implemented. Wire the `interactive` lane nodes in `planner.py` and `router.py` to the stream path so partial tokens surface progressively instead of blocking the graph step. Required for perceived latency parity with Aider and Claude Code.
 3. **VSCode extension activation.** Wire `vscode-extension/src/extension.ts` to at least: display current run status, show the last verifier report, and surface approval prompts for mutation plans. Without this, the platform has no viable distribution channel.
-4. **Outcome quality benchmark.** Add at least one repeatable real-world benchmark task (e.g. a SWE-bench Lite subset, or a curated internal set of 10 known-good bug-fix tasks) so that parity improvements can be measured against a pass rate, not only against structural behavior. The current eval suite tests routing and loop mechanics but does not measure whether the agent actually produces correct code.
+4. **Outcome quality benchmark.** Add a curated set of 10 known-good bug-fix tasks with `expected_patch` assertions. Pass rate (not only structural behavior) is what enables real parity comparisons. The current eval suite tests routing and loop mechanics but does not measure whether the agent produces correct code.
+
+Status: **Pending.**
+
+### Wave 7: SOTA platform UX/UI
+
+Without an immersive, polished, and accessible interface, the most sophisticated agentic architecture remains a difficult tool used only by specialists. Competitive parity in 2026 requires not just technical depth but a product-quality user experience that rivals linear-editing tools like Cursor and Windsurf.
+
+Targets:
+
+- [`py/src/lg_orch/visualize.py`](../py/src/lg_orch/visualize.py)
+- [`py/src/lg_orch/remote_api.py`](../py/src/lg_orch/remote_api.py)
+- [`vscode-extension/src/extension.ts`](../vscode-extension/src/extension.ts)
+- New `py/src/lg_orch/spa/` — standalone SPA frontend
+
+Goal:
+
+1. **Live run console with streaming timeline.** The current SPA (served at `GET /`) renders a static trace after run completion. Replace with a WebSocket or SSE-backed live view that shows each graph node activating, tool calls appearing as they execute, and the verifier result in real-time. Use an animated node-based graph diagram (e.g. Mermaid.js or a D3 force graph) that highlights the active node during execution.
+
+2. **Agent activity visualization.** Render the actual graph topology inline alongside the run: nodes pulse as they activate, edges animate in the direction of data flow, the current lane (`interactive`, `deep_planning`, `recovery`) is highlighted. Inspired by Replit's agent trace view and Cursor's diff-flow visualization.
+
+3. **Verifier report panel with inline diffs.** When `apply_patch` runs, show a GitHub-style diff inline (unified diff with syntax highlighting, language-aware coloring). When verification fails, highlight the specific check and the recovery path chosen. Approval buttons for gated exec calls appear inline in the activity stream — no need to navigate away.
+
+4. **Run history and search.** A persistent left-panel run history with request text, duration, verification status, and model used. Full-text search over past runs. Clicking a run loads the full trace view with all the above components.
+
+5. **Responsive, design-system-quality typography and layout.** Apply principles from modern developer tool design (VS Code dark theme system, Vercel's dashboard aesthetics, Linear's motion design): clean monospace code blocks, subtle animated transitions between states, semantic color coding for success/failure/warning, and a layout that works at 1024px and 1440px. Use a design system (Tailwind CSS + shadcn/ui components or a hand-rolled equivalent served from the Python API's static asset layer) without adding a Node.js build dependency to the runtime image.
+
+6. **VSCode extension premium UX.** Beyond functional correctness, the extension panel should feel native to VS Code: use the VS Code Webview API with the `vscode-webview-ui-toolkit` component library, respect the editor's active color theme, and animate agent activity directly in the sidebar without requiring a browser. Inline diffs appear in the actual editor gutter, not in a separate panel.
+
+Design references:
+- [Vercel AI Playground](https://sdk.vercel.ai) — streaming token visualization
+- [Replit Ghostwriter Agent](https://replit.com/ai) — live agent trace with node graph
+- [Cursor composer](https://cursor.sh) — multi-file diff approval flow
+- [Linear](https://linear.app) — motion design and transition polish
+- VS Code [Webview API](https://code.visualstudio.com/api/extension-guides/webview) — native editor UX patterns
 
 Status: **Pending.**
 
