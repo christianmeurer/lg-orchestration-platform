@@ -48,6 +48,10 @@ _ARCH_MISMATCH_HINTS = (
 )
 
 
+def _validate_base_url(url: str) -> bool:
+    return url.startswith("http://") or url.startswith("https://")
+
+
 def _extract_diagnostics(result: dict[str, Any]) -> list[dict[str, Any]]:
     direct = result.get("diagnostics", [])
     if isinstance(direct, list):
@@ -210,6 +214,17 @@ def _run_formal_verification(
         return None
 
     runner_base_url = str(state.get("_runner_base_url", "http://127.0.0.1:8088"))
+    if not _validate_base_url(runner_base_url):
+        return {
+            "tool": "formal_verification",
+            "ok": False,
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": "invalid runner base url for formal verification",
+            "diagnostics": [],
+            "artifacts": {"error": "invalid_base_url"},
+            "route": route_metadata,
+        }
     api_key = state.get("_runner_api_key")
     request_id = state.get("_request_id")
     api_key_s = str(api_key).strip() if api_key is not None else None
@@ -602,10 +617,6 @@ def _build_checks(tool_results: list[dict[str, Any]]) -> list[VerificationCheck]
             )
         )
     return checks
-
-
-def _validate_base_url(url: str) -> bool:
-    return url.startswith("http://") or url.startswith("https://")
 
 
 def _run_verification_calls(state: dict[str, Any], tool_results: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:

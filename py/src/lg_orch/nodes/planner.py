@@ -168,6 +168,8 @@ def _planner_model_output(
         base_url = str(oc_cfg.get("base_url", "https://api.openai.com/v1")).strip().rstrip("/")
         if not base_url:
             return None, None
+        if not (base_url.startswith("http://") or base_url.startswith("https://")):
+            return None, None
         timeout_raw = oc_cfg.get("timeout_s", 60)
         timeout_s = int(timeout_raw) if isinstance(timeout_raw, int) and timeout_raw > 0 else 60
     else:
@@ -178,6 +180,8 @@ def _planner_model_output(
             return None, None
         base_url = str(do_cfg.get("base_url", "https://inference.do-ai.run/v1")).strip().rstrip("/")
         if not base_url:
+            return None, None
+        if not (base_url.startswith("http://") or base_url.startswith("https://")):
             return None, None
         timeout_raw = do_cfg.get("timeout_s", 60)
         timeout_s = int(timeout_raw) if isinstance(timeout_raw, int) and timeout_raw > 0 else 60

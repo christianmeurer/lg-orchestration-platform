@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from lg_orch.nodes.planner import _classify_intent, planner
+from lg_orch.nodes.planner import _classify_intent, _planner_model_output, planner
 
 planner_module = importlib.import_module("lg_orch.nodes.planner")
 
@@ -466,3 +466,26 @@ def test_planner_remote_failure_falls_back_to_deterministic(
 
     assert out["plan"]["steps"][0]["id"] == "step-1"
     assert "deterministic fallback used" in out["plan"]["rollback"]
+
+
+def test_planner_model_output_rejects_non_http_base_url() -> None:
+    state: dict[str, Any] = {
+        "request": "do something",
+        "_models": {
+            "planner": {
+                "provider": "openai_compatible",
+                "model": "gpt-4o",
+                "temperature": 0.0,
+            }
+        },
+        "_model_provider_runtime": {
+            "openai_compatible": {
+                "api_key": "sk-test",
+                "base_url": "ftp://bad",
+                "timeout_s": 60,
+            }
+        },
+    }
+    route_decision: dict[str, Any] = {"provider_used": "openai_compatible"}
+    result = _planner_model_output(state, route_decision=route_decision)
+    assert result == (None, None)
