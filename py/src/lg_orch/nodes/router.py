@@ -235,14 +235,35 @@ def _router_model_output(
     )
 
     client = InferenceClient(base_url=base_url, api_key=api_key, timeout_s=timeout_s)
+    lane = str(default_route.lane).strip()
     try:
-        response = client.chat_completion(
-            model=model,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            temperature=max(0.0, min(temperature, 1.0)),
-            max_tokens=700,
-        )
+        if lane == "interactive":
+            # Interactive lane: stream tokens progressively for low perceived latency.
+            try:
+                response = client.chat_completion_stream_sync(
+                    model=model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    temperature=max(0.0, min(temperature, 1.0)),
+                    max_tokens=700,
+                )
+            except Exception:
+                # Fall back to blocking completion if streaming fails.
+                response = client.chat_completion(
+                    model=model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    temperature=max(0.0, min(temperature, 1.0)),
+                    max_tokens=700,
+                )
+        else:
+            response = client.chat_completion(
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=max(0.0, min(temperature, 1.0)),
+                max_tokens=700,
+            )
     finally:
         client.close()
 

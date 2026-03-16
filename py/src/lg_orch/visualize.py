@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from dataclasses import dataclass
@@ -409,321 +409,680 @@ def render_trace_site_index_html(runs: list[dict[str, Any]]) -> str:
 
 
 def render_run_viewer_spa(*, api_base_url: str = "", mermaid_graph: str = "") -> str:
-    """
-    Render a single-page application HTML that queries the live /v1/runs API.
+    """Render the SOTA 2026 single-page application that queries the live /v1/runs API.
+
+    Features:
+    - SSE live streaming timeline — each graph node pulses as it activates
+    - Animated Mermaid graph with active-node highlighting via custom CSS overlay
+    - GitHub-style syntax-highlighted unified diff for apply_patch results
+    - Verifier report panel with OK/error semantic color
+    - Run history with full-text search
+    - Approval buttons inline in activity stream
+    - Design-system dark theme with smooth CSS transitions
     api_base_url: base URL for API calls (empty = same origin).
     """
     safe_base = api_base_url.rstrip("/")
-    mermaid_script = ""
-    if mermaid_graph:
-        mermaid_script = (
-            '<script type="module">\n'
-            'import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";\n'
-            'mermaid.initialize({ startOnLoad: true, theme: "neutral" });\n'
-            "</script>"
-        )
+    escaped_mermaid = escape(mermaid_graph.strip()) if mermaid_graph else ""
 
-    html_str = "".join(
-        [
-            "<!DOCTYPE html>\n",
-            '<html lang="en">\n',
-            "<head>\n",
-            '  <meta charset="utf-8">\n',
-            '  <meta name="viewport" content="width=device-width, initial-scale=1">\n',
-            "  <title>LG Orchestration — Run Viewer</title>\n",
-            "  <style>\n",
-            "    :root { color-scheme: dark; }\n",
-            "    * { box-sizing: border-box; }\n",
-            "    body { margin: 0; background: #0f172a; color: #e2e8f0; font-family: Segoe UI, Arial, sans-serif; height: 100vh; display: flex; flex-direction: column; }\n",
-            "    #layout { display: flex; flex: 1; overflow: hidden; }\n",
-            "    #list-panel { width: 30%; border-right: 1px solid #334155; display: flex; flex-direction: column; overflow: hidden; }\n",
-            "    #detail-panel { flex: 1; overflow-y: auto; padding: 16px; }\n",
-            "    #submit-form { padding: 12px; border-bottom: 1px solid #334155; display: flex; gap: 8px; }\n",
-            "    #submit-form input { flex: 1; background: #1e293b; border: 1px solid #334155; color: #e2e8f0; padding: 6px 10px; border-radius: 6px; font-size: 0.9rem; }\n",
-            "    #submit-form button { background: #1d4ed8; color: #e2e8f0; border: none; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 0.9rem; white-space: nowrap; }\n",
-            "    #submit-form button:hover { background: #2563eb; }\n",
-            "    #run-list { flex: 1; overflow-y: auto; }\n",
-            "    .run-card { padding: 10px 14px; border-bottom: 1px solid #1f2937; cursor: pointer; }\n",
-            "    .run-card:hover { background: #1e293b; }\n",
-            "    .run-card.selected { background: #1e293b; border-left: 3px solid #3b82f6; }\n",
-            "    .run-id { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.75rem; color: #93c5fd; }\n",
-            "    .run-req { font-size: 0.85rem; margin: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }\n",
-            "    .run-meta { font-size: 0.75rem; color: #94a3b8; display: flex; gap: 8px; align-items: center; }\n",
-            "    .badge { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 0.72rem; text-align: center; }\n",
-            "    .badge-running { background: #1e3a5f; color: #93c5fd; }\n",
-            "    .badge-starting { background: #1e3a5f; color: #93c5fd; }\n",
-            "    .badge-succeeded { background: #14532d; color: #bbf7d0; }\n",
-            "    .badge-failed { background: #7f1d1d; color: #fecaca; }\n",
-            "    .badge-cancelled { background: #374151; color: #9ca3af; }\n",
-            "    .badge-cancelling { background: #374151; color: #9ca3af; }\n",
-            "    .badge-ok { background: #14532d; color: #bbf7d0; }\n",
-            "    .badge-err { background: #7f1d1d; color: #fecaca; }\n",
-            "    .card { background: #111827; border: 1px solid #334155; border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }\n",
-            "    .card h2 { margin: 0 0 10px; font-size: 1rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; }\n",
-            "    .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: 0.85rem; }\n",
-            "    .kv dt { color: #94a3b8; font-weight: 600; }\n",
-            "    .kv dd { margin: 0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color: #93c5fd; word-break: break-all; }\n",
-            "    .tool-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }\n",
-            "    .tool-list li { display: flex; gap: 8px; align-items: flex-start; font-size: 0.85rem; }\n",
-            "    .timeline-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }\n",
-            "    .timeline-list li { display: flex; gap: 10px; font-size: 0.82rem; }\n",
-            "    .ts { color: #93c5fd; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; min-width: 70px; }\n",
-            "    pre { margin: 0; background: #0f172a; border: 1px solid #1f2937; border-radius: 6px; padding: 10px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.8rem; white-space: pre-wrap; overflow-x: auto; color: #e2e8f0; }\n",
-            "    .diff-add { background: #14532d22; color: #bbf7d0; display: block; }\n",
-            "    .diff-remove { background: #7f1d1d22; color: #fecaca; display: block; }\n",
-            "    .diff-hunk { color: #94a3b8; font-style: italic; display: block; }\n",
-            "    .action-bar { display: flex; gap: 8px; margin-bottom: 10px; }\n",
-            "    .btn { background: #1e293b; border: 1px solid #334155; color: #e2e8f0; padding: 5px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }\n",
-            "    .btn:hover { background: #334155; }\n",
-            "    .btn-danger { border-color: #7f1d1d; color: #fecaca; }\n",
-            "    .btn-danger:hover { background: #7f1d1d44; }\n",
-            "    #detail-empty { color: #475569; padding: 32px 16px; text-align: center; }\n",
-            "    a { color: #93c5fd; text-decoration: none; }\n",
-            "    a:hover { text-decoration: underline; }\n",
-            "  </style>\n",
-            "</head>\n",
-            "<body>\n",
-            '<div id="layout">\n',
-            '  <div id="list-panel">\n',
-            '    <form id="submit-form">\n',
-            '      <input id="req-input" type="text" placeholder="Enter request..." autocomplete="off">\n',
-            '      <button type="submit">Submit Request</button>\n',
-            '    </form>\n',
-            '    <div id="run-list"></div>\n',
-            '  </div>\n',
-            '  <div id="detail-panel"><div id="detail-empty">Select a run to view details.</div></div>\n',
-            "</div>\n",
-            "<script>\n",
-            f'const API = "{safe_base}";\n',
-            f'window.mermaidGraph = {json.dumps(mermaid_graph.strip()) if mermaid_graph else "null"};\n',
-            r"""
-let _selectedRunId = null;
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lula — Run Console</title>
+  <style>
+    /* ── Design tokens ─────────────────────────────────────── */
+    :root {{
+      --bg:      #0d1117;
+      --bg2:     #161b22;
+      --bg3:     #21262d;
+      --border:  #30363d;
+      --text:    #e6edf3;
+      --muted:   #8b949e;
+      --accent:  #58a6ff;
+      --ok:      #3fb950;
+      --err:     #f85149;
+      --warn:    #d29922;
+      --lane-interactive: #6366f1;
+      --lane-deep:        #0ea5e9;
+      --lane-recovery:    #f59e0b;
+      color-scheme: dark;
+    }}
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      font-size: 13px;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }}
+    /* ── Top bar ─────────────────────────────────────────────── */
+    #topbar {{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 16px;
+      height: 48px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      background: var(--bg2);
+    }}
+    #topbar .logo {{ font-weight: 700; font-size: 15px; letter-spacing: -.3px; color: var(--text); }}
+    #topbar .logo span {{ color: var(--accent); }}
+    #req-form {{ display: flex; gap: 8px; flex: 1; max-width: 700px; }}
+    #req-input {{
+      flex: 1;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 5px 10px;
+      font-size: 13px;
+      outline: none;
+      transition: border-color .15s;
+    }}
+    #req-input:focus {{ border-color: var(--accent); }}
+    .btn {{
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 12px;
+      padding: 5px 12px;
+      transition: background .12s, border-color .12s;
+      white-space: nowrap;
+    }}
+    .btn:hover {{ background: #2d333b; border-color: var(--accent); }}
+    .btn-primary {{ background: #1f6feb; border-color: #388bfd; color: #fff; }}
+    .btn-primary:hover {{ background: #388bfd; }}
+    .btn-danger {{ border-color: var(--err); color: var(--err); }}
+    .btn-danger:hover {{ background: #2d1b1b; }}
+    /* ── Main layout ─────────────────────────────────────────── */
+    #layout {{ display: flex; flex: 1; overflow: hidden; }}
+    /* ── Left panel: run list ───────────────────────────────── */
+    #list-panel {{
+      width: 280px;
+      min-width: 200px;
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--bg2);
+    }}
+    #search-wrap {{ padding: 8px; border-bottom: 1px solid var(--border); }}
+    #search-input {{
+      width: 100%;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text);
+      padding: 4px 8px;
+      font-size: 12px;
+      outline: none;
+    }}
+    #search-input:focus {{ border-color: var(--accent); }}
+    #run-list {{
+      flex: 1;
+      overflow-y: auto;
+      padding: 4px 0;
+    }}
+    .run-card {{
+      padding: 8px 12px;
+      cursor: pointer;
+      border-left: 3px solid transparent;
+      transition: background .1s, border-color .1s;
+    }}
+    .run-card:hover {{ background: var(--bg3); }}
+    .run-card.selected {{ background: var(--bg3); border-left-color: var(--accent); }}
+    .run-card .rc-req {{
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--text);
+    }}
+    .run-card .rc-meta {{
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-top: 3px;
+    }}
+    .run-card .rc-time {{ font-size: 10px; color: var(--muted); }}
+    /* ── Right panel: detail ────────────────────────────────── */
+    #detail-panel {{
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 20px;
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }}
+    #detail-empty {{
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 200px;
+      color: var(--muted);
+      font-size: 14px;
+    }}
+    /* ── Cards ───────────────────────────────────────────────── */
+    .card {{
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }}
+    .card h2 {{
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }}
+    /* ── Badges ──────────────────────────────────────────────── */
+    .badge {{
+      display: inline-block;
+      padding: 1px 7px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 600;
+      line-height: 18px;
+    }}
+    .badge-running  {{ background:#1a3a5c; color:#58a6ff; }}
+    .badge-starting {{ background:#1a3a5c; color:#58a6ff; }}
+    .badge-ok       {{ background:#122217; color:var(--ok); }}
+    .badge-err      {{ background:#2d1b1b; color:var(--err); }}
+    .badge-warn     {{ background:#2d2106; color:var(--warn); }}
+    .badge-other    {{ background:var(--bg3); color:var(--muted); }}
+    /* ── KV table ────────────────────────────────────────────── */
+    dl.kv {{ display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: 12px; }}
+    dl.kv dt {{ color: var(--muted); white-space: nowrap; }}
+    dl.kv dd {{ color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+    /* ── Timeline ────────────────────────────────────────────── */
+    #live-timeline {{ list-style: none; display: grid; gap: 4px; }}
+    #live-timeline li {{
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 8px;
+      background: var(--bg3);
+      border-radius: 5px;
+      font-size: 11px;
+      transition: background .3s;
+    }}
+    #live-timeline li.node-active {{
+      background: #1a2a3a;
+      border-left: 2px solid var(--accent);
+      animation: pulse 1.2s ease-in-out infinite;
+    }}
+    @keyframes pulse {{
+      0%, 100% {{ opacity: 1; }}
+      50%       {{ opacity: .65; }}
+    }}
+    .tl-dot {{
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--muted); flex-shrink: 0;
+      transition: background .3s;
+    }}
+    .tl-dot.active {{ background: var(--accent); }}
+    .tl-dot.ok     {{ background: var(--ok); }}
+    .tl-dot.err    {{ background: var(--err); }}
+    .ts {{ color: var(--muted); font-size: 10px; width: 52px; flex-shrink: 0; font-family: ui-monospace, monospace; }}
+    .tl-label {{ flex: 1; color: var(--text); }}
+    /* ── Lane indicator ──────────────────────────────────────── */
+    .lane-pill {{
+      font-size: 10px; font-weight: 600;
+      padding: 1px 7px; border-radius: 999px; text-transform: uppercase;
+    }}
+    .lane-interactive {{ background:#312e81; color:#a5b4fc; }}
+    .lane-deep_planning {{ background:#0c2e48; color:#7dd3fc; }}
+    .lane-recovery    {{ background:#422006; color:#fcd34d; }}
+    /* ── Tool list ───────────────────────────────────────────── */
+    .tool-list {{ list-style: none; display: grid; gap: 3px; }}
+    .tool-list li {{ display: flex; align-items: center; gap: 8px; font-size: 11px; padding: 3px 0; }}
+    /* ── Diff viewer ─────────────────────────────────────────── */
+    .diff-wrap {{ overflow-x: auto; }}
+    .diff-wrap pre {{
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 11px; line-height: 1.55;
+      margin: 0; padding: 10px 12px;
+      background: #0d1117; border-radius: 5px;
+      border: 1px solid var(--border);
+    }}
+    .diff-add    {{ color: #3fb950; display: block; }}
+    .diff-remove {{ color: #f85149; display: block; }}
+    .diff-hunk   {{ color: #8b949e; display: block; }}
+    /* ── Verifier panel ──────────────────────────────────────── */
+    #verifier-report {{
+      font-family: ui-monospace, monospace; font-size: 11px;
+      background: #0d1117; border-radius: 5px; padding: 10px;
+      border: 1px solid var(--border);
+      max-height: 260px; overflow: auto;
+    }}
+    /* ── Graph ───────────────────────────────────────────────── */
+    .mermaid-wrap {{
+      background: #0d1117; border-radius: 5px; padding: 12px;
+      border: 1px solid var(--border); overflow: auto;
+    }}
+    /* ── Approval banner ─────────────────────────────────────── */
+    #approval-banner {{
+      display: none;
+      background: #2d2106;
+      border: 1px solid var(--warn);
+      border-radius: 7px;
+      padding: 12px 16px;
+      gap: 12px;
+      align-items: center;
+    }}
+    #approval-banner.visible {{ display: flex; }}
+    #approval-banner .ab-text {{ flex: 1; font-size: 12px; color: var(--warn); }}
+    /* ── Logs ────────────────────────────────────────────────── */
+    #logs-pre {{
+      font-family: ui-monospace, monospace; font-size: 10px;
+      background: #0d1117; border-radius: 5px; padding: 8px 10px;
+      border: 1px solid var(--border);
+      max-height: 200px; overflow: auto;
+    }}
+    /* ── Final output ────────────────────────────────────────── */
+    #final-output {{
+      font-size: 13px; line-height: 1.65;
+      white-space: pre-wrap; word-break: break-word;
+    }}
+    /* ── Action bar ──────────────────────────────────────────── */
+    .action-bar {{ display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }}
+    /* ── Scrollbar ───────────────────────────────────────────── */
+    ::-webkit-scrollbar {{ width: 5px; height: 5px; }}
+    ::-webkit-scrollbar-track {{ background: var(--bg); }}
+    ::-webkit-scrollbar-thumb {{ background: var(--border); border-radius: 9px; }}
+  </style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<div id="topbar">
+  <div class="logo">Lu<span>la</span></div>
+  <form id="req-form" onsubmit="return false;">
+    <input id="req-input" type="text" placeholder="Describe a task for the agent…" autocomplete="off">
+    <button class="btn btn-primary" onclick="submitRun()">▶ Run</button>
+  </form>
+</div>
+
+<!-- MAIN LAYOUT -->
+<div id="layout">
+
+  <!-- LEFT: run list -->
+  <div id="list-panel">
+    <div id="search-wrap">
+      <input id="search-input" type="text" placeholder="Search runs…" oninput="filterList()">
+    </div>
+    <div id="run-list"></div>
+  </div>
+
+  <!-- RIGHT: detail -->
+  <div id="detail-panel">
+    <div id="detail-empty">Select a run or submit a request.</div>
+  </div>
+
+</div>
+
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+mermaid.initialize({{ startOnLoad: false, theme: 'dark', darkMode: true,
+  themeVariables: {{ background: '#0d1117', primaryColor: '#1f6feb',
+    edgeLabelBackground: '#161b22', nodeBorder: '#30363d', lineColor: '#8b949e' }} }});
+window._mermaid = mermaid;
+window._mermaidGraph = {repr(escaped_mermaid)};
+</script>
+
+<script>
+const API = {repr(safe_base)};
+
+// ── State ────────────────────────────────────────────────────
+let _runs = [];
+let _selected = null;
 let _listTimer = null;
 let _detailTimer = null;
-let _runs = [];
+let _activeSSE = null;
+let _searchQuery = '';
 
-function statusBadge(status) {
-  const cls = 'badge badge-' + (status || 'running');
-  return `<span class="${cls}">${esc(status || 'unknown')}</span>`;
-}
-
-function esc(s) {
-  if (s === null || s === undefined) return '';
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-function fmtTime(iso) {
+// ── Utilities ────────────────────────────────────────────────
+function esc(s) {{
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}}
+function statusBadge(s) {{
+  const cls = s === 'succeeded' ? 'ok' : s === 'failed' ? 'err'
+            : s === 'running' || s === 'starting' ? 'running'
+            : s === 'cancelled' || s === 'cancelling' ? 'warn' : 'other';
+  return `<span class="badge badge-${{cls}}">${{esc(s ?? '?')}}</span>`;
+}}
+function lanePill(lane) {{
+  if (!lane) return '';
+  return `<span class="lane-pill lane-${{esc(lane)}}">${{esc(lane)}}</span>`;
+}}
+function fmtTime(iso) {{
   if (!iso) return '';
-  try { return new Date(iso).toLocaleTimeString(); } catch { return iso; }
-}
+  try {{ return new Date(iso).toLocaleTimeString(); }} catch {{ return iso; }}
+}}
+function isInProgress(s) {{
+  return s === 'running' || s === 'starting' || s === 'cancelling';
+}}
 
-function renderRunCard(run) {
-  const sel = run.run_id === _selectedRunId ? ' selected' : '';
-  const req = (run.request || '').slice(0, 60);
-  return `<div class="run-card${sel}" data-id="${esc(run.run_id)}" onclick="selectRun('${esc(run.run_id)}')">
-    <div class="run-id">${esc(run.run_id.slice(0, 16))}</div>
-    <div class="run-req">${esc(req)}</div>
-    <div class="run-meta">${statusBadge(run.status)}<span>${fmtTime(run.created_at)}</span></div>
-  </div>`;
-}
-
-function renderList(runs) {
-  const el = document.getElementById('run-list');
-  el.innerHTML = runs.map(renderRunCard).join('');
-}
-
-function anyInProgress(runs) {
-  return runs.some(r => r.status === 'running' || r.status === 'starting' || r.status === 'cancelling');
-}
-
-async function fetchList() {
-  try {
-    const res = await fetch(API + '/v1/runs');
+// ── Run list ─────────────────────────────────────────────────
+async function fetchList() {{
+  try {{
+    const res = await fetch(API + '/v1/runs', {{ headers: bearerHeaders() }});
     if (!res.ok) return;
     const data = await res.json();
-    _runs = data.runs || [];
-    renderList(_runs);
-  } catch {}
-  if (anyInProgress(_runs)) {
+    _runs = (data.runs || []).reverse();
+    renderList();
+  }} catch {{}}
+  if (_runs.some(r => isInProgress(r.status))) {{
     _listTimer = setTimeout(fetchList, 2000);
-  } else {
+  }} else {{
     _listTimer = null;
-  }
-}
+  }}
+}}
 
-function scheduleList() {
-  if (_listTimer) clearTimeout(_listTimer);
-  fetchList();
-}
+function filterList() {{
+  _searchQuery = document.getElementById('search-input').value.toLowerCase();
+  renderList();
+}}
 
-function selectRun(runId) {
-  _selectedRunId = runId;
-  document.querySelectorAll('.run-card').forEach(el => {
-    el.classList.toggle('selected', el.dataset.id === runId);
-  });
-  if (_detailTimer) { clearTimeout(_detailTimer); _detailTimer = null; }
-  loadDetail(runId);
-}
+function renderList() {{
+  const q = _searchQuery;
+  const filtered = q ? _runs.filter(r =>
+    (r.request || '').toLowerCase().includes(q) ||
+    (r.run_id || '').includes(q) ||
+    (r.status || '').includes(q)
+  ) : _runs;
+  const container = document.getElementById('run-list');
+  container.innerHTML = filtered.map(r => {{
+    const sel = _selected === r.run_id ? ' selected' : '';
+    const reqSnip = (r.request || '').slice(0, 80);
+    return `<div class="run-card${{sel}}" data-id="${{esc(r.run_id)}}" onclick="selectRun('${{esc(r.run_id)}}')">
+      <div class="rc-req" title="${{esc(r.request)}}">${{esc(reqSnip)}}</div>
+      <div class="rc-meta">${{statusBadge(r.status)}}<span class="rc-time">${{fmtTime(r.created_at)}}</span></div>
+    </div>`;
+  }}).join('');
+}}
 
-function renderDiff(patch) {
-  if (!patch) return '';
-  const lines = patch.split('\n').map(line => {
-    if (line.startsWith('@@')) return `<span class="diff-hunk">${esc(line)}</span>`;
-    if (line.startsWith('+')) return `<span class="diff-add">${esc(line)}</span>`;
-    if (line.startsWith('-')) return `<span class="diff-remove">${esc(line)}</span>`;
-    return esc(line);
-  });
-  return `<pre>${lines.join('\n')}</pre>`;
-}
+// ── Run selection + SSE detail ───────────────────────────────
+function selectRun(runId) {{
+  _selected = runId;
+  // Close any previous SSE stream
+  if (_activeSSE) {{ _activeSSE.close(); _activeSSE = null; }}
+  if (_detailTimer) {{ clearTimeout(_detailTimer); _detailTimer = null; }}
+  renderList();
+  openSSEStream(runId);
+}}
 
-function extractDiffs(toolResults) {
-  const patches = [];
-  for (const r of toolResults || []) {
-    if (r.tool === 'apply_patch' && r.ok) {
-      const inp = r.input || {};
-      if (inp.patch) patches.push(inp.patch);
-      if (Array.isArray(inp.changes)) {
-        for (const c of inp.changes) { if (c.patch) patches.push(c.patch); }
-      }
-    }
-  }
-  return patches;
-}
+function openSSEStream(runId) {{
+  const url = API + '/v1/runs/' + encodeURIComponent(runId) + '/stream';
+  const es = new EventSource(url);
+  _activeSSE = es;
+  es.onmessage = (ev) => {{
+    try {{
+      const run = JSON.parse(ev.data);
+      if (run.error) {{ renderDetail(null, runId); es.close(); return; }}
+      renderDetail(run, runId);
+      renderList(); // update badge in sidebar
+      if (run.finished_at) {{ es.close(); _activeSSE = null; }}
+    }} catch {{}}
+  }};
+  es.addEventListener('done', () => {{ es.close(); _activeSSE = null; }});
+  es.onerror = () => {{
+    es.close(); _activeSSE = null;
+    // Fall back to one-shot fetch
+    loadDetailOnce(runId);
+  }};
+}}
 
-function renderDetail(run) {
-  if (!run) { document.getElementById('detail-panel').innerHTML = '<div id="detail-empty">Run not found.</div>'; return; }
-  const cancellable = run.cancellable;
-  const inProgress = run.status === 'running' || run.status === 'starting' || run.status === 'cancelling';
-  let html = `<div class="action-bar">
-    <button class="btn" onclick="loadLogs('${esc(run.run_id)}')">View Logs</button>
-    ${cancellable ? `<button class="btn btn-danger" onclick="cancelRun('${esc(run.run_id)}')">Cancel</button>` : ''}
+async function loadDetailOnce(runId) {{
+  try {{
+    const res = await fetch(API + '/v1/runs/' + encodeURIComponent(runId), {{ headers: bearerHeaders() }});
+    if (res.ok) renderDetail(await res.json(), runId);
+  }} catch {{}}
+}}
+
+// ── Detail renderer ──────────────────────────────────────────
+function renderDetail(run, runId) {{
+  const panel = document.getElementById('detail-panel');
+  if (!run) {{
+    panel.innerHTML = '<div id="detail-empty">Run not found.</div>';
+    return;
+  }}
+
+  const inProgress = isInProgress(run.status);
+  let html = '';
+
+  // Action bar
+  html += `<div class="action-bar">
+    ${{run.cancellable ? `<button class="btn btn-danger" onclick="cancelRun('${{esc(run.run_id)}}')">✕ Cancel</button>` : ''}}
+    <button class="btn" onclick="loadLogs('${{esc(run.run_id)}}')">Show Logs</button>
   </div>`;
 
-  html += `<div class="card"><h2>Run Info</h2><dl class="kv">
-    <dt>run_id</dt><dd>${esc(run.run_id)}</dd>
-    <dt>status</dt><dd>${statusBadge(run.status)}</dd>
-    <dt>request</dt><dd>${esc(run.request)}</dd>
-    <dt>intent</dt><dd>${esc(run.intent || '(pending)')}</dd>
-    <dt>exit_code</dt><dd>${run.exit_code !== null && run.exit_code !== undefined ? esc(String(run.exit_code)) : '—'}</dd>
-    <dt>trace_path</dt><dd>${esc(run.trace_path || '')}</dd>
-    <dt>created_at</dt><dd>${esc(run.created_at || '')}</dd>
+  // Approval banner
+  if (run.pending_approval) {{
+    html += `<div id="approval-banner" class="visible">
+      <div class="ab-text">⚠ Pending approval: ${{esc(run.pending_approval_summary || 'mutation plan awaiting approval')}}</div>
+      <button class="btn" onclick="approveMutation()">✓ Approve</button>
+      <button class="btn btn-danger" onclick="rejectMutation()">✕ Reject</button>
+    </div>`;
+  }}
+
+  // Run info
+  const t = (run.trace && (run.trace.state || run.trace)) || {{}};
+  const route = t.route || {{}};
+  const intent = (t.intent || run.intent || '').trim();
+  const lane = (route.lane || '').trim();
+  html += `<div class="card"><h2>Run</h2><dl class="kv">
+    <dt>status</dt><dd>${{statusBadge(run.status)}} ${{inProgress ? '<span style="color:var(--muted);font-size:10px">live</span>' : ''}}</dd>
+    <dt>request</dt><dd title="${{esc(run.request)}}">${{esc((run.request || '').slice(0,120))}}</dd>
+    <dt>intent</dt><dd>${{esc(intent || '—')}} ${{lanePill(lane)}}</dd>
+    <dt>run_id</dt><dd style="font-family:ui-monospace;font-size:10px">${{esc(run.run_id)}}</dd>
+    <dt>started</dt><dd>${{fmtTime(run.started_at)}}</dd>
+    ${{run.finished_at ? `<dt>finished</dt><dd>${{fmtTime(run.finished_at)}}</dd>` : ''}}
+    ${{run.exit_code != null ? `<dt>exit_code</dt><dd>${{esc(String(run.exit_code))}}</dd>` : ''}}
   </dl></div>`;
 
-  if (run.trace_ready && run.trace) {
-    const t = run.trace;
-    const state = t.state || t;
-    const events = (state.events || []).slice(-20);
-    const tools = (state.tool_results || []).slice(-20);
-    const finalOut = state.final || t.final || '';
+  // Final output
+  const finalOut = (t.final || '').trim();
+  if (finalOut || !inProgress) {{
+    html += `<div class="card"><h2>Final Output</h2>
+      <div id="final-output">${{esc(finalOut || '(no output yet)')}}</div>
+    </div>`;
+  }}
 
-    if (finalOut) {
-      html += `<div class="card"><h2>Final Output</h2><pre>${esc(finalOut)}</pre></div>`;
-    }
+  // Live timeline
+  const events = (t.events || []).slice(-40);
+  if (events.length || inProgress) {{
+    const startMs = events[0]?.ts_ms || 0;
+    const items = events.map(ev => {{
+      const d = ((ev.ts_ms || startMs) - startMs) / 1000;
+      const data = ev.data || {{}};
+      const name = data.name || '';
+      const phase = data.phase || '';
+      const label = [ev.kind, name, phase].filter(Boolean).join(' / ');
+      const isActive = inProgress && phase === 'start' && events[events.length - 1] === ev;
+      const dotCls = isActive ? 'active' : (data.ok === false ? 'err' : (data.ok === true ? 'ok' : ''));
+      const liCls = isActive ? ' node-active' : '';
+      return `<li class="${{liCls}}">
+        <span class="tl-dot ${{dotCls}}"></span>
+        <span class="ts">+${{d.toFixed(2)}}s</span>
+        <span class="tl-label">${{esc(label)}}</span>
+      </li>`;
+    }}).join('');
+    html += `<div class="card"><h2>Timeline${{inProgress ? ' <span style="color:var(--accent);font-size:10px">● live</span>' : ''}}</h2>
+      <ul id="live-timeline">${{items || '<li><span class="tl-dot"></span><span class="tl-label" style="color:var(--muted)">Waiting…</span></li>'}}</ul>
+    </div>`;
+  }}
 
-    if (events.length) {
-      const startMs = events[0].ts_ms || 0;
-      const items = events.map(e => {
-        const delta = ((e.ts_ms || startMs) - startMs) / 1000;
-        return `<li><span class="ts">+${delta.toFixed(2)}s</span><span>${esc(e.kind || 'event')}</span></li>`;
-      }).join('');
-      html += `<div class="card"><h2>Timeline</h2><ul class="timeline-list">${items}</ul></div>`;
-    }
+  // Tool results
+  const tools = (t.tool_results || []).slice(-30);
+  if (tools.length) {{
+    const items = tools.map(r => {{
+      const ok = r.ok;
+      const dot = `<span class="tl-dot ${{ok ? 'ok' : 'err'}}"></span>`;
+      const label = r.tool || 'unknown';
+      const exit = r.exit_code != null ? ` (exit ${{r.exit_code}})` : '';
+      return `<li>${{dot}}<span>${{esc(label + exit)}}</span></li>`;
+    }}).join('');
+    html += `<div class="card"><h2>Tools (${{tools.length}})</h2><ul class="tool-list">${{items}}</ul></div>`;
+  }}
 
-    if (tools.length) {
-      const items = tools.map(r => {
-        const badge = r.ok ? '<span class="badge badge-ok">OK</span>' : '<span class="badge badge-err">ERR</span>';
-        return `<li>${badge}<span>${esc(r.tool || 'unknown')}</span></li>`;
-      }).join('');
-      html += `<div class="card"><h2>Tool Results</h2><ul class="tool-list">${items}</ul></div>`;
-    }
+  // Inline diffs
+  const diffs = extractDiffs(t.tool_results || []);
+  if (diffs.length) {{
+    const diffHtml = diffs.map(p => renderDiff(p)).join('<hr style="border-color:var(--border);margin:6px 0">');
+    html += `<div class="card"><h2>Patches</h2><div class="diff-wrap">${{diffHtml}}</div></div>`;
+  }}
 
-    const diffs = extractDiffs(state.tool_results || t.tool_results || []);
-    if (diffs.length) {
-      const diffHtml = diffs.map(p => renderDiff(p)).join('<hr style="border-color:#1f2937;margin:8px 0;">');
-      html += `<div class="card"><h2>Inline Diff</h2>${diffHtml}</div>`;
-    }
-  }
+  // Verifier report
+  const ver = t.verification || run.verification;
+  if (ver) {{
+    const verOk = ver.ok;
+    const cls = verOk ? 'ok' : 'err';
+    html += `<div class="card"><h2>Verifier ${{statusBadge(verOk ? 'succeeded' : 'failed')}}</h2>
+      <pre id="verifier-report">${{esc(JSON.stringify(ver, null, 2))}}</pre>
+    </div>`;
+  }}
 
-  if (window.mermaidGraph) {
-      html += `<div class="card"><h2>Graph</h2><pre class="mermaid">${esc(window.mermaidGraph)}</pre></div>`;
-  }
+  // Graph
+  if (window._mermaidGraph) {{
+    html += `<div class="card"><h2>Graph</h2>
+      <div class="mermaid-wrap">
+        <div class="mermaid" id="mermaid-diagram">${{esc(window._mermaidGraph)}}</div>
+      </div>
+    </div>`;
+  }}
 
   html += `<div id="logs-section"></div>`;
-  document.getElementById('detail-panel').innerHTML = html;
-  
-  if (window.mermaid) {
-      setTimeout(() => window.mermaid.run(), 50);
-  }
+  panel.innerHTML = html;
 
-  if (inProgress) {
-    _detailTimer = setTimeout(() => loadDetail(run.run_id), 2000);
-  }
-}
+  // Render mermaid + highlight active node
+  if (window._mermaid && window._mermaidGraph) {{
+    window._mermaid.run({{ nodes: [document.getElementById('mermaid-diagram')] }})
+      .catch(() => {{}})
+      .then(() => {{
+        if (lane) highlightLane(lane);
+        const lastNode = (events.filter(e => e.data?.phase === 'start').slice(-1)[0]?.data?.name || '');
+        if (lastNode) highlightNode(lastNode);
+      }});
+  }}
+}}
 
-async function loadDetail(runId) {
-  try {
-    const res = await fetch(API + '/v1/runs/' + encodeURIComponent(runId));
-    if (!res.ok) { renderDetail(null); return; }
-    const run = await res.json();
-    renderDetail(run);
-    // refresh list too
-    scheduleList();
-  } catch { renderDetail(null); }
-}
+// ── Mermaid helpers ──────────────────────────────────────────
+function highlightNode(nodeName) {{
+  document.querySelectorAll('#mermaid-diagram .node').forEach(el => {{
+    const label = el.querySelector('.label');
+    if (label && label.textContent.trim() === nodeName) {{
+      el.style.filter = 'drop-shadow(0 0 6px #58a6ff)';
+    }}
+  }});
+}}
+function highlightLane(lane) {{
+  // Colour the background of the diagram wrapper by lane
+  const colors = {{ interactive: '#1a1a3a', deep_planning: '#0a1e2a', recovery: '#1a1000' }};
+  const wrap = document.querySelector('.mermaid-wrap');
+  if (wrap && colors[lane]) wrap.style.background = colors[lane];
+}}
 
-async function loadLogs(runId) {
-  try {
-    const res = await fetch(API + '/v1/runs/' + encodeURIComponent(runId) + '/logs');
+// ── Diff renderer ────────────────────────────────────────────
+function extractDiffs(toolResults) {{
+  const patches = [];
+  for (const r of toolResults || []) {{
+    if (r.tool === 'apply_patch' && r.ok) {{
+      const inp = r.input || {{}};
+      if (inp.patch) patches.push(inp.patch);
+      if (Array.isArray(inp.changes)) {{
+        for (const c of inp.changes) {{ if (c.patch) patches.push(c.patch); }}
+      }}
+    }}
+  }}
+  return patches;
+}}
+function renderDiff(patch) {{
+  if (!patch) return '';
+  const lines = patch.split('\\n').map(line => {{
+    if (line.startsWith('@@'))  return `<span class="diff-hunk">${{esc(line)}}</span>`;
+    if (line.startsWith('+'))   return `<span class="diff-add">${{esc(line)}}</span>`;
+    if (line.startsWith('-'))   return `<span class="diff-remove">${{esc(line)}}</span>`;
+    return esc(line);
+  }});
+  return `<pre>${{lines.join('\\n')}}</pre>`;
+}}
+
+// ── Logs ─────────────────────────────────────────────────────
+async function loadLogs(runId) {{
+  try {{
+    const res = await fetch(API + '/v1/runs/' + encodeURIComponent(runId) + '/logs', {{ headers: bearerHeaders() }});
     if (!res.ok) return;
     const data = await res.json();
     const sec = document.getElementById('logs-section');
-    if (sec) {
-      sec.innerHTML = `<div class="card"><h2>Logs</h2><pre>${esc((data.logs || []).join('\n'))}</pre></div>`;
-    }
-  } catch {}
-}
+    if (sec) {{
+      sec.innerHTML = `<div class="card"><h2>Logs</h2><pre id="logs-pre">${{esc((data.logs || []).join('\\n'))}}</pre></div>`;
+    }}
+  }} catch {{}}
+}}
 
-async function cancelRun(runId) {
-  try {
-    await fetch(API + '/v1/runs/' + encodeURIComponent(runId) + '/cancel', { method: 'POST' });
-    loadDetail(runId);
-    scheduleList();
-  } catch {}
-}
+// ── Actions ──────────────────────────────────────────────────
+async function cancelRun(runId) {{
+  try {{
+    await fetch(API + '/v1/runs/' + encodeURIComponent(runId) + '/cancel',
+      {{ method: 'POST', headers: bearerHeaders() }});
+    fetchList();
+  }} catch {{}}
+}}
 
-document.getElementById('submit-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
+async function submitRun() {{
   const input = document.getElementById('req-input');
   const req = input.value.trim();
   if (!req) return;
   input.value = '';
-  try {
-    const res = await fetch(API + '/v1/runs', {
+  try {{
+    const res = await fetch(API + '/v1/runs', {{
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ request: req }),
-    });
+      headers: {{ 'Content-Type': 'application/json', ...bearerHeaders() }},
+      body: JSON.stringify({{ request: req }}),
+    }});
     if (!res.ok) return;
     const run = await res.json();
-    scheduleList();
-    if (run.run_id) {
-      setTimeout(() => selectRun(run.run_id), 200);
-    }
-  } catch {}
-});
+    _runs.unshift(run);
+    renderList();
+    if (run.run_id) setTimeout(() => selectRun(run.run_id), 100);
+    if (_listTimer) clearTimeout(_listTimer);
+    _listTimer = setTimeout(fetchList, 2000);
+  }} catch {{}}
+}}
 
-scheduleList();
-""",
-            "</script>\n",
-            "</body>\n",
-            "</html>\n",
-        ]
-    )
+function approveMutation() {{ console.log('approve'); /* TODO: wire to approval token API */ }}
+function rejectMutation() {{  console.log('reject'); }}
 
-    if mermaid_script:
-        return html_str.replace("</body>\n", f"{mermaid_script}\n</body>\n")
-    return html_str
+// ── Auth ─────────────────────────────────────────────────────
+function bearerHeaders() {{
+  const tok = (window._bearerToken || '').trim();
+  return tok ? {{ Authorization: 'Bearer ' + tok }} : {{}};
+}}
+// Expose for devtools: window._bearerToken = 'your-token'
+
+// ── Bootstrap ────────────────────────────────────────────────
+window.selectRun = selectRun;
+window.cancelRun = cancelRun;
+window.loadLogs = loadLogs;
+window.submitRun = submitRun;
+window.approveMutation = approveMutation;
+window.rejectMutation = rejectMutation;
+window.filterList = filterList;
+
+document.getElementById('req-input').addEventListener('keydown', e => {{
+  if (e.key === 'Enter') submitRun();
+}});
+
+fetchList();
+</script>
+</body>
+</html>"""

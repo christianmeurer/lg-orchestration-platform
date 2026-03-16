@@ -239,15 +239,35 @@ def _planner_model_output(
     if schema_text:
         user_prompt = f"{user_prompt}\nschema:\n{schema_text}"
 
+    lane = str(route_decision.get("lane", "deep_planning")).strip()
     client = InferenceClient(base_url=base_url, api_key=api_key, timeout_s=timeout_s)
     try:
-        response = client.chat_completion(
-            model=model,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            temperature=max(0.0, min(temperature, 1.0)),
-            max_tokens=1400,
-        )
+        if lane == "interactive":
+            # Interactive lane: stream tokens for low perceived latency.
+            try:
+                response = client.chat_completion_stream_sync(
+                    model=model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    temperature=max(0.0, min(temperature, 1.0)),
+                    max_tokens=1400,
+                )
+            except Exception:
+                response = client.chat_completion(
+                    model=model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    temperature=max(0.0, min(temperature, 1.0)),
+                    max_tokens=1400,
+                )
+        else:
+            response = client.chat_completion(
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=max(0.0, min(temperature, 1.0)),
+                max_tokens=1400,
+            )
     finally:
         client.close()
 

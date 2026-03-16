@@ -1,21 +1,141 @@
 {
-  "id": "real-world-repair-001",
-  "request": "The function `approx_token_count` in py/src/lg_orch/memory.py returns 0 for an empty string. Add a guard so that empty input always returns 0 without dividing, and add a check that a single space character returns at least 1. Write the fix and verify it with pytest.",
-  "expected_intent": "code_change",
-  "expected_halt_reason": "",
-  "require_final": true,
-  "expected_acceptance_ok": true,
-  "budget_max_loops": 3,
-  "expected_recovery_packet_present": false,
-  "description": "Real-world repair benchmark: fix a known edge-case in memory.approx_token_count. Measures whether the agent can (1) locate the function, (2) apply a minimal correct patch, and (3) pass verification in ≤3 loops. Pass rate on this task is the primary outcome quality metric.",
-  "acceptance_criteria": [
-    "approx_token_count('') == 0",
-    "approx_token_count(' ') >= 1",
-    "all existing memory tests still pass"
-  ],
-  "expected_tool_calls": ["read_file", "apply_patch", "exec"],
-  "benchmark_class": "real_world_repair",
-  "difficulty": "easy",
-  "target_file": "py/src/lg_orch/memory.py",
-  "target_function": "approx_token_count"
+  "description": "Ten curated bug-fix tasks to measure agent correctness (pass rate) rather than only structural behavior.",
+  "schema_version": 1,
+  "tasks": [
+    {
+      "id": "repair-001",
+      "category": "off-by-one",
+      "request": "The function slice_tokens in py/src/lg_orch/memory.py uses integer division to estimate token count. When the input text is exactly 4 characters long the result is 1, but when it is 3 characters it returns 0 even though there is content. Fix approx_token_count so that any non-empty string returns at least 1.",
+      "expected_tool": "apply_patch",
+      "acceptance_criteria": [
+        "approx_token_count('abc') returns 1",
+        "approx_token_count('') returns 0",
+        "approx_token_count('abcd') returns 1"
+      ],
+      "verification_commands": [
+        {"tool": "exec", "input": {"cmd": "python", "args": ["-c", "import sys; sys.path.insert(0,'py/src'); from lg_orch.memory import approx_token_count; assert approx_token_count('abc')==1 and approx_token_count('')==0, 'FAIL'"]}}
+      ]
+    },
+    {
+      "id": "repair-002",
+      "category": "null-safety",
+      "request": "In py/src/lg_orch/nodes/reporter.py the _get_inference_config function calls str(oc_cfg.get('api_key', '')).strip() which converts None to 'None' when the key exists but has a null value. Fix this to treat None the same as a missing key (return empty string).",
+      "expected_tool": "apply_patch",
+      "acceptance_criteria": [
+        "api_key of None is treated as empty string",
+        "api_key of '' is treated as empty string",
+        "api_key of 'sk-abc' is preserved as 'sk-abc'"
+      ],
+      "verification_commands": [
+        {"tool": "exec", "input": {"cmd": "uv", "args": ["run", "pytest", "py/tests/test_reporter.py", "-x", "-q"], "cwd": "py"}}
+      ]
+    },
+    {
+      "id": "repair-003",
+      "category": "config-validation",
+      "request": "configs/runtime.dev.toml is missing the [vericoding] section. Add it with enabled = false and extensions = [\".rs\"] so that load_config does not fall back to a hardcoded default and all profiles are consistent.",
+      "expected_tool": "apply_patch",
+      "acceptance_criteria": [
+        "runtime.dev.toml contains [vericoding]",
+        "vericoding.enabled is false in dev config",
+        "load_config succeeds for dev profile"
+      ],
+      "verification_commands": [
+        {"tool": "exec", "input": {"cmd": "python", "args": ["-c", "import sys,os; sys.path.insert(0,'py/src'); os.environ['LG_PROFILE']='dev'; from pathlib import Path; from lg_orch.config import load_config; cfg=load_config(repo_root=Path('.')); assert cfg.vericoding is not None, 'FAIL'"]}}
+      ]
+    },
+    {
+      "id": "repair-004",
+      "category": "missing-test",
+      "request": "There is no test for the LG_RUNNER_BASE_URL environment variable override added to py/src/lg_orch/config.py. Add a test to py/tests/test_config.py that sets LG_RUNNER_BASE_URL to 'http://external:9000' and asserts that load_config returns that URL as runner.base_url.",
+      "expected_tool": "apply_patch",
+      "acceptance_criteria": [
+        "test_config.py contains a test for LG_RUNNER_BASE_URL",
+        "The test passes when the env var is set",
+        "The test confirms runner.base_url matches the env override"
+      ],
+      "verification_commands": [
+        {"tool": "exec", "input": {"cmd": "uv", "args": ["run", "pytest", "py/tests/test_config.py", "-k", "runner_base_url", "-x", "-q"], "cwd": "py"}}
+      ]
+    },
+    {
+      "id": "repair-005",
+      "category": "edge-case",
+      "request": "The stable_checkpoint_thread_id function in py/src/lg_orch/checkpointing.py strips whitespace from the provided thread_id but does not validate it further. If the provided value is only whitespace it falls through to the generated ID. Add a test that confirms a whitespace-only provided value is treated as missing and the function generates a deterministic ID instead.",
+      "expected_tool": "apply_patch",
+      "acceptance_criteria": [
+        "stable_checkpoint_thread_id with provided='   ' generates a deterministic ID",
+        "Generated ID starts with the thread_prefix"
+      ],
+      "verification_commands": [
+        {"tool": "exec", "input": {"cmd": "uv", "args": ["run", "pytest", "py/tests/test_checkpointing.py", "-x", "-q"], "cwd": "py"}}
+      ]
+    },
+    {
+      "id": "repair-006",
+      "category": "type-safety",
+      "request": "In py/src/lg_orch/policy.py the enforce_loop_budget function reads current_loop from budgets dict. If budgets contains a float (e.g. 1.5) the coerce function rounds it down. Add a test confirming that a float value of 1.5 is treated as 1 and does not cause a TypeError.",
+      "expected_tool": "apply_patch",
+      "acceptance_criteria": [
+        "enforce_loop_budget with budgets={'max_loops':3,'current_loop':1.5} does not raise",
+        "The result treats current_loop as 1"
+      ],
+      "verification_commands": [
+        {"tool": "exec", "input": {"cmd": "uv", "args": ["run", "pytest", "py/tests/test_policy.py", "-x", "-q"], "cwd": "py"}}
+      ]
+    },
+    {
+      "id": "repair-007",
+      "category": "regression",
+      "request": "The route_after_verifier function in py/src/lg_orch/graph.py reads state.get('verification', {}).get('ok') but VerifierReport serialises to a dict with the key 'ok'. Add a test that passes a VerifierReport with ok=True and confirms the router returns 'reporter', and ok=False returns 'policy_gate'.",
+      "expected_tool": "apply_patch",
+      "acceptance_criteria": [
+        "route_after_verifier({'verification': {'ok': True}}) == 'reporter'",
+        "route_after_verifier({'verification': {'ok': False}}) == 'policy_gate'",
+        "route_after_verifier({}) == 'policy_gate'"
+      ],
+      "verification_commands": [
+        {"tool": "exec", "input": {"cmd": "uv", "args": ["run", "pytest", "py/tests/test_graph.py", "-x", "-q"], "cwd": "py"}}
+      ]
+    },
+    {
+      "id": "repair-008",
+      "category": "data-model",
+      "request": "The __all__ list in py/src/lg_orch/memory.py includes 'ensure_history_policy' but a ruff --select F401 pass would flag that the symbol is used internally and not really needed in __all__. Verify the export list is correct and that importing all symbols via 'from lg_orch.memory import *' works without NameError.",
+      "expected_tool": "exec",
+      "acceptance_criteria": [
+        "from lg_orch.memory import * does not raise NameError",
+        "All symbols in __all__ are defined in the module"
+      ],
+      "verification_commands": [
+        {"tool": "exec", "input": {"cmd": "python", "args": ["-c", "import sys; sys.path.insert(0,'py/src'); from lg_orch.memory import *; print('ok')"]}}
+      ]
+    },
+    {
+      "id": "repair-009",
+      "category": "concurrency",
+      "request": "The _CircuitBreaker in py/src/lg_orch/tools/inference_client.py uses a threading.Lock. Add a test that runs 50 concurrent threads each calling allow_request() and record_failure() and asserts no exceptions are raised (thread-safety smoke test).",
+      "expected_tool": "apply_patch",
+      "acceptance_criteria": [
+        "50 concurrent threads can call allow_request and record_failure without errors",
+        "The circuit breaker opens after >= 5 failures"
+      ],
+      "verification_commands": [
+        {"tool": "exec", "input": {"cmd": "uv", "args": ["run", "pytest", "py/tests/test_inference_client.py", "-x", "-q"], "cwd": "py"}}
+      ]
+    },
+    {
+      "id": "repair-010",
+      "category": "integration",
+      "request": "The streaming_sync wrapper chat_completion_stream_sync in py/src/lg_orch/tools/inference_client.py swallows StreamError and falls back to chat_completion. Add a unit test that mocks chat_completion_stream to raise RuntimeError and asserts that chat_completion_stream_sync calls the blocking fallback instead of propagating the error.",
+      "expected_tool": "apply_patch",
+      "acceptance_criteria": [
+        "chat_completion_stream_sync falls back to chat_completion on stream error",
+        "The fallback result text is returned correctly"
+      ],
+      "verification_commands": [
+        {"tool": "exec", "input": {"cmd": "uv", "args": ["run", "pytest", "py/tests/test_inference_client_stream.py", "-x", "-q"], "cwd": "py"}}
+      ]
+    }
+  ]
 }

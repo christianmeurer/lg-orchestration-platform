@@ -528,6 +528,58 @@ class RemoteAPIService:
             "cancellable": record.finished_at is None and not record.cancel_requested,
         }
 
+    def stream_run_sse(self, run_id: str, wfile: Any) -> None:
+        """Write Server-Sent Events for a run to wfile until the run finishes.
+
+        Each SSE event carries the full current run payload as JSON.
+        Polls at 600 ms. Terminates when finished_at is set or the run is
+        not found. The caller is responsible for writing the HTTP headers.
+        """
+        POLL_INTERVAL = 0.6
+        MAX_EVENTS = 600  # 6 minutes ceiling
+        seen_log_lines = 0
+        for _ in range(MAX_EVENTS):
+            with self._lock:
+                record = self._runs.get(run_id)
+                if record is None:
+                    payload = None
+                else:
+                    self._refresh_record_locked(record)
+                    summary = self._summary_payload_locked(record)
+                    trace = self._load_trace(record.trace_path)
+                    new_logs = record.logs[seen_log_lines:]
+                    seen_log_lines = len(record.logs)
+                    payload = {
+                        **summary,
+                        "log_lines": len(record.logs),
+                        "new_log_lines": new_logs,
+                        "trace_ready": trace is not None,
+                        "trace": trace,
+                    }
+            if payload is None:
+                data = json.dumps({"error": "not_found", "run_id": run_id})
+                try:
+                    wfile.write(f"data: {data}\n\n".encode("utf-8"))
+                    wfile.flush()
+                except OSError:
+                    return
+                return
+            data = json.dumps(payload, ensure_ascii=False)
+            try:
+                wfile.write(f"data: {data}\n\n".encode("utf-8"))
+                wfile.flush()
+            except OSError:
+                return
+            if payload.get("finished_at") is not None:
+                # Send a final `done` event so the client can close cleanly
+                try:
+                    wfile.write(b"event: done\ndata: {}\n\n")
+                    wfile.flush()
+                except OSError:
+                    pass
+                return
+            time.sleep(POLL_INTERVAL)
+
     def _load_trace(self, trace_path: Path) -> dict[str, Any] | None:
         if not trace_path.is_file():
             return None
@@ -633,6 +685,11 @@ def _api_http_response(
             return _json_response(404, {"error": "not_found", "run_id": run_id})
         return _json_response(202, payload)
 
+    if len(path_parts) == 4 and path_parts[:2] == ["v1", "runs"] and path_parts[3] == "stream":
+        # SSE streaming — handled in the HTTP layer, not here.
+        # Return sentinel (-1) so the HTTP handler can call stream_run_sse().
+        return -1, "sse", path_parts[2].encode("utf-8")
+
     if len(path_parts) == 3 and path_parts[:2] == ["v1", "runs"]:
         if method != "GET":
             return _json_response(405, {"error": "method_not_allowed"})
@@ -721,6 +778,19 @@ def serve_remote_api(*, repo_root: Path, host: str, port: int) -> int:
                     error=str(exc),
                 )
                 status, content_type, body = _json_response(500, {"error": "internal_server_error"})
+
+            # SSE sentinel: stream run events rather than a normal HTTP response.
+            if status == -1 and content_type == "sse":
+                sse_run_id = body.decode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Accel-Buffering", "no")
+                self.send_header(_REQUEST_ID_HEADER, request_id)
+                self.end_headers()
+                service.stream_run_sse(sse_run_id, self.wfile)
+                return
+
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))

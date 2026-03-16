@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import threading
 import time
@@ -262,6 +263,61 @@ class InferenceClient:
             headers=headers,
         )
 
+
+    def chat_completion_stream_sync(
+        self,
+        *,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float,
+        max_tokens: int = 1200,
+    ) -> InferenceResponse:
+        """Blocking wrapper around chat_completion_stream for use in sync graph nodes.
+
+        Runs the async SSE stream in a dedicated event loop on a thread pool executor
+        so it is safe to call from both sync contexts and threads that may already
+        have a running event loop (e.g. LangGraph internal thread).  Falls back to
+        chat_completion if streaming fails.
+        """
+        started = time.perf_counter()
+        breaker = _get_breaker(self.base_url)
+        if not breaker.allow_request():
+            raise RuntimeError("circuit_open")
+
+        async def _run() -> str:
+            tokens: list[str] = []
+            async for token in self.chat_completion_stream(
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            ):
+                tokens.append(token)
+            return "".join(tokens)
+
+        try:
+            # Run in a fresh event loop on a background thread to avoid
+            # "event loop already running" issues inside LangGraph.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(asyncio.run, _run())
+                text = future.result()
+            breaker.record_success()
+        except Exception:
+            breaker.record_failure()
+            raise
+
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        return InferenceResponse(
+            text=text,
+            latency_ms=latency_ms,
+            provider="",
+            model=model,
+            usage=None,
+            cache_metadata=None,
+            headers=None,
+        )
 
     async def chat_completion_stream(
         self,
