@@ -149,15 +149,25 @@ deploy_app_platform() {
 
   if [[ -z "${APP_ID}" ]]; then
     echo "[deploy] creating new App Platform app '${DO_APP_NAME}'..."
-    doctl apps create --spec "${PATCHED_SPEC}"
+    CREATE_OUTPUT="$(doctl apps create --spec "${PATCHED_SPEC}" --format ID --no-header 2>/dev/null || true)"
+    APP_ID="${CREATE_OUTPUT//[[:space:]]/}"
 
-    # Re-fetch the ID after creation
-    while IFS=$'\t' read -r name id; do
-      if [[ "${name}" == "${DO_APP_NAME}" ]]; then
-        APP_ID="${id}"
-        break
-      fi
-    done < <(doctl apps list --format Name,ID --no-header)
+    if [[ -z "${APP_ID}" ]]; then
+      # Fallback: poll the list with retries to handle DO API propagation delay
+      echo "[deploy] waiting for app '${DO_APP_NAME}' to appear in app list..."
+      for _retry in $(seq 1 12); do
+        while IFS=$'\t' read -r name id; do
+          if [[ "${name}" == "${DO_APP_NAME}" ]]; then
+            APP_ID="${id}"
+            break 2
+          fi
+        done < <(doctl apps list --format Name,ID --no-header 2>/dev/null || true)
+        if [[ -n "${APP_ID}" ]]; then
+          break
+        fi
+        sleep 5
+      done
+    fi
   else
     echo "[deploy] updating existing app '${DO_APP_NAME}' (${APP_ID})..."
     doctl apps update "${APP_ID}" --spec "${PATCHED_SPEC}"
