@@ -1,12 +1,12 @@
 [models.router]
-provider = "local"
-model = "deterministic"
+provider = "digitalocean"
+model = "a23d75ac-8db0-11f0-b074-4e013e2ddde4"  # OpenAI GPT-5 Nano
 temperature = 0.0
 
 [models.planner]
-provider = "local"
-model = "deterministic"
-temperature = 0.0
+provider = "digitalocean"
+model = "1b07e52b-73c5-11f0-b074-4e013e2ddde4"  # OpenAI GPT-5
+temperature = 0.2
 
 [models.routing]
 local_provider = "local"
