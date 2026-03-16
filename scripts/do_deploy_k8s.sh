@@ -89,7 +89,7 @@ echo "--- [step 10/${TOTAL_STEPS}] Apply gVisor installer DaemonSet ---"
 kubectl apply -f infra/k8s/gvisor-installer.yaml
 
 echo "--- [step 11/${TOTAL_STEPS}] Apply secrets ---"
-kubectl apply -f infra/k8s/secrets.yaml
+kubectl apply -f infra/k8s/secrets.yaml.example
 
 echo "--- [step 12/${TOTAL_STEPS}] Apply deployment, service, and ingress ---"
 kubectl apply -f infra/k8s/deployment.yaml
@@ -107,6 +107,6 @@ echo "LoadBalancer IP : ${LB_IP}"
 echo ""
 echo "NEXT STEPS:"
 echo "  1. Point your domain DNS A record to ${LB_IP}"
-echo "  2. Edit infra/k8s/secrets.yaml — replace REPLACE_ME values — then: kubectl apply -f infra/k8s/secrets.yaml"
+echo "  2. Copy infra/k8s/secrets.yaml.example -> infra/k8s/secrets.yaml, fill in real values, then: kubectl apply -f infra/k8s/secrets.yaml"
 echo "  3. Edit infra/k8s/ingress.yaml — replace lula-orch.example.com — then: kubectl apply -f infra/k8s/ingress.yaml"
 echo "  4. Restart rollout after secrets update: kubectl rollout restart deployment/lula-orch -n lula-orch"

@@ -12,10 +12,10 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - lula-orch.example.com  # REPLACE host with real domain
+        - lula.eiv.eng.br  # REPLACE host with real domain
       secretName: lula-orch-tls
   rules:
-    - host: lula-orch.example.com  # REPLACE with real domain
+    - host: lula.eiv.eng.br  # REPLACE with real domain
       http:
         paths:
           - path: /

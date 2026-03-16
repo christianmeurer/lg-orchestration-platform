@@ -17,3 +17,14 @@ Thumbs.db
 
 *.log
 
+# Secret files -- never commit real credentials
+infra/k8s/secrets.yaml
+*.secret
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# SQLite databases may contain run history / PII
+*.sqlite
+*.db
