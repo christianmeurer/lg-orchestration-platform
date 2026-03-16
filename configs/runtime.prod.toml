@@ -31,6 +31,9 @@ max_loops = 3
 max_tool_calls_per_loop = 12
 max_patch_bytes = 200000
 tool_timeout_s = 600
+stable_prefix_tokens = 12000
+working_set_tokens = 8000
+tool_result_summary_chars = 800
 
 [policy]
 network_default = "deny"

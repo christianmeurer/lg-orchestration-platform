@@ -349,6 +349,15 @@ fn snapshot_from_files(version: u64, mut files: Vec<StructuralFileSummary>) -> S
     }
 }
 
+fn is_excluded_path(path: &std::path::Path) -> bool {
+    path.components().any(|c| {
+        matches!(
+            c.as_os_str().to_str().unwrap_or(""),
+            ".venv" | ".git" | "node_modules" | "target" | "__pycache__" | ".hypothesis"
+        )
+    })
+}
+
 fn collect_candidate_files(root_dir: &Path, allow_read: &GlobSet) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for entry in walkdir::WalkDir::new(root_dir)
@@ -357,6 +366,9 @@ fn collect_candidate_files(root_dir: &Path, allow_read: &GlobSet) -> Vec<String>
     {
         let full_path = entry.path();
         if !full_path.is_file() {
+            continue;
+        }
+        if is_excluded_path(full_path) {
             continue;
         }
         let Ok(rel) = full_path.strip_prefix(root_dir) else {
