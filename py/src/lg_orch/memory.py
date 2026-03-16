@@ -572,23 +572,8 @@ def get_compression_summary(state: dict[str, Any]) -> dict[str, Any]:
         "loops_with_compression": loops_with_compression,
         "last_event": compression_events[-1] if compression_events else None,
     }
-    
-    
-__all__ = [
-    "HistoryPolicy",
-    "approx_token_count",
-    "build_context_layers",
-    "context_budget_settings",
-    "dedupe_semantic_hits",
-    "ensure_history_policy",
-    "get_compression_summary",
-    "prune_post_verification_history",
-    "prune_pre_verification_history",
-    "record_compression_provenance",
-    "summarize_tool_result",
-]
-    
-    
+
+
 def ensure_history_policy(state: dict[str, Any]) -> dict[str, Any]:
     policy_raw = state.get("history_policy", {})
     policy_src = policy_raw if isinstance(policy_raw, dict) else {}
@@ -704,3 +689,18 @@ def prune_post_verification_history(state: dict[str, Any]) -> dict[str, Any]:
     if not pruned_any:
         return state
     return {**state, "tool_results": updated, "provenance": provenance}
+
+
+__all__ = [
+    "HistoryPolicy",
+    "approx_token_count",
+    "build_context_layers",
+    "context_budget_settings",
+    "dedupe_semantic_hits",
+    "ensure_history_policy",
+    "get_compression_summary",
+    "prune_post_verification_history",
+    "prune_pre_verification_history",
+    "record_compression_provenance",
+    "summarize_tool_result",
+]
