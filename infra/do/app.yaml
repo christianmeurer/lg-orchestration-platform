@@ -1,0 +1,38 @@
+name: lula-orch
+region: nyc3
+services:
+  - name: api
+    image:
+      registry_type: DOCR
+      registry: lula-orch          # DOCR registry name — override with DO_REGISTRY
+      repository: lula-orch
+      tag: latest
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-1gb
+    http_port: 8001
+    health_check:
+      http_path: /healthz
+      initial_delay_seconds: 15
+      period_seconds: 10
+      timeout_seconds: 5
+    envs:
+      - key: LG_PROFILE
+        value: prod
+      - key: PORT
+        value: "8001"
+      - key: LG_REMOTE_API_AUTH_MODE
+        value: bearer
+      - key: LG_REMOTE_API_TRUST_FORWARDED_HEADERS
+        value: "true"
+      - key: LG_REMOTE_API_BEARER_TOKEN
+        scope: RUN_TIME
+        type: SECRET
+      - key: LG_RUNNER_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: DIGITAL_OCEAN_MODEL_ACCESS_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: MODEL_ACCESS_KEY
+        scope: RUN_TIME
+        type: SECRET
