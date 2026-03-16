@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from lg_orch.logging import get_logger
@@ -75,16 +76,19 @@ def _structured_summary(state: dict[str, Any]) -> str:
 def _get_inference_config(
     state: dict[str, Any],
 ) -> tuple[str, str, str, int] | None:
-    """Return (provider, model, api_key, base_url, timeout_s) or None if not configured."""
+    """Return (model, api_key, base_url, timeout_s) or None if not configured."""
+    log = get_logger()
     models_raw = state.get("_models", {})
     models = models_raw if isinstance(models_raw, dict) else {}
     slot_raw = models.get("planner", {})
     slot = slot_raw if isinstance(slot_raw, dict) else {}
     provider = str(slot.get("provider", "local")).strip().lower()
     if provider in {"", "local"}:
+        log.info("reporter_no_provider", provider=provider)
         return None
     model = str(slot.get("model", "")).strip()
     if not model:
+        log.info("reporter_no_model")
         return None
 
     runtime_raw = state.get("_model_provider_runtime", {})
@@ -93,16 +97,27 @@ def _get_inference_config(
     if provider == "openai_compatible":
         oc_raw = runtime.get("openai_compatible", {})
         oc_cfg = oc_raw if isinstance(oc_raw, dict) else {}
-        api_key = str(oc_cfg.get("api_key", "")).strip()
+        api_key = str(oc_cfg.get("api_key") or "").strip()
         if not api_key:
+            api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+        if not api_key:
+            log.info("reporter_no_api_key", provider=provider)
             return None
         base_url = str(oc_cfg.get("base_url", "https://api.openai.com/v1")).strip().rstrip("/")
         timeout_raw = oc_cfg.get("timeout_s", 60)
     else:
         do_raw = runtime.get("digitalocean", {})
         do_cfg = do_raw if isinstance(do_raw, dict) else {}
-        api_key = str(do_cfg.get("api_key", "")).strip()
+        api_key = str(do_cfg.get("api_key") or "").strip()
         if not api_key:
+            api_key = (
+                os.environ.get("MODEL_ACCESS_KEY")
+                or os.environ.get("DIGITAL_OCEAN_MODEL_ACCESS_KEY")
+                or ""
+            ).strip()
+        log.info("reporter_api_key_check", provider=provider, has_key=bool(api_key), key_len=len(api_key))
+        if not api_key:
+            log.info("reporter_no_api_key", provider=provider)
             return None
         base_url = str(do_cfg.get("base_url", "https://inference.do-ai.run/v1")).strip().rstrip("/")
         timeout_raw = do_cfg.get("timeout_s", 60)
@@ -150,14 +165,17 @@ def reporter(state: dict[str, Any]) -> dict[str, Any]:
     state = append_event(state, kind="node", data={"name": "reporter", "phase": "start"})
     try:
         final: str | None = None
+        llm_error: str = ""
         try:
             final = _llm_synthesis(state)
         except Exception as llm_exc:
             log.warning("reporter_llm_failed", error=str(llm_exc))
+            llm_error = f"llm_error: {type(llm_exc).__name__}: {llm_exc}"
             final = None
 
         if not final:
-            final = _structured_summary(state)
+            summary = _structured_summary(state)
+            final = f"{summary}\n{llm_error}" if llm_error else summary
     except Exception as exc:
         log.error("reporter_failed", error=str(exc))
         final = f"error: reporter failed: {exc}"

@@ -1,5 +1,6 @@
 use std::env;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use regex::Regex;
 
@@ -300,7 +301,17 @@ impl SandboxPolicy {
 /// # Correctness invariant
 /// `parse_bool(s)` returns `true` iff the normalized string is one of the
 /// accepted truthy literals. No other input produces `true`.
-/// Scan `input` for known prompt-injection / IDEsaster patterns.
+
+// Static regex patterns for prompt-injection detection.
+// Compiled once at first use via LazyLock; no per-call allocation.
+static RE_REVERSE_SSH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"reverse.*ssh|ssh.*tunnel").expect("static regex"));
+static RE_NETCAT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"nc\s").expect("static regex"));
+static RE_MINING: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"crypto.*min|coin.*min").expect("static regex"));
+
+/// Scan `input` for known prompt-injection / RCE patterns.
 ///
 /// Returns `Some(reason)` on the first match, `None` if the input is clean.
 /// The check is case-insensitive and operates on the full string.
@@ -342,14 +353,13 @@ pub fn detect_prompt_injection(input: &str) -> Option<String> {
         }
     }
 
-    // Lazy-compiled regex patterns (compiled once per call; cheap at this scale).
-    let patterns: &[(&str, &str)] = &[
-        (r"reverse.*ssh|ssh.*tunnel", "reverse-ssh / ssh-tunnel"),
-        (r"nc\s", "netcat (nc) invocation"),
-        (r"crypto.*min|coin.*min", "crypto/coin mining"),
+    // Static regex patterns — compiled once via LazyLock, not on every call.
+    let patterns: &[(&LazyLock<Regex>, &str)] = &[
+        (&RE_REVERSE_SSH, "reverse-ssh / ssh-tunnel"),
+        (&RE_NETCAT, "netcat (nc) invocation"),
+        (&RE_MINING, "crypto/coin mining"),
     ];
-    for (pat, label) in patterns {
-        let re = Regex::new(pat).expect("static regex must compile");
+    for (re, label) in patterns {
         if re.is_match(&lower) {
             return Some(format!("prompt_injection: {label}"));
         }
