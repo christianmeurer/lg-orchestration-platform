@@ -20,8 +20,6 @@ RUN apt-get update \
 
 ENV PATH=/root/.local/bin:${PATH}
 
-COPY LICENSE ./
-COPY README.md ./
 COPY py/ ./py/
 COPY configs/ ./configs/
 COPY prompts/ ./prompts/
