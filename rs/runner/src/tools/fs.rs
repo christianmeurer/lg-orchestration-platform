@@ -396,8 +396,33 @@ pub async fn apply_patch(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelop
     let approval = require_approval(inp.approval, "apply_patch", "approval:apply_patch")?;
     let snapshot = snapshot_for_operation(cfg, "apply_patch").await?;
 
-    let mut diffs: Vec<Value> = Vec::new();
-    for ch in inp.changes {
+    // Collect temp paths so they can be cleaned up if an error occurs mid-batch.
+    let mut tmp_files: Vec<std::path::PathBuf> = Vec::new();
+
+    let result = apply_patch_inner(cfg, inp.changes, &mut tmp_files, &mut Vec::new()).await;
+
+    // Always attempt cleanup of any leftover temp files (rename removes them on
+    // success, so this only fires on error paths).
+    for p in &tmp_files {
+        let _ = std::fs::remove_file(p);
+    }
+
+    let diffs = result?;
+
+    Ok(
+        ToolEnvelope::ok("apply_patch", "ok", json!({"changes": diffs}), 0)
+            .with_approval(approval)
+            .with_snapshot(snapshot),
+    )
+}
+
+async fn apply_patch_inner(
+    cfg: &RunnerConfig,
+    changes: Vec<FileChange>,
+    tmp_files: &mut Vec<std::path::PathBuf>,
+    diffs: &mut Vec<Value>,
+) -> Result<Vec<Value>, ApiError> {
+    for ch in changes {
         if !cfg.can_write(&ch.path) {
             return Err(ApiError::Forbidden("write denied".to_string()));
         }
@@ -415,9 +440,16 @@ pub async fn apply_patch(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelop
                         .await
                         .map_err(|e| ApiError::Other(e.into()))?;
                 }
-                fs::write(&full, ch.content.as_bytes())
+                let tmp_path = full.with_extension("tmp_lula_add");
+                tmp_files.push(tmp_path.clone());
+                fs::write(&tmp_path, ch.content.as_bytes())
                     .await
                     .map_err(|e| ApiError::Other(e.into()))?;
+                tokio::fs::rename(&tmp_path, &full)
+                    .await
+                    .map_err(|e| ApiError::Other(e.into()))?;
+                // Rename consumed the temp file; remove it from the cleanup list.
+                tmp_files.retain(|p| p != &tmp_path);
                 diffs.push(json!({"path": full_rel_s, "op": "add", "bytes": ch.content.len()}));
             }
             ChangeOp::Update => {
@@ -425,9 +457,15 @@ pub async fn apply_patch(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelop
                     return Err(ApiError::BadRequest(format!("missing: {}", ch.path)));
                 }
                 let old = fs::read_to_string(&full).await.unwrap_or_default();
-                fs::write(&full, ch.content.as_bytes())
+                let tmp_path = full.with_extension("tmp_lula_update");
+                tmp_files.push(tmp_path.clone());
+                fs::write(&tmp_path, ch.content.as_bytes())
                     .await
                     .map_err(|e| ApiError::Other(e.into()))?;
+                tokio::fs::rename(&tmp_path, &full)
+                    .await
+                    .map_err(|e| ApiError::Other(e.into()))?;
+                tmp_files.retain(|p| p != &tmp_path);
                 diffs.push(json!({"path": full_rel_s, "op": "update", "old_bytes": old.len(), "new_bytes": ch.content.len()}));
             }
             ChangeOp::Delete => {
@@ -440,12 +478,7 @@ pub async fn apply_patch(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelop
             }
         }
     }
-
-    Ok(
-        ToolEnvelope::ok("apply_patch", "ok", json!({"changes": diffs}), 0)
-            .with_approval(approval)
-            .with_snapshot(snapshot),
-    )
+    Ok(diffs.clone())
 }
 
 pub async fn undo(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiError> {
@@ -836,6 +869,25 @@ mod tests {
         });
         let result = apply_patch(&cfg, input).await;
         assert!(matches!(result, Err(ApiError::ApprovalRequired(_))));
+    }
+
+    #[tokio::test]
+    async fn test_apply_patch_atomic_write_uses_rename() {
+        let (td, cfg) = test_cfg();
+        init_git_repo(td.path());
+        let new_file = td.path().join("py/atomic_new.txt");
+        let tmp_file = td.path().join("py/atomic_new.tmp_lula_add");
+        let input = json!({
+            "changes": [{"path": "py/atomic_new.txt", "op": "add", "content": "atomic content"}],
+            "approval": {"challenge_id": "approval:apply_patch", "token": "approve:approval:apply_patch"}
+        });
+        let result = apply_patch(&cfg, input).await;
+        assert!(result.is_ok());
+        // Final file must exist with correct content.
+        assert!(new_file.exists());
+        assert_eq!(stdfs::read_to_string(&new_file).unwrap(), "atomic content");
+        // Temp file must have been cleaned up by the rename.
+        assert!(!tmp_file.exists(), "temp file should not remain after successful rename");
     }
 
     #[tokio::test]

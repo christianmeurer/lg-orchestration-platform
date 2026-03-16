@@ -1,0 +1,4 @@
+# file: C:\Users\chris\Projects\LG-Orchestration-Platform\py\src\lg_orch\run_store.py
+# hypothesis_version: 6.151.4
+
+['+00:00', ', ', '?', 'Z', 'auth_subject', 'client_ip', 'context_scope', 'created_at', 'exit_code', 'failure_class', 'failure_fingerprint', 'fingerprint', 'finished_at', 'keep', 'last_check', 'loop', 'loop_summary', 'namespace', 'plan_action', 'recovery_facts', 'request', 'request_id', 'retry_target', 'run_id', 'runs', 'salience', 'started_at', 'status', 'summary', 'trace_out_dir', 'trace_path']

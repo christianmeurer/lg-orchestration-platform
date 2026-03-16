@@ -107,21 +107,27 @@ def test_context_builder_resets_context_when_requested() -> None:
 def test_context_builder_fetches_structural_ast_and_semantic_hits(
     mock_client_cls: MagicMock,
 ) -> None:
+    import json as _json
+
+    ast_payload = {
+        "schema_version": 1,
+        "version": 3,
+        "files": [{"path": "py/a.py", "language": "python", "bytes": 10, "symbols": []}],
+    }
+    semantic_payload = [
+        {
+            "path": "py/a.py",
+            "language": "python",
+            "symbols": ["alpha"],
+            "snippet": "def alpha",
+            "score": 0.1,
+        }
+    ]
     with tempfile.TemporaryDirectory() as td:
         mock_client = MagicMock()
-        mock_client.get_ast_index_summary.return_value = {
-            "schema_version": 1,
-            "version": 3,
-            "files": [{"path": "py/a.py", "language": "python", "bytes": 10, "symbols": []}],
-        }
-        mock_client.search_codebase.return_value = [
-            {
-                "path": "py/a.py",
-                "language": "python",
-                "symbols": ["alpha"],
-                "snippet": "def alpha",
-                "score": 0.1,
-            }
+        mock_client.batch_execute_tools.return_value = [
+            {"ok": True, "stdout": _json.dumps(ast_payload), "exit_code": 0, "stderr": "", "diagnostics": [], "timing_ms": 0, "artifacts": {}},
+            {"ok": True, "stdout": _json.dumps(semantic_payload), "exit_code": 0, "stderr": "", "diagnostics": [], "timing_ms": 0, "artifacts": {}},
         ]
         mock_client_cls.return_value = mock_client
 
@@ -144,8 +150,10 @@ def test_context_builder_fetches_structural_ast_and_semantic_hits(
 def test_context_builder_preserves_ast_context_on_reset(mock_client_cls: MagicMock) -> None:
     with tempfile.TemporaryDirectory() as td:
         mock_client = MagicMock()
-        mock_client.get_ast_index_summary.return_value = {}
-        mock_client.search_codebase.return_value = []
+        mock_client.batch_execute_tools.return_value = [
+            {"ok": False, "stdout": "", "exit_code": 1, "stderr": "", "diagnostics": [], "timing_ms": 0, "artifacts": {}},
+            {"ok": False, "stdout": "", "exit_code": 1, "stderr": "", "diagnostics": [], "timing_ms": 0, "artifacts": {}},
+        ]
         mock_client_cls.return_value = mock_client
 
         prior_ast = {

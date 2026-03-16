@@ -6,6 +6,7 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use tokio::sync::Mutex;
 
 use crate::indexing::IndexingService;
+use crate::sandbox::SandboxPolicy;
 
 pub struct RateLimiter {
     tokens: f64,
@@ -46,6 +47,7 @@ pub struct RunnerConfig {
     pub api_key: Option<String>,
     pub rate_limiter: Arc<Mutex<RateLimiter>>,
     pub indexing: Arc<IndexingService>,
+    pub sandbox_policy: SandboxPolicy,
 }
 
 impl std::fmt::Debug for RunnerConfig {
@@ -83,6 +85,7 @@ impl RunnerConfig {
         let allow_write = build_globset(&write_globs)?;
         let indexing = Arc::new(IndexingService::new(root_dir.clone(), allow_read.clone())?);
 
+        let sandbox_policy = SandboxPolicy::from_env();
         Ok(Self {
             root_dir,
             allow_read,
@@ -90,6 +93,7 @@ impl RunnerConfig {
             api_key,
             rate_limiter: Arc::new(Mutex::new(RateLimiter::new(rate_limit_rps))),
             indexing,
+            sandbox_policy,
         })
     }
 

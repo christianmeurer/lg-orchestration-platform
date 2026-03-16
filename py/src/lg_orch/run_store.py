@@ -86,6 +86,12 @@ class RunStore:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # WAL mode: concurrent readers don't block writers; NORMAL sync is safe
+        # for WAL and avoids fsync on every commit. busy_timeout prevents
+        # immediate SQLITE_BUSY failures under concurrent access.
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
         self._lock = threading.Lock()
         self._namespace = namespace.strip()
         with self._lock:

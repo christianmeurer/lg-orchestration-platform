@@ -61,6 +61,37 @@ class _CircuitBreaker:
 _breakers: dict[str, _CircuitBreaker] = {}
 _breakers_lock = threading.Lock()
 
+# ---------------------------------------------------------------------------
+# httpx.Client singleton cache — one shared TCP pool per (base_url, api_key)
+# ---------------------------------------------------------------------------
+
+_client_cache: dict[tuple[str, str], httpx.Client] = {}
+_client_cache_lock = threading.Lock()
+
+
+def _get_or_create_client(base_url: str, api_key: str, timeout_s: int) -> httpx.Client:
+    key = (base_url, api_key)
+    with _client_cache_lock:
+        if key not in _client_cache:
+            headers = {
+                "authorization": f"Bearer {api_key}",
+                "content-type": "application/json",
+            }
+            _client_cache[key] = httpx.Client(
+                base_url=base_url,
+                timeout=float(timeout_s),
+                headers=headers,
+            )
+        return _client_cache[key]
+
+
+def clear_client_cache() -> None:
+    """Close and remove all cached httpx.Client instances (for tests)."""
+    with _client_cache_lock:
+        for client in _client_cache.values():
+            client.close()
+        _client_cache.clear()
+
 
 def _get_breaker(base_url: str) -> _CircuitBreaker:
     with _breakers_lock:
@@ -99,19 +130,15 @@ class InferenceClient:
 
     def __post_init__(self) -> None:
         if self._client is None:
-            headers = {
-                "authorization": f"Bearer {self.api_key}",
-                "content-type": "application/json",
-            }
             object.__setattr__(
                 self,
                 "_client",
-                httpx.Client(base_url=self.base_url, timeout=float(self.timeout_s), headers=headers),
+                _get_or_create_client(self.base_url, self.api_key, self.timeout_s),
             )
 
     def close(self) -> None:
-        if self._client is not None:
-            self._client.close()
+        # No-op: _client is a shared singleton; use clear_client_cache() to close all.
+        pass
 
     def chat_completion(
         self,

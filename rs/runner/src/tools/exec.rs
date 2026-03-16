@@ -11,7 +11,7 @@ use crate::config::RunnerConfig;
 use crate::diagnostics::parse_structured_diagnostics;
 use crate::envelope::{Diagnostic, ToolEnvelope};
 use crate::errors::ApiError;
-use crate::sandbox::{SandboxBackend, SandboxPolicy};
+use crate::sandbox::SandboxBackend;
 use crate::tools::snapshot_for_operation;
 
 const STDERR_ARTIFACT_MAX_CHARS: usize = 8_000;
@@ -90,8 +90,7 @@ pub async fn exec(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiE
         None
     };
 
-    let sandbox_policy = SandboxPolicy::from_env();
-    let sandbox_resolution = sandbox_policy.resolve_backend();
+    let sandbox_resolution = cfg.sandbox_policy.resolve_backend();
     let isolation = sandbox_resolution.to_isolation_metadata();
 
     let cwd = inp
@@ -102,7 +101,8 @@ pub async fn exec(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiE
 
     let mut c = match sandbox_resolution.backend {
         SandboxBackend::LinuxNamespace => {
-            let unshare_path = sandbox_policy
+            let unshare_path = cfg
+                .sandbox_policy
                 .linux_namespace
                 .unshare_bin
                 .as_ref()
@@ -115,21 +115,24 @@ pub async fn exec(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiE
             cmd_obj
         }
         SandboxBackend::MicroVmEphemeral => {
-            let firecracker_path = sandbox_policy
+            let firecracker_path = cfg
+                .sandbox_policy
                 .microvm
                 .firecracker_bin
                 .as_ref()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "firecracker".to_string());
-                
-            let kernel_path = sandbox_policy
+
+            let kernel_path = cfg
+                .sandbox_policy
                 .microvm
                 .kernel_image
                 .as_ref()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "/var/lib/firecracker/vmlinux".to_string());
-                
-            let rootfs_path = sandbox_policy
+
+            let rootfs_path = cfg
+                .sandbox_policy
                 .microvm
                 .rootfs_image
                 .as_ref()
