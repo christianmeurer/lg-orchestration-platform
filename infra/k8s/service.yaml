@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: lula-orch
+  namespace: lula-orch
+spec:
+  type: ClusterIP
+  selector:
+    app: lula-orch
+  ports:
+    - port: 8001
+      targetPort: 8001

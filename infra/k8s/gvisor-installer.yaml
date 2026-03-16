@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: gvisor-installer
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: gvisor-installer
+  template:
+    metadata:
+      labels:
+        app: gvisor-installer
+    spec:
+      nodeSelector:
+        sandbox: gvisor
+      tolerations:
+        - key: sandbox
+          operator: Equal
+          value: gvisor
+          effect: NoSchedule
+      initContainers:
+        - name: installer
+          image: ubuntu:22.04
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: host-usr-local-sbin
+              mountPath: /usr/local/sbin
+            - name: host-etc-containerd
+              mountPath: /etc/containerd
+            - name: host-run-systemd
+              mountPath: /run/systemd
+            - name: host-var-run-dbus
+              mountPath: /var/run/dbus
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              apt-get update -qq && apt-get install -y -qq curl
+              curl -fsSL https://storage.googleapis.com/gvisor/releases/release/latest/x86_64/runsc \
+                -o /usr/local/sbin/runsc
+              chmod 755 /usr/local/sbin/runsc
+              if ! grep -q 'io.containerd.runsc.v1' /etc/containerd/config.toml 2>/dev/null; then
+                cat >> /etc/containerd/config.toml <<'EOF'
+
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
+  runtime_type = "io.containerd.runsc.v1"
+EOF
+              fi
+              nsenter --mount=/proc/1/ns/mnt -- systemctl restart containerd
+      containers:
+        - name: pause
+          image: gcr.io/pause:3.9
+          command: ["/pause"]
+      volumes:
+        - name: host-usr-local-sbin
+          hostPath:
+            path: /usr/local/sbin
+        - name: host-etc-containerd
+          hostPath:
+            path: /etc/containerd
+        - name: host-run-systemd
+          hostPath:
+            path: /run/systemd
+        - name: host-var-run-dbus
+          hostPath:
+            path: /var/run/dbus

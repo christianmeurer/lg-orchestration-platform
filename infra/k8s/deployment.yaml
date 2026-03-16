@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lula-orch
+  namespace: lula-orch
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lula-orch
+  template:
+    metadata:
+      labels:
+        app: lula-orch
+    spec:
+      runtimeClassName: gvisor
+      nodeSelector:
+        sandbox: gvisor
+      tolerations:
+        - key: sandbox
+          operator: Equal
+          value: gvisor
+          effect: NoSchedule
+      imagePullSecrets:
+        - name: docr-secret
+      containers:
+        - name: lula-orch
+          image: registry.digitalocean.com/lula-orch/lula-orch:latest
+          ports:
+            - containerPort: 8001
+          env:
+            - name: LG_PROFILE
+              value: "prod"
+            - name: PORT
+              value: "8001"
+            - name: LG_REMOTE_API_AUTH_MODE
+              value: "bearer"
+            - name: LG_REMOTE_API_TRUST_FORWARDED_HEADERS
+              value: "true"
+            - name: LG_REMOTE_API_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: lula-secrets
+                  key: LG_REMOTE_API_BEARER_TOKEN
+            - name: LG_RUNNER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: lula-secrets
+                  key: LG_RUNNER_API_KEY
+            - name: DIGITAL_OCEAN_MODEL_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: lula-secrets
+                  key: DIGITAL_OCEAN_MODEL_ACCESS_KEY
+            - name: MODEL_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: lula-secrets
+                  key: MODEL_ACCESS_KEY
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8001
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8001
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+          securityContext:
+            runAsNonRoot: false
+            readOnlyRootFilesystem: false
+            allowPrivilegeEscalation: false

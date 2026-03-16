@@ -1,0 +1,27 @@
+# Replace lula-orch.example.com with your real domain before applying.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lula-orch
+  namespace: lula-orch
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - lula-orch.example.com  # REPLACE host with real domain
+      secretName: lula-orch-tls
+  rules:
+    - host: lula-orch.example.com  # REPLACE with real domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: lula-orch
+                port:
+                  number: 8001

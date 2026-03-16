@@ -190,6 +190,112 @@ App Platform performs a zero-downtime rolling replacement automatically once the
 DO_REGISTRY=lula-orch DO_DEPLOY_TARGET=droplet bash scripts/do_deploy.sh <new-tag>
 ```
 
+---
+
+## 4. DOKS + gVisor (Kubernetes hardened deployment)
+
+### Why gVisor
+
+The Rust runner executes arbitrary tool invocations (shell commands, file system ops) on behalf of LLM agents. On App Platform and plain Docker the runner shares the host kernel — a compromised tool invocation can escape the container via kernel exploits. gVisor interposes every syscall through its own user-space kernel (`runsc`), so the host kernel is never directly reachable from inside the runner container.
+
+The orchestrator (Python API) does **not** need gVisor — only the runner pod is scheduled on gVisor nodes, reducing the overhead to where it matters.
+
+### Prerequisites
+
+| Requirement | Notes |
+|---|---|
+| `doctl` ≥ 1.100 | `doctl auth init` must succeed |
+| `kubectl` | Configured by the deploy script via `doctl kubernetes cluster kubeconfig save` |
+| cert-manager | Install once per cluster: `kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml` |
+| nginx ingress controller | Install once: `kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.10.1/deploy/static/provider/cloud/deploy.yaml` |
+| `DO_REGISTRY` env var | DOCR registry name |
+| Secret env vars | See [Environment variables](#environment-variables) |
+
+### Step-by-step
+
+#### 1. Create the cluster and gVisor node pool
+
+```sh
+export DO_REGISTRY=lula-orch
+bash scripts/do_deploy_k8s.sh
+```
+
+The script creates:
+- A **default node pool** (2 × `s-2vcpu-4gb`) for the control plane / orchestrator workloads.
+- A **`gvisor-pool`** (2 × `s-2vcpu-4gb`) tainted `sandbox=gvisor:NoSchedule` and labeled `sandbox=gvisor`.
+
+#### 2. Install gVisor on the node pool (automatic via DaemonSet)
+
+`infra/k8s/gvisor-installer.yaml` deploys a DaemonSet to every `sandbox=gvisor` node. The privileged init container:
+
+1. Downloads `runsc` from the official gVisor release bucket.
+2. Installs it to `/usr/local/sbin/runsc`.
+3. Patches `/etc/containerd/config.toml` to register the `runsc` runtime handler.
+4. Restarts `containerd` via `nsenter` into the host PID namespace.
+
+The main container is a pause image that keeps the DaemonSet Pod running so Kubernetes can track node readiness.
+
+#### 3. Apply manifests
+
+```sh
+# After cluster is up and gVisor DaemonSet is running:
+kubectl apply -f infra/k8s/gvisor-runtime-class.yaml
+kubectl apply -f infra/k8s/secrets.yaml        # EDIT secrets first!
+kubectl apply -f infra/k8s/deployment.yaml
+kubectl apply -f infra/k8s/service.yaml
+kubectl apply -f infra/k8s/ingress.yaml
+```
+
+The deploy script applies them all in one pass.
+
+#### 4. Set secrets
+
+Edit `infra/k8s/secrets.yaml` and replace every `REPLACE_ME` value before applying:
+
+```sh
+# Edit the file, then:
+kubectl apply -f infra/k8s/secrets.yaml
+kubectl rollout restart deployment/lula-orch -n lula-orch
+```
+
+#### 5. Set DNS
+
+Point your domain's A record to the LoadBalancer IP printed by the deploy script:
+
+```sh
+kubectl get svc -n ingress-nginx ingress-nginx-controller \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+```
+
+cert-manager will issue a Let's Encrypt certificate automatically once DNS propagates.
+
+### `runtimeClassName: gvisor` — what it means
+
+Setting `runtimeClassName: gvisor` in `infra/k8s/deployment.yaml` instructs the kubelet to create the pod's container using the `runsc` OCI runtime instead of `runc`. Every syscall from the container is intercepted by gVisor's user-space kernel. The container **cannot** directly reach the host kernel, making kernel CVE exploitation significantly harder.
+
+Without this field the pod falls back to `runc` (standard container isolation). The field is enforced — if the RuntimeClass `gvisor` does not exist on the node, the pod fails to schedule.
+
+### Cost guidance
+
+| Configuration | Nodes | Size | Cost/mo (approx) |
+|---|---|---|---|
+| Minimum viable (1+1) | 1 default + 1 gVisor | `s-2vcpu-4gb` | ~$24 |
+| Recommended (2+2) | 2 default + 2 gVisor | `s-2vcpu-4gb` | ~$48 |
+| DOCR Starter | — | 1 repo / 500 MB | Free |
+
+### Security posture comparison
+
+| Dimension | App Platform | Droplet (Docker) | DOKS + gVisor |
+|---|---|---|---|
+| Kernel isolation | Shared (managed) | Shared | gVisor user-space kernel per pod |
+| Kernel CVE exposure | Low (DO-managed) | High | Very low |
+| Container escape risk | Medium | High | Low |
+| Managed TLS | Yes | No (manual nginx+certbot) | Yes (cert-manager) |
+| Rolling deploy | Yes (zero-downtime) | No (brief downtime) | Yes (Kubernetes rollout) |
+| Ops complexity | Low | Medium | High |
+| Cost/mo | ~$5 | ~$6–12 | ~$24–48 |
+| Best for | Dev / personal | Cost-sensitive | Production / regulated |
+
 The script SSHes in, pulls the new image, stops the old container, and starts the new one. There is a brief (~5 s) downtime window during container replacement.
 
 ---
