@@ -115,6 +115,32 @@ def test_upsert_persists_approval_summary_fields(tmp_path: Path) -> None:
         store.close()
 
 
+def test_upsert_and_search_semantic_memories(tmp_path: Path) -> None:
+    store = RunStore(db_path=tmp_path / "runs.sqlite")
+    try:
+        store.upsert_semantic_memories(
+            "run-semantic",
+            [
+                {
+                    "kind": "approval_history",
+                    "source": "approved",
+                    "summary": "approved by chris for approval:apply_patch",
+                },
+                {
+                    "kind": "loop_summary",
+                    "source": "verification_failed",
+                    "summary": "test failed after patch",
+                },
+            ],
+        )
+        rows = store.search_semantic_memories(query="approved", limit=5)
+        assert len(rows) >= 1
+        assert rows[0]["run_id"] == "run-semantic"
+        assert rows[0]["kind"] in {"approval_history", "loop_summary"}
+    finally:
+        store.close()
+
+
 def test_upsert_unknown_keys_ignored(tmp_path: Path) -> None:
     store = RunStore(db_path=tmp_path / "runs.sqlite")
     try:

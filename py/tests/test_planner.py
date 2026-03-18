@@ -97,6 +97,199 @@ def test_planner_code_change_default_plan_sets_coder_handoff() -> None:
     assert out["active_handoff"]["consumer"] == "coder"
 
 
+def test_planner_shapes_constraints_from_semantic_memory() -> None:
+    out = planner(
+        _base_state(
+            request="implement approval-safe resume flow",
+            repo_context={
+                "semantic_memories": [
+                    {
+                        "kind": "approval_history",
+                        "source": "approved",
+                        "summary": "approved apply patch for py/src/lg_orch/remote_api.py with checkpoint resume",
+                        "created_at": "2026-03-18T00:00:00Z",
+                    },
+                    {
+                        "kind": "loop_summary",
+                        "source": "verification_failed",
+                        "summary": "previous retry failed in py/src/lg_orch/remote_api.py until checkpoint handling was added",
+                        "created_at": "2026-03-17T00:00:00Z",
+                    },
+                ]
+            },
+        )
+    )
+    step = out["plan"]["steps"][0]
+    assert "py/src/lg_orch/remote_api.py" in step["files_touched"]
+    assert any(
+        criterion == "Approval-sensitive changes preserve checkpoint-backed resume and auditability."
+        for criterion in out["plan"]["acceptance_criteria"]
+    )
+    handoff = step["handoff"]
+    assert any(
+        constraint == "Preserve approval and checkpoint compatibility for approval-sensitive mutations."
+        for constraint in handoff["constraints"]
+    )
+    assert any(entry["kind"] == "semantic_memory" for entry in handoff["evidence"])
+
+
+def test_planner_uses_cached_procedure_to_shape_verification_and_handoff() -> None:
+    out = planner(
+        _base_state(
+            request="implement fix and run the tests and verify",
+            repo_context={
+                "cached_procedures": [
+                    {
+                        "procedure_id": "proc-1",
+                        "canonical_name": "run_tests_check_output",
+                        "task_class": "testing",
+                        "steps": [{"id": "s1", "tools": [{"tool": "run_tests"}]}],
+                        "verification": [{"tool": "exec", "input": {"cmd": "pytest", "args": []}}],
+                        "use_count": 4,
+                        "created_at": "2026-03-18T00:00:00Z",
+                    }
+                ]
+            },
+        )
+    )
+    assert out["plan"]["verification"][0]["tool"] == "exec"
+    assert any(
+        criterion == "Validated procedure memory 'run_tests_check_output' is reused when compatible with current evidence."
+        for criterion in out["plan"]["acceptance_criteria"]
+    )
+    handoff = out["plan"]["steps"][0]["handoff"]
+    assert any(entry["kind"] == "procedure_cache" for entry in handoff["evidence"])
+    assert any(
+        constraint == "Prefer the validated cached procedure 'run_tests_check_output' when it remains compatible with current evidence."
+        for constraint in handoff["constraints"]
+    )
+
+
+def test_planner_records_use_of_selected_cached_procedure(tmp_path: Path) -> None:
+    from lg_orch.procedure_cache import ProcedureCache
+
+    db_path = tmp_path / "procedures.sqlite"
+    cache = ProcedureCache(db_path=db_path)
+    try:
+        procedure_id = cache.store_procedure(
+            canonical_name="run_tests_check_output",
+            request="implement fix and run the tests and verify",
+            task_class="testing",
+            steps=[{"id": "s1", "tools": [{"tool": "run_tests"}]}],
+            verification=[{"tool": "exec", "input": {"cmd": "pytest", "args": []}}],
+            created_at="2026-03-18T00:00:00Z",
+        )
+    finally:
+        cache.close()
+
+    out = planner(
+        _base_state(
+            request="implement fix and run the tests and verify",
+            _procedure_cache_path=str(db_path),
+            repo_context={
+                "cached_procedures": [
+                    {
+                        "procedure_id": procedure_id,
+                        "canonical_name": "run_tests_check_output",
+                        "task_class": "testing",
+                        "steps": [{"id": "s1", "tools": [{"tool": "run_tests"}]}],
+                        "verification": [{"tool": "exec", "input": {"cmd": "pytest", "args": []}}],
+                        "use_count": 0,
+                        "created_at": "2026-03-18T00:00:00Z",
+                    }
+                ]
+            },
+        )
+    )
+    assert out["plan"]["verification"][0]["tool"] == "exec"
+
+    cache = ProcedureCache(db_path=db_path)
+    try:
+        results = cache.lookup_procedure(request="implement fix and run the tests and verify")
+        assert results[0]["use_count"] == 1
+    finally:
+        cache.close()
+
+
+def test_planner_remote_model_prompt_includes_procedural_memory_recall(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, str] = {}
+
+    class _FakeInferenceClient:
+        def __init__(self, *, base_url: str, api_key: str, timeout_s: int = 60) -> None:
+            self.base_url = base_url
+            self.api_key = api_key
+            self.timeout_s = timeout_s
+
+        def close(self) -> None:
+            return None
+
+        def chat_completion(
+            self,
+            *,
+            model: str,
+            system_prompt: str,
+            user_prompt: str,
+            temperature: float,
+            max_tokens: int = 1200,
+        ) -> str:
+            captured["user_prompt"] = user_prompt
+            return json.dumps(
+                {
+                    "steps": [
+                        {
+                            "id": "remote-step-1",
+                            "description": "Use procedural memory.",
+                            "tools": [],
+                            "expected_outcome": "Procedure-aware plan generated.",
+                            "files_touched": [],
+                        }
+                    ],
+                    "verification": [],
+                    "rollback": "No rollback needed.",
+                }
+            )
+
+    monkeypatch.setattr(planner_module, "InferenceClient", _FakeInferenceClient)
+    out = planner(
+        _base_state(
+            request="implement fix and run the tests and verify",
+            _repo_root=".",
+            repo_context={
+                "cached_procedures": [
+                    {
+                        "procedure_id": "proc-1",
+                        "canonical_name": "run_tests_check_output",
+                        "task_class": "testing",
+                        "steps": [{"id": "s1", "tools": [{"tool": "run_tests"}]}],
+                        "verification": [{"tool": "exec", "input": {"cmd": "pytest", "args": []}}],
+                        "use_count": 4,
+                        "created_at": "2026-03-18T00:00:00Z",
+                    }
+                ]
+            },
+            _models={
+                "planner": {
+                    "provider": "remote_digitalocean",
+                    "model": "anthropic-claude-3.5-haiku",
+                    "temperature": 0.1,
+                }
+            },
+            _model_provider_runtime={
+                "digitalocean": {
+                    "base_url": "https://inference.do-ai.run/v1",
+                    "api_key": "test-key",
+                    "timeout_s": 30,
+                }
+            },
+        )
+    )
+    assert out["plan"]["steps"][0]["id"] == "remote-step-1"
+    assert "procedural_memory_recall:" in captured["user_prompt"]
+    assert "run_tests_check_output" in captured["user_prompt"]
+
+
 def test_planner_pdf_request_prefers_read_file_in_deterministic_plan() -> None:
     out = planner(_base_state(request='Read "FLUX LoRA Training Guide.pdf" and implement'))
     tools = out["plan"]["steps"][0]["tools"]
@@ -425,6 +618,88 @@ def test_planner_remote_model_prompt_includes_mcp_recovery_hints(
     assert out["plan"]["steps"][0]["id"] == "remote-step-1"
     assert "mcp_recovery_hints:" in captured["user_prompt"]
     assert "mcp_relevant_tools:" in captured["user_prompt"]
+
+
+def test_planner_remote_model_prompt_includes_ranked_semantic_memories(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, str] = {}
+
+    class _FakeInferenceClient:
+        def __init__(self, *, base_url: str, api_key: str, timeout_s: int = 60) -> None:
+            self.base_url = base_url
+            self.api_key = api_key
+            self.timeout_s = timeout_s
+
+        def close(self) -> None:
+            return None
+
+        def chat_completion(
+            self,
+            *,
+            model: str,
+            system_prompt: str,
+            user_prompt: str,
+            temperature: float,
+            max_tokens: int = 1200,
+        ) -> str:
+            captured["user_prompt"] = user_prompt
+            return json.dumps(
+                {
+                    "steps": [
+                        {
+                            "id": "remote-step-1",
+                            "description": "Use semantic memory.",
+                            "tools": [],
+                            "expected_outcome": "Semantic-memory-aware plan generated.",
+                            "files_touched": [],
+                        }
+                    ],
+                    "verification": [],
+                    "rollback": "No rollback needed.",
+                }
+            )
+
+    monkeypatch.setattr(planner_module, "InferenceClient", _FakeInferenceClient)
+    out = planner(
+        _base_state(
+            request="resume the approved patch flow",
+            _repo_root=".",
+            repo_context={
+                "semantic_memories": [
+                    {
+                        "kind": "approval_history",
+                        "source": "approved",
+                        "summary": "approved apply patch resume from checkpoint",
+                        "created_at": "2026-03-18T00:00:00Z",
+                    },
+                    {
+                        "kind": "loop_summary",
+                        "source": "verification_failed",
+                        "summary": "lint failed after patch",
+                        "created_at": "2026-03-17T00:00:00Z",
+                    },
+                ],
+            },
+            _models={
+                "planner": {
+                    "provider": "remote_digitalocean",
+                    "model": "anthropic-claude-3.5-haiku",
+                    "temperature": 0.1,
+                }
+            },
+            _model_provider_runtime={
+                "digitalocean": {
+                    "base_url": "https://inference.do-ai.run/v1",
+                    "api_key": "test-key",
+                    "timeout_s": 30,
+                }
+            },
+        )
+    )
+    assert out["plan"]["steps"][0]["id"] == "remote-step-1"
+    assert "semantic_memory_recall:" in captured["user_prompt"]
+    assert "approved apply patch resume from checkpoint" in captured["user_prompt"]
 
 
 def test_planner_remote_failure_falls_back_to_deterministic(

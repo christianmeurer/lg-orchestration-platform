@@ -311,3 +311,36 @@ def test_context_builder_loads_cached_procedures(tmp_path: Any) -> None:
     assert "cached_procedures" in repo_context
     assert len(repo_context["cached_procedures"]) >= 1
     assert repo_context["cached_procedures"][0]["canonical_name"] == "run_tests_check_output"
+
+
+def test_context_builder_loads_semantic_memories(tmp_path: Path) -> None:
+    from lg_orch.run_store import RunStore
+
+    db_path = tmp_path / "runs.sqlite"
+    store = RunStore(db_path=db_path)
+    try:
+        store.upsert_semantic_memories(
+            "run-semantic",
+            [
+                {
+                    "kind": "approval_history",
+                    "source": "approved",
+                    "summary": "approved by chris for approval:apply_patch",
+                }
+            ],
+        )
+    finally:
+        store.close()
+
+    with tempfile.TemporaryDirectory() as td:
+        out = context_builder(
+            _base_state(
+                repo_root=td,
+                request="approved apply patch",
+                _run_store_path=str(db_path),
+            )
+        )
+    repo_context = out["repo_context"]
+    assert "semantic_memories" in repo_context
+    assert len(repo_context["semantic_memories"]) >= 1
+    assert "approved by chris" in repo_context["semantic_memories"][0]["summary"]

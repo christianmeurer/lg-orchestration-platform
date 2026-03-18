@@ -127,3 +127,31 @@ def test_build_context_layers_emits_recovery_fact_pack_and_pressure() -> None:
     assert layers["planner_context"]["fact_count"] == 1
     assert "pressure" in layers["compression"]
     assert isinstance(layers["compression"]["pressure"]["overall"]["score"], int)
+
+
+def test_build_context_layers_counts_semantic_memories_in_fact_count() -> None:
+    layers = build_context_layers(
+        state={
+            "facts": [],
+            "_budget_context": {
+                "stable_prefix_tokens": 240,
+                "working_set_tokens": 220,
+                "tool_result_summary_chars": 160,
+            },
+        },
+        repo_context={
+            "repo_root": ".",
+            "has_py": True,
+            "has_rs": False,
+            "top_level": ["py", "README.md"],
+            "repo_map": "py\nREADME.md",
+            "semantic_hits": [],
+            "semantic_memories": [
+                {"kind": "approval_history", "summary": "approved apply patch"},
+                {"kind": "loop_summary", "summary": "previous repair succeeded"},
+            ],
+        },
+    )
+    assert "semantic_memories" in layers["stable_prefix"]["content"]
+    assert layers["planner_context"]["semantic_memory_count"] == 2
+    assert layers["planner_context"]["fact_count"] == 2

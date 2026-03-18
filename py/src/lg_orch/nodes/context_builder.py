@@ -246,6 +246,24 @@ def _load_episodic_context(state: dict[str, Any]) -> list[dict[str, Any]]:
         return []
 
 
+def _load_semantic_context(state: dict[str, Any]) -> list[dict[str, Any]]:
+    run_store_path = str(state.get("_run_store_path", "")).strip()
+    if not run_store_path:
+        return []
+    query = _semantic_query_from_request(str(state.get("request", "")))
+    if not query:
+        return []
+    try:
+        from lg_orch.run_store import RunStore
+        store = RunStore(db_path=Path(run_store_path))
+        try:
+            return store.search_semantic_memories(query=query, limit=5)
+        finally:
+            store.close()
+    except Exception:
+        return []
+
+
 def context_builder(state: dict[str, Any]) -> dict[str, Any]:
     state = ensure_history_policy(state)
     state = record_model_route(
@@ -327,6 +345,10 @@ def context_builder(state: dict[str, Any]) -> dict[str, Any]:
     episodic_facts = _load_episodic_context(state)
     if episodic_facts:
         repo_context["episodic_facts"] = episodic_facts
+
+    semantic_memories = _load_semantic_context(state)
+    if semantic_memories:
+        repo_context["semantic_memories"] = semantic_memories
 
     # Procedural memory: inject cached procedures for routine operations
     cached_procedures = _load_cached_procedures(state)

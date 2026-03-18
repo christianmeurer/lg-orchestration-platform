@@ -73,6 +73,34 @@ _CREATE_INDEX_RECOVERY_FACTS_NAMESPACE = (
     "CREATE INDEX IF NOT EXISTS idx_recovery_facts_namespace ON recovery_facts(namespace)"
 )
 
+_CREATE_SEMANTIC_MEMORIES_TABLE = """\
+CREATE TABLE IF NOT EXISTS semantic_memories (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    memory_key  TEXT NOT NULL,
+    run_id      TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT '',
+    source      TEXT NOT NULL DEFAULT '',
+    summary     TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    namespace   TEXT NOT NULL DEFAULT '',
+    UNIQUE(memory_key, run_id, namespace)
+)
+"""
+
+_CREATE_INDEX_SEMANTIC_MEMORIES_NAMESPACE = (
+    "CREATE INDEX IF NOT EXISTS idx_semantic_memories_namespace ON semantic_memories(namespace)"
+)
+
+_CREATE_SEMANTIC_MEMORIES_FTS = """\
+CREATE VIRTUAL TABLE IF NOT EXISTS semantic_memories_fts USING fts5(
+    summary,
+    kind,
+    source,
+    content='semantic_memories',
+    content_rowid='id'
+)
+"""
+
 _RECOVERY_FACT_COLUMNS = (
     "fingerprint",
     "run_id",
@@ -102,13 +130,17 @@ class RunStore:
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._lock = threading.Lock()
         self._namespace = namespace.strip()
+        self._fts_enabled = False
         with self._lock:
             self._conn.execute(_CREATE_TABLE)
             self._conn.execute(_CREATE_RECOVERY_FACTS_TABLE)
             self._conn.execute(_CREATE_INDEX_RUNS_NAMESPACE)
             self._conn.execute(_CREATE_INDEX_RECOVERY_FACTS_NAMESPACE)
+            self._conn.execute(_CREATE_SEMANTIC_MEMORIES_TABLE)
+            self._conn.execute(_CREATE_INDEX_SEMANTIC_MEMORIES_NAMESPACE)
             self._conn.commit()
         self._migrate()
+        self._ensure_semantic_fts()
 
     def _migrate(self) -> None:
         run_columns = (
@@ -132,6 +164,31 @@ class RunStore:
             self._conn.commit()
         except sqlite3.OperationalError:
             pass
+
+        try:
+            self._conn.execute(
+                "ALTER TABLE semantic_memories ADD COLUMN namespace TEXT NOT NULL DEFAULT ''"
+            )
+            self._conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
+    def _ensure_semantic_fts(self) -> None:
+        try:
+            with self._lock:
+                self._conn.execute(_CREATE_SEMANTIC_MEMORIES_FTS)
+                self._conn.execute("INSERT INTO semantic_memories_fts(semantic_memories_fts) VALUES('rebuild')")
+                self._conn.commit()
+            self._fts_enabled = True
+        except sqlite3.OperationalError:
+            self._fts_enabled = False
+
+    def _rebuild_semantic_fts(self) -> None:
+        if not self._fts_enabled:
+            return
+        with self._lock:
+            self._conn.execute("INSERT INTO semantic_memories_fts(semantic_memories_fts) VALUES('rebuild')")
+            self._conn.commit()
 
     def upsert(self, record: dict[str, Any]) -> None:
         data = {k: record[k] for k in _COLUMNS if k in record}
@@ -262,6 +319,75 @@ class RunStore:
             failure_class=failure_class or None,
             limit=limit,
         )
+
+    def upsert_semantic_memories(self, run_id: str, memories: list[dict[str, Any]]) -> None:
+        now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        rows: list[tuple[Any, ...]] = []
+        for memory in memories:
+            if not isinstance(memory, dict):
+                continue
+            summary = str(memory.get("summary", "")).strip()
+            if not summary:
+                continue
+            memory_key = str(memory.get("memory_key", "")).strip()
+            if not memory_key:
+                memory_key = f"{str(memory.get('kind', '')).strip()}|{str(memory.get('source', '')).strip()}|{summary}".lower()
+            rows.append(
+                (
+                    memory_key,
+                    run_id,
+                    str(memory.get("kind", "")).strip() or "run_note",
+                    str(memory.get("source", "")).strip(),
+                    summary,
+                    now,
+                    self._namespace,
+                )
+            )
+        if not rows:
+            return
+        sql = (
+            "INSERT OR REPLACE INTO semantic_memories "
+            "(memory_key, run_id, kind, source, summary, created_at, namespace) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
+        with self._lock:
+            self._conn.executemany(sql, rows)
+            self._conn.commit()
+        self._rebuild_semantic_fts()
+
+    def search_semantic_memories(
+        self,
+        *,
+        query: str,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        query_text = query.strip()
+        if not query_text:
+            return []
+        limit = max(1, limit)
+        if self._fts_enabled:
+            with self._lock:
+                cursor = self._conn.execute(
+                    "SELECT m.run_id, m.kind, m.source, m.summary, m.created_at, "
+                    "bm25(semantic_memories_fts) AS score "
+                    "FROM semantic_memories_fts "
+                    "JOIN semantic_memories m ON m.id = semantic_memories_fts.rowid "
+                    "WHERE semantic_memories_fts MATCH ? AND m.namespace = ? "
+                    "ORDER BY score ASC, m.created_at DESC LIMIT ?",
+                    (query_text, self._namespace, limit),
+                )
+                return [dict(row) for row in cursor.fetchall()]
+
+        like = f"%{query_text}%"
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT run_id, kind, source, summary, created_at, 0.0 AS score "
+                "FROM semantic_memories WHERE namespace = ? "
+                "AND (summary LIKE ? OR source LIKE ? OR kind LIKE ?) "
+                "ORDER BY created_at DESC LIMIT ?",
+                (self._namespace, like, like, like, limit),
+            )
+            return [dict(row) for row in cursor.fetchall()]
 
     def close(self) -> None:
         with self._lock:

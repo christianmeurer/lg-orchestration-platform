@@ -245,6 +245,82 @@ def _resume_argv(record: "RunRecord") -> list[str]:
     return argv
 
 
+def _semantic_memories_from_trace(
+    trace_payload: dict[str, Any] | None,
+    *,
+    request: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(trace_payload, dict):
+        return []
+
+    memories: list[dict[str, Any]] = []
+    request_text = str(trace_payload.get("request", request)).strip()
+    if request_text:
+        memories.append(
+            {
+                "kind": "request",
+                "source": "user_request",
+                "summary": request_text,
+            }
+        )
+
+    final_text = str(trace_payload.get("final", "")).strip()
+    if final_text:
+        memories.append(
+            {
+                "kind": "final_output",
+                "source": "reporter",
+                "summary": final_text[:600],
+            }
+        )
+
+    loop_summaries_raw = trace_payload.get("loop_summaries", [])
+    loop_summaries = [entry for entry in loop_summaries_raw if isinstance(entry, dict)] if isinstance(loop_summaries_raw, list) else []
+    for entry in loop_summaries[-5:]:
+        summary = str(entry.get("summary", "")).strip()
+        if not summary:
+            continue
+        memories.append(
+            {
+                "kind": "loop_summary",
+                "source": str(entry.get("failure_class", "")).strip() or "loop_summary",
+                "summary": summary,
+            }
+        )
+
+    approval_state = _approval_state_from_trace(trace_payload)
+    approval_summary = str(approval_state.get("summary", "")).strip()
+    if approval_summary:
+        memories.append(
+            {
+                "kind": "approval_summary",
+                "source": str(approval_state.get("details", {}).get("operation_class", "approval")).strip() or "approval",
+                "summary": approval_summary,
+            }
+        )
+    history_raw = approval_state.get("history", [])
+    history = [entry for entry in history_raw if isinstance(entry, dict)] if isinstance(history_raw, list) else []
+    for entry in history[-5:]:
+        decision = str(entry.get("decision", "")).strip() or "approval"
+        actor = str(entry.get("actor", "")).strip() or "operator"
+        rationale = str(entry.get("rationale", "")).strip()
+        challenge = str(entry.get("challenge_id", "")).strip()
+        summary = f"{decision} by {actor}"
+        if challenge:
+            summary = f"{summary} for {challenge}"
+        if rationale:
+            summary = f"{summary}: {rationale}"
+        memories.append(
+            {
+                "kind": "approval_history",
+                "source": decision,
+                "summary": summary,
+            }
+        )
+
+    return memories
+
+
 def _json_response(status: int, payload: dict[str, Any]) -> tuple[int, str, bytes]:
     body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
     return status, _JSON_CONTENT_TYPE, body
@@ -812,6 +888,10 @@ class RemoteAPIService:
                     facts = facts_raw if isinstance(facts_raw, list) else []
                     if facts:
                         self._run_store.upsert_recovery_facts(run_id, facts)
+                    self._run_store.upsert_semantic_memories(
+                        run_id,
+                        _semantic_memories_from_trace(trace_raw, request=record.request),
+                    )
             except Exception:
                 pass
 
@@ -823,6 +903,14 @@ class RemoteAPIService:
                 history=approval_history,
                 last_decision=approval_history[-1] if approval_history else None,
             )
+        if self._run_store is not None and trace_raw is not None:
+            try:
+                self._run_store.upsert_semantic_memories(
+                    run_id,
+                    _semantic_memories_from_trace(trace_raw, request=record.request),
+                )
+            except Exception:
+                pass
 
         # Procedural memory: cache verified tool sequences on success
         if exit_code == 0 and self._procedure_cache is not None:

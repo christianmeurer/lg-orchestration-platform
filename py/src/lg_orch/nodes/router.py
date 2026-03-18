@@ -87,6 +87,18 @@ def _default_route(state: dict[str, Any]) -> RouterDecision:
     state_fact_count = len(facts_raw) if isinstance(facts_raw, list) else 0
     fact_count_raw = planner_context.get("fact_count", state_fact_count)
     fact_count = int(fact_count_raw) if isinstance(fact_count_raw, int) else state_fact_count
+    semantic_memories_raw = repo_context.get("semantic_memories", [])
+    semantic_memories = (
+        [entry for entry in semantic_memories_raw if isinstance(entry, dict)]
+        if isinstance(semantic_memories_raw, list)
+        else []
+    )
+    semantic_memory_count_raw = planner_context.get("semantic_memory_count", len(semantic_memories))
+    semantic_memory_count = (
+        int(semantic_memory_count_raw)
+        if isinstance(semantic_memory_count_raw, int)
+        else len(semantic_memories)
+    )
 
     retry_target = str(state.get("retry_target", "")).strip()
     failure_fingerprint = str(verification.get("failure_fingerprint", "")).strip()
@@ -120,12 +132,15 @@ def _default_route(state: dict[str, Any]) -> RouterDecision:
         or working_set_tokens > interactive_limit
         or compression_score > 0
         or fact_count >= 3
+        or semantic_memory_count >= 2
     ):
         rationale = "request complexity or context size requires deeper planning"
         if compression_score > 0:
             rationale = "context compression pressure requires deeper planning"
         elif fact_count >= 3:
             rationale = "recovery memory indicates deeper planning is needed"
+        elif semantic_memory_count >= 2:
+            rationale = "semantic memory recall indicates deeper planning is needed"
         return RouterDecision(
             intent=intent,
             task_class="deep_planning",
@@ -137,7 +152,7 @@ def _default_route(state: dict[str, Any]) -> RouterDecision:
             prefix_segment="stable_prefix",
             context_tokens=max(token_estimate, working_set_tokens),
             compression_pressure=compression_score,
-            fact_count=fact_count,
+            fact_count=max(fact_count, semantic_memory_count),
         )
 
     rationale = "interactive lane selected for low-latency reasoning"
@@ -154,7 +169,7 @@ def _default_route(state: dict[str, Any]) -> RouterDecision:
         prefix_segment="stable_prefix",
         context_tokens=max(token_estimate, working_set_tokens),
         compression_pressure=compression_score,
-        fact_count=fact_count,
+        fact_count=max(fact_count, semantic_memory_count),
     )
 
 

@@ -352,6 +352,15 @@ def build_context_layers(
     if isinstance(episodic_facts_raw, list) and episodic_facts_raw:
         stable_segments.append(("episodic_facts", _safe_json(episodic_facts_raw[:5])))
 
+    semantic_memories_raw = repo_context.get("semantic_memories", [])
+    semantic_memories = (
+        [entry for entry in semantic_memories_raw if isinstance(entry, dict)]
+        if isinstance(semantic_memories_raw, list)
+        else []
+    )
+    if semantic_memories:
+        stable_segments.append(("semantic_memories", _safe_json(semantic_memories[:5])))
+
     mcp_recovery_hints = str(repo_context.get("mcp_recovery_hints", "")).strip()
     if mcp_recovery_hints:
         stable_segments.append(("mcp_recovery_hints", mcp_recovery_hints))
@@ -456,6 +465,8 @@ def build_context_layers(
         + working_pressure["compressed_segments"],
         "dropped_segments": stable_pressure["dropped_segments"] + working_pressure["dropped_segments"],
     }
+    semantic_memory_count = len(semantic_memories)
+    combined_fact_count = len(fact_pack) + min(semantic_memory_count, 3)
 
     return {
         "semantic_hits": semantic_hits,
@@ -475,7 +486,8 @@ def build_context_layers(
             "stable_token_estimate": approx_token_count(stable_text),
             "working_set_token_estimate": approx_token_count(working_text),
             "compression_pressure": overall_pressure["score"],
-            "fact_count": len(fact_pack),
+            "fact_count": combined_fact_count,
+            "semantic_memory_count": semantic_memory_count,
         },
         "compression": {
             "stable_prefix": stable_decisions,
