@@ -1,6 +1,0 @@
-- Minimal diff.
-- Batch independent reads, then patch once.
-- Re-read the target immediately before editing if it changed during the task.
-- Update tests or docs only when behavior changes.
-- Treat Orchestrator, Architect, and Debug handoffs as the implementation contract.
-- If the task becomes architecture-heavy or root cause is still unclear, hand back before making broad edits.

@@ -30,3 +30,9 @@ infra/k8s/secrets.yaml
 # SQLite databases may contain run history / PII
 *.sqlite
 *.db
+
+# Local editor metadata
+[.]roo/
+[.]rooignore
+[.]roomodes
+
