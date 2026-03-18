@@ -7,7 +7,7 @@ from typing import Any
 from lg_orch.logging import get_logger
 from lg_orch.memory import ensure_history_policy, get_compression_summary, prune_post_verification_history
 from lg_orch.model_routing import record_model_route, tool_routing_metadata
-from lg_orch.state import RecoveryAction, RecoveryPacket, VerificationCheck, VerifierReport
+from lg_orch.state import AgentHandoff, HandoffEvidence, RecoveryAction, RecoveryPacket, VerificationCheck, VerifierReport
 from lg_orch.tools import RunnerClient
 from lg_orch.trace import append_event
 
@@ -350,12 +350,30 @@ def _classify_retry(
                 {
                     "failure_class": "test_failure_post_change",
                     "failure_fingerprint": fingerprint,
-                    "rationale": "test failed after a patch was applied; planner should generate a test-repair step",
-                    "retry_target": "planner",
+                    "rationale": "test failed after a patch was applied; coder should attempt a localized repair before broader replanning",
+                    "retry_target": "coder",
                     "context_scope": "working_set",
                     "plan_action": "amend",
                 },
                 "test_failure_post_change",
+            )
+
+        patch_applied = any(
+            str(entry.get("tool", "")).strip().lower() in {"apply_patch", "write_file"}
+            and bool(entry.get("ok", False))
+            for entry in tool_results
+        )
+        if patch_applied:
+            return (
+                {
+                    "failure_class": "localized_verification_failure",
+                    "failure_fingerprint": fingerprint,
+                    "rationale": "verification failed after a bounded patch; coder should attempt a localized repair before broader replanning",
+                    "retry_target": "coder",
+                    "context_scope": "working_set",
+                    "plan_action": "amend",
+                },
+                "localized_verification_failure",
             )
 
         if current_loop >= 2:
@@ -421,6 +439,87 @@ def _recovery_packet_payload(
         summary=loop_summary,
         last_check=last_check,
         discard_reason=discard_reason,
+    ).model_dump()
+
+
+def _next_handoff_payload(
+    state: dict[str, Any],
+    *,
+    report: dict[str, Any],
+    checks: list[VerificationCheck],
+    current_loop: int,
+) -> dict[str, Any] | None:
+    consumer = str(report.get("retry_target", "")).strip()
+    if consumer not in {"planner", "coder", "context_builder", "router"}:
+        return None
+
+    request = str(state.get("request", "")).strip()
+    failure_class = str(report.get("failure_class", "")).strip()
+    summary = str(report.get("loop_summary", "")).strip()
+    if not summary and checks:
+        summary = str(checks[0].summary).strip()
+
+    file_scope: list[str] = []
+    active_handoff_raw = state.get("active_handoff", {})
+    active_handoff = dict(active_handoff_raw) if isinstance(active_handoff_raw, dict) else {}
+    active_scope_raw = active_handoff.get("file_scope", [])
+    if isinstance(active_scope_raw, list):
+        file_scope.extend(str(item).strip() for item in active_scope_raw if str(item).strip())
+
+    plan_raw = state.get("plan", {})
+    plan = dict(plan_raw) if isinstance(plan_raw, dict) else {}
+    steps_raw = plan.get("steps", [])
+    if isinstance(steps_raw, list):
+        for step in steps_raw:
+            if not isinstance(step, dict):
+                continue
+            touched_raw = step.get("files_touched", [])
+            if isinstance(touched_raw, list):
+                file_scope.extend(str(item).strip() for item in touched_raw if str(item).strip())
+
+    deduped_scope: list[str] = []
+    for item in file_scope:
+        if item and item not in deduped_scope:
+            deduped_scope.append(item)
+
+    evidence: list[dict[str, Any]] = []
+    if request:
+        evidence.append(HandoffEvidence(kind="request", ref="user_request", detail=request).model_dump())
+    if summary:
+        evidence.append(HandoffEvidence(kind="verification", ref=failure_class or "verification_failed", detail=summary).model_dump())
+    prior_objective = str(active_handoff.get("objective", "")).strip()
+    if prior_objective:
+        evidence.append(HandoffEvidence(kind="prior_handoff", ref=str(active_handoff.get("consumer", "")), detail=prior_objective).model_dump())
+
+    objective = "Replan the next bounded iteration using the latest verifier evidence."
+    constraints = ["Prefer a bounded next step."]
+    acceptance_checks = ["The next action addresses the verifier evidence."]
+    if consumer == "coder":
+        objective = "Prepare a localized repair using the current plan and the latest verifier evidence."
+        constraints = [
+            "Stay within the current file scope unless evidence proves a broader change is required.",
+            "Prefer amending the existing bounded plan over broad replanning.",
+        ]
+        acceptance_checks = ["The localized failure is addressed without broadening scope unnecessarily."]
+    elif consumer == "context_builder":
+        objective = "Rebuild repository context before the next bounded planning iteration."
+        constraints = ["Discard stale working-set assumptions before replanning."]
+        acceptance_checks = ["The next context snapshot resolves the detected architecture mismatch."]
+    elif consumer == "router":
+        objective = "Re-route the task after repeated verification failures."
+        constraints = ["Choose a stronger recovery topology before executing again."]
+        acceptance_checks = ["The next route accounts for repeated failure evidence."]
+
+    return AgentHandoff(
+        producer="verifier",
+        consumer=consumer,
+        objective=objective,
+        file_scope=deduped_scope,
+        evidence=evidence,
+        constraints=constraints,
+        acceptance_checks=acceptance_checks,
+        retry_budget=1,
+        provenance=[f"verifier:loop:{current_loop}", f"failure_class:{failure_class or 'verification_failed'}"],
     ).model_dump()
 
 
@@ -761,6 +860,16 @@ def verifier(state: dict[str, Any]) -> dict[str, Any]:
                 last_check=last_check,
                 discard_reason=discard_reason,
             )
+            next_handoff = _next_handoff_payload(
+                state,
+                report={
+                    "retry_target": recovery_action["retry_target"],
+                    "failure_class": recovery_action["failure_class"],
+                    "loop_summary": loop_summary,
+                },
+                checks=checks,
+                current_loop=current_loop,
+            )
             report = VerifierReport(
                 ok=False,
                 checks=checks,
@@ -772,6 +881,7 @@ def verifier(state: dict[str, Any]) -> dict[str, Any]:
                 failure_fingerprint=recovery_action["failure_fingerprint"],
                 recovery=recovery_action,
                 recovery_packet=recovery_packet,
+                next_handoff=next_handoff,
                 loop_summary=loop_summary,
             ).model_dump()
         elif not acceptance_ok:
@@ -785,6 +895,16 @@ def verifier(state: dict[str, Any]) -> dict[str, Any]:
                 last_check=last_check,
                 discard_reason=discard_reason,
             )
+            next_handoff = _next_handoff_payload(
+                state,
+                report={
+                    "retry_target": recovery_action["retry_target"],
+                    "failure_class": recovery_action["failure_class"],
+                    "loop_summary": loop_summary,
+                },
+                checks=[],
+                current_loop=current_loop,
+            )
             report = VerifierReport(
                 ok=False,
                 checks=[],
@@ -796,6 +916,7 @@ def verifier(state: dict[str, Any]) -> dict[str, Any]:
                 failure_fingerprint=recovery_action["failure_fingerprint"],
                 recovery=recovery_action,
                 recovery_packet=recovery_packet,
+                next_handoff=next_handoff,
                 loop_summary=loop_summary,
             ).model_dump()
         else:
@@ -825,6 +946,7 @@ def verifier(state: dict[str, Any]) -> dict[str, Any]:
             "failure_fingerprint": "verifier_failure",
             "recovery": None,
             "recovery_packet": None,
+            "next_handoff": None,
             "loop_summary": "verifier failed to classify results",
         }
 
@@ -876,6 +998,7 @@ def verifier(state: dict[str, Any]) -> dict[str, Any]:
         "tool_results": tool_results,
         "verification": report,
         "budgets": budgets,
+        "active_handoff": report.get("next_handoff"),
         "retry_target": report.get("retry_target"),
         "facts": facts,
         "recovery_packet": recovery_packet,
@@ -883,6 +1006,7 @@ def verifier(state: dict[str, Any]) -> dict[str, Any]:
         "telemetry": telemetry,
     }
     if ok:
+        out["active_handoff"] = None
         out["recovery_packet"] = None
         out["context_reset_requested"] = False
         out["plan_discarded"] = False

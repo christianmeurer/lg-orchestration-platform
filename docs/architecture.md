@@ -12,12 +12,14 @@ The system separates "reasoning" from "execution" to achieve a secure, determini
 ## The Python Orchestrator (`py/`)
 
 ### State Management
-The state of the agent is managed using Pydantic models defined in `py/src/lg_orch/state.py`. The primary state object is `OrchState`, which holds:
+The state of the agent is managed using Pydantic models defined in `py/src/lg_orch/state.py`. The primary state object is `OrchState`, which now carries not only planning/execution state but also explicit collaboration and control-plane state, including:
 - `request`: The user's input.
-- `plan`: The steps planned by the agent.
+- `plan`: The planned bounded workflow.
+- `active_handoff`: the current specialist-to-specialist contract (for example planner → coder or verifier → coder).
 - `tool_results`: Artifacts and outputs from tool executions.
-- `patches`: Code diffs to be applied.
-- `verification`: Results from tests or linters.
+- `verification`: Results from tests, critique, and recovery classification.
+- `approvals` / `_approval_context`: approval and audit state for suspended / resumed runs.
+- `_checkpoint`: resumability metadata including thread and checkpoint ids.
 
 ### Graph Topology
 The agent's thought process is defined as a directed graph in `py/src/lg_orch/graph.py`. The nodes represent steps in the workflow:
@@ -25,10 +27,11 @@ The agent's thought process is defined as a directed graph in `py/src/lg_orch/gr
 2. **policy_gate**: Enforces budgets (e.g. `max_loops`) and allowlists. Conditionally routes back to `context_builder`, `router`, `planner`, or proceeds to `reporter` if budgets are exhausted.
 3. **context_builder**: Gathers repository context, AST summaries, and semantic hits.
 4. **router**: Decides model routing lanes based on task and context needs.
-5. **planner**: Analyzes the context and generates a structured `PlannerOutput` containing steps and tool calls.
-6. **executor**: Uses the `RunnerClient` (`py/src/lg_orch/tools/runner_client.py`) to dispatch planned tool calls to the Rust runner over HTTP.
-7. **verifier**: Evaluates the results of the execution. If verification fails, it routes back to `policy_gate` for context reset and retry (forming a bounded verify/retry loop). If successful, it proceeds to `reporter`.
-8. **reporter**: Summarizes the final output and presents it to the user.
+5. **planner**: Analyzes the context and generates a structured `PlannerOutput` containing steps, verification calls, and specialist handoff contracts.
+6. **coder**: Consumes planner handoffs, prepares a bounded execution handoff for the executor, and keeps patch work explicit rather than implicit inside planning.
+7. **executor**: Uses the `RunnerClient` (`py/src/lg_orch/tools/runner_client.py`) to dispatch planned tool calls to the Rust runner over HTTP.
+8. **verifier**: Evaluates the results of the execution. If verification fails, it routes back to `policy_gate` for context reset and retry (forming a bounded verify/retry loop). It can now target `coder`, `planner`, `router`, or `context_builder` depending on failure class.
+9. **reporter**: Summarizes the final output and presents it to the user.
 
 ### Tool Client
 The Python side never executes shell commands or writes files directly. Instead, it uses `RunnerClient` to send requests to the Rust server. It uses `httpx` and `tenacity` for resilient HTTP communication.
@@ -59,9 +62,10 @@ Both sides of the codebase are heavily tested:
 
 ## Getting Started / Run Flow
 When a user issues a command via the CLI (`uv run lg-orch run "task"`):
-1. The Python CLI initializes the LangGraph state.
-2. The orchestrator progresses through the nodes (ingest -> policy -> context -> router -> plan).
+1. The Python CLI initializes the LangGraph state and checkpoint runtime.
+2. The orchestrator progresses through the nodes (ingest -> policy -> context -> router -> planner -> coder).
 3. The `executor` node hits the Rust runner's `/v1/tools/batch_execute` endpoint.
 4. The Rust runner validates the request against its sandbox rules and performs the action, returning standard output, standard error, and exit codes.
-5. The `verifier` checks the outcome. If tools fail or the loop budget isn't exhausted, execution loops back to `policy_gate` for another iteration, effectively updating state and planning further actions.
-6. The `reporter` prints the final result once verification passes or max loops are exhausted.
+5. If a mutation requires approval, the run can now suspend with durable approval state, checkpoint ids, and audit history exposed through the remote API.
+6. The `verifier` checks the outcome. If tools fail or the loop budget isn't exhausted, execution loops back to `policy_gate` and can target `coder`, `planner`, `router`, or `context_builder` for the next bounded iteration.
+7. The `reporter` prints the final result once verification passes, a run is rejected, or max loops are exhausted.

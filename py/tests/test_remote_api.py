@@ -340,6 +340,205 @@ def test_run_store_persists_on_create_and_finish(
     store.close()
 
 
+def test_api_http_response_marks_run_suspended_when_trace_requires_approval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = RemoteAPIService(repo_root=tmp_path)
+
+    def fake_spawn(*, argv: list[str], cwd: Path, env: dict[str, str] | None = None) -> DummyProcess:
+        run_id = argv[argv.index("--run-id") + 1]
+        trace_dir = Path(argv[argv.index("--trace-out-dir") + 1])
+        trace_path = (cwd / trace_dir / f"run-{run_id}.json").resolve()
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        trace_path.write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "tool_results": [
+                        {
+                            "tool": "apply_patch",
+                            "ok": False,
+                            "artifacts": {
+                                "error": "approval_required",
+                                "approval": {
+                                    "required": True,
+                                    "status": "challenge_required",
+                                    "operation_class": "apply_patch",
+                                    "challenge_id": "approval:apply_patch",
+                                    "reason": "missing_approval_token",
+                                },
+                            },
+                        }
+                    ],
+                    "checkpoint": {
+                        "thread_id": "thread-abc",
+                        "latest_checkpoint_id": "cp-123",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return DummyProcess(output="approval needed\n", returncode=1)
+
+    monkeypatch.setattr(remote_api, "_spawn_run_subprocess", fake_spawn)
+    monkeypatch.setattr(remote_api, "_start_daemon_thread", lambda *, target, name: target())
+
+    status, _, body = _api_http_response(
+        service,
+        method="POST",
+        request_path="/v1/runs",
+        request_body=json.dumps({"request": "Analyze", "run_id": "abc"}).encode("utf-8"),
+    )
+    assert status == 201
+    payload = json.loads(body.decode("utf-8"))
+    assert payload["status"] == "suspended"
+    assert payload["pending_approval"] is True
+    assert payload["checkpoint_id"] == "cp-123"
+    assert payload["thread_id"] == "thread-abc"
+
+
+def test_api_http_response_approves_suspended_run_and_resumes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = RemoteAPIService(repo_root=tmp_path)
+    spawn_calls: list[dict[str, Any]] = []
+
+    def fake_spawn(*, argv: list[str], cwd: Path, env: dict[str, str] | None = None) -> DummyProcess:
+        call_no = len(spawn_calls)
+        spawn_calls.append({"argv": list(argv), "env": dict(env) if env is not None else {}})
+        run_id = argv[argv.index("--run-id") + 1]
+        trace_dir = Path(argv[argv.index("--trace-out-dir") + 1])
+        trace_path = (cwd / trace_dir / f"run-{run_id}.json").resolve()
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        if call_no == 0:
+            trace_path.write_text(
+                json.dumps(
+                    {
+                        "run_id": run_id,
+                        "tool_results": [
+                            {
+                                "tool": "apply_patch",
+                                "ok": False,
+                                "artifacts": {
+                                    "error": "approval_required",
+                                    "approval": {
+                                        "required": True,
+                                        "status": "challenge_required",
+                                        "operation_class": "apply_patch",
+                                        "challenge_id": "approval:apply_patch",
+                                        "reason": "missing_approval_token",
+                                    },
+                                },
+                            }
+                        ],
+                        "checkpoint": {
+                            "thread_id": "thread-abc",
+                            "latest_checkpoint_id": "cp-123",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return DummyProcess(output="approval needed\n", returncode=1)
+        return RunningDummyProcess(output="resumed\n")
+
+    thread_calls = {"count": 0}
+
+    def fake_thread(*, target, name):
+        thread_calls["count"] += 1
+        if thread_calls["count"] == 1:
+            target()
+
+    monkeypatch.setattr(remote_api, "_spawn_run_subprocess", fake_spawn)
+    monkeypatch.setattr(remote_api, "_start_daemon_thread", fake_thread)
+
+    status, _, _ = _api_http_response(
+        service,
+        method="POST",
+        request_path="/v1/runs",
+        request_body=json.dumps({"request": "Analyze", "run_id": "abc"}).encode("utf-8"),
+    )
+    assert status == 201
+
+    status, _, body = _api_http_response(
+        service,
+        method="POST",
+        request_path="/v1/runs/abc/approve",
+        request_body=json.dumps({"actor": "chris", "rationale": "looks safe"}).encode("utf-8"),
+    )
+    assert status == 202
+    payload = json.loads(body.decode("utf-8"))
+    assert payload["status"] == "running"
+    assert payload["pending_approval"] is False
+    assert spawn_calls[1]["argv"][-5:] == ["--resume", "--thread-id", "thread-abc", "--checkpoint-id", "cp-123"]
+    approvals = json.loads(spawn_calls[1]["env"]["LG_RESUME_APPROVALS_JSON"])
+    assert approvals["apply_patch"]["challenge_id"] == "approval:apply_patch"
+
+
+def test_api_http_response_rejects_suspended_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = RemoteAPIService(repo_root=tmp_path)
+
+    def fake_spawn(*, argv: list[str], cwd: Path, env: dict[str, str] | None = None) -> DummyProcess:
+        run_id = argv[argv.index("--run-id") + 1]
+        trace_dir = Path(argv[argv.index("--trace-out-dir") + 1])
+        trace_path = (cwd / trace_dir / f"run-{run_id}.json").resolve()
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
+        trace_path.write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "tool_results": [
+                        {
+                            "tool": "apply_patch",
+                            "ok": False,
+                            "artifacts": {
+                                "error": "approval_required",
+                                "approval": {
+                                    "required": True,
+                                    "status": "challenge_required",
+                                    "operation_class": "apply_patch",
+                                    "challenge_id": "approval:apply_patch",
+                                    "reason": "missing_approval_token",
+                                },
+                            },
+                        }
+                    ],
+                    "checkpoint": {
+                        "thread_id": "thread-abc",
+                        "latest_checkpoint_id": "cp-123",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return DummyProcess(output="approval needed\n", returncode=1)
+
+    monkeypatch.setattr(remote_api, "_spawn_run_subprocess", fake_spawn)
+    monkeypatch.setattr(remote_api, "_start_daemon_thread", lambda *, target, name: target())
+
+    status, _, _ = _api_http_response(
+        service,
+        method="POST",
+        request_path="/v1/runs",
+        request_body=json.dumps({"request": "Analyze", "run_id": "abc"}).encode("utf-8"),
+    )
+    assert status == 201
+
+    status, _, body = _api_http_response(
+        service,
+        method="POST",
+        request_path="/v1/runs/abc/reject",
+        request_body=json.dumps({"actor": "chris"}).encode("utf-8"),
+    )
+    assert status == 202
+    payload = json.loads(body.decode("utf-8"))
+    assert payload["status"] == "rejected"
+    assert payload["pending_approval"] is False
+    assert payload["approval_history"][-1]["decision"] == "rejected"
+
+
 # ---------------------------------------------------------------------------
 # _RateLimiter tests
 # ---------------------------------------------------------------------------

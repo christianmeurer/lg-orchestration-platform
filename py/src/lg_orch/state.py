@@ -7,9 +7,31 @@ from pydantic import BaseModel, ConfigDict, Field
 
 Intent = Literal["code_change", "analysis", "research", "question", "refactor", "debug"]
 RouteLane = Literal["interactive", "deep_planning", "recovery"]
-RetryTarget = Literal["planner", "context_builder", "router"]
+RetryTarget = Literal["planner", "coder", "context_builder", "router"]
 ContextScope = Literal["stable_prefix", "working_set", "full_reset"]
 PlanAction = Literal["keep", "amend", "discard_reset"]
+
+
+class HandoffEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str
+    detail: str
+    ref: str = ""
+
+
+class AgentHandoff(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    producer: str
+    consumer: str
+    objective: str
+    file_scope: list[str] = Field(default_factory=list)
+    evidence: list[HandoffEvidence] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    acceptance_checks: list[str] = Field(default_factory=list)
+    retry_budget: int = Field(default=1, ge=0)
+    provenance: list[str] = Field(default_factory=list)
 
 
 class ToolCall(BaseModel):
@@ -27,6 +49,7 @@ class PlanStep(BaseModel):
     tools: list[ToolCall] = Field(default_factory=list)
     expected_outcome: str
     files_touched: list[str] = Field(default_factory=list)
+    handoff: AgentHandoff | None = None
 
 
 class RecoveryAction(BaseModel):
@@ -102,6 +125,7 @@ class VerifierReport(BaseModel):
     failure_fingerprint: str = ""
     recovery: RecoveryAction | None = None
     recovery_packet: RecoveryPacket | None = None
+    next_handoff: AgentHandoff | None = None
     loop_summary: str = ""
 
 
@@ -123,6 +147,7 @@ class OrchState(BaseModel):
     security: dict[str, Any] = Field(default_factory=dict)
     telemetry: dict[str, Any] = Field(default_factory=dict)
     route: RouterDecision | None = None
+    active_handoff: AgentHandoff | None = None
     retry_target: RetryTarget | None = None
     recovery_packet: RecoveryPacket | None = None
     context_reset_requested: bool = False

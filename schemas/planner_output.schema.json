@@ -8,6 +8,85 @@
     "rollback"
   ],
   "additionalProperties": false,
+  "$defs": {
+    "handoffEvidence": {
+      "type": "object",
+      "required": [
+        "kind",
+        "detail"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "detail": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        }
+      }
+    },
+    "agentHandoff": {
+      "type": "object",
+      "required": [
+        "producer",
+        "consumer",
+        "objective"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "producer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "consumer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 1
+        },
+        "file_scope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/handoffEvidence"
+          }
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "acceptance_checks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "retry_budget": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "provenance": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
   "properties": {
     "steps": {
       "type": "array",
@@ -59,6 +138,13 @@
             "items": {
               "type": "string"
             }
+          },
+          "handoff": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "$ref": "#/$defs/agentHandoff"
           }
         }
       }
@@ -126,6 +212,7 @@
           "type": "string",
           "enum": [
             "planner",
+            "coder",
             "context_builder",
             "router"
           ]
@@ -181,6 +268,7 @@
           "type": "string",
           "enum": [
             "planner",
+            "coder",
             "context_builder",
             "router"
           ]

@@ -6,6 +6,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
 
 from lg_orch.nodes import (
+    coder,
     context_builder,
     executor,
     ingest,
@@ -31,6 +32,8 @@ def route_after_policy_gate(state: dict[str, Any]) -> str:
         return "router"
     if retry_target == "planner":
         return "planner"
+    if retry_target == "coder":
+        return "coder"
     if retry_target == "context_builder":
         return "context_builder"
 
@@ -52,6 +55,7 @@ def build_graph(*, checkpointer: BaseCheckpointSaver[Any] | None = None) -> Any:
     g.add_node("context_builder", context_builder)
     g.add_node("router", router)
     g.add_node("planner", planner)
+    g.add_node("coder", coder)
     g.add_node("executor", executor)
     g.add_node("verifier", verifier)
     g.add_node("reporter", reporter)
@@ -65,12 +69,14 @@ def build_graph(*, checkpointer: BaseCheckpointSaver[Any] | None = None) -> Any:
             "context_builder": "context_builder",
             "router": "router",
             "planner": "planner",
+            "coder": "coder",
             "reporter": "reporter",
         },
     )
     g.add_edge("context_builder", "router")
     g.add_edge("router", "planner")
-    g.add_edge("planner", "executor")
+    g.add_edge("planner", "coder")
+    g.add_edge("coder", "executor")
     g.add_edge("executor", "verifier")
     g.add_conditional_edges(
         "verifier",
@@ -90,6 +96,7 @@ def export_mermaid() -> str:
         "context_builder",
         "router",
         "planner",
+        "coder",
         "executor",
         "verifier",
         "reporter",
@@ -100,10 +107,12 @@ def export_mermaid() -> str:
         GraphEdge("policy_gate", "context_builder"),
         GraphEdge("policy_gate", "router"),
         GraphEdge("policy_gate", "planner"),
+        GraphEdge("policy_gate", "coder"),
         GraphEdge("policy_gate", "reporter"),
         GraphEdge("context_builder", "router"),
         GraphEdge("router", "planner"),
-        GraphEdge("planner", "executor"),
+        GraphEdge("planner", "coder"),
+        GraphEdge("coder", "executor"),
         GraphEdge("executor", "verifier"),
         GraphEdge("verifier", "reporter"),
         GraphEdge("verifier", "policy_gate"),

@@ -2,3 +2,4 @@
 - Use enough detail to answer fully.
 - Base conclusions on inspected files or command output.
 - No filler.
+- If execution is needed, end with a compact handoff to the next mode instead of speculative changes.

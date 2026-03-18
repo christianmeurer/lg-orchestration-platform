@@ -89,6 +89,14 @@ def test_planner_plan_has_tool_calls() -> None:
     assert tools[1]["tool"] == "search_files"
 
 
+def test_planner_code_change_default_plan_sets_coder_handoff() -> None:
+    out = planner(_base_state(request="implement dark mode"))
+    handoff = out["plan"]["steps"][0]["handoff"]
+    assert handoff["producer"] == "planner"
+    assert handoff["consumer"] == "coder"
+    assert out["active_handoff"]["consumer"] == "coder"
+
+
 def test_planner_pdf_request_prefers_read_file_in_deterministic_plan() -> None:
     out = planner(_base_state(request='Read "FLUX LoRA Training Guide.pdf" and implement'))
     tools = out["plan"]["steps"][0]["tools"]

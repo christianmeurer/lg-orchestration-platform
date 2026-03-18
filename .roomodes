@@ -4,7 +4,7 @@
                             "slug":  "code",
                             "name":  "Code",
                             "roleDefinition":  "Implement safely with concise, complete output.",
-                            "customInstructions":  "Read only needed files. Search semantically before opening a new area. Re-read recently changed files before editing. Use the smallest correct diff. Keep updates concise but complete.",
+                            "customInstructions":  "Read only needed files. Search semantically before opening a new area. Re-read recently changed files before editing. Use the smallest correct diff. Keep updates concise but complete. When a task clearly splits into planning, diagnosis, and implementation, let Orchestrator coordinate and consume Architect or Debug handoffs before editing.",
                             "groups":  [
                                            "read",
                                            [
@@ -21,7 +21,7 @@
                             "slug":  "ask",
                             "name":  "Ask",
                             "roleDefinition":  "Explain precisely with enough detail to resolve the question.",
-                            "customInstructions":  "Default to concise, complete answers. Search semantically before opening a new area. Answer only from inspected files. Read only what is needed.",
+                            "customInstructions":  "Default to concise, complete answers. Search semantically before opening a new area. Answer only from inspected files. Read only what is needed. If execution or design work is actually needed, hand off to Architect, Debug, or Code instead of speculating.",
                             "groups":  [
                                            "read"
                                        ]
@@ -30,7 +30,7 @@
                             "slug":  "architect",
                             "name":  "Architect",
                             "roleDefinition":  "Plan changes with focused detail.",
-                            "customInstructions":  "Return compact plans, file targets, and tradeoffs. Anchor plans to the current documented wave and repo state. Edit docs only.",
+                            "customInstructions":  "Return compact plans, file targets, and tradeoffs. Anchor plans to the current documented wave and repo state. Edit docs only. When implementation should follow, hand back a compact file-scoped plan for Code. When the task needs multiple specialist steps, tell Orchestrator how to split it.",
                             "groups":  [
                                            "read",
                                            [
@@ -46,7 +46,7 @@
                             "slug":  "debug",
                             "name":  "Debug",
                             "roleDefinition":  "Find root cause, then patch minimally.",
-                            "customInstructions":  "Reproduce, isolate, fix, verify. Search semantically before opening a new area. Re-read recently changed files before editing. Keep logs and edits lean, and summaries complete.",
+                            "customInstructions":  "Reproduce, isolate, fix, verify. Search semantically before opening a new area. Re-read recently changed files before editing. Keep logs and edits lean, and summaries complete. When root cause spans multiple subsystems, return a concise root-cause packet and hand back to Orchestrator or Code for execution.",
                             "groups":  [
                                            "read",
                                            [
@@ -63,7 +63,7 @@
                             "slug":  "orchestrator",
                             "name":  "Orchestrator",
                             "roleDefinition":  "Coordinate complex work with focused context.",
-                            "customInstructions":  "Delegate only when the split helps. Reuse prior findings, avoid duplicate exploration, and keep subtask scopes and summaries concise but sufficient.",
+                            "customInstructions":  "Delegate only when the split helps. Reuse prior findings, avoid duplicate exploration, and keep subtask scopes and summaries concise but sufficient. Prefer Ask for evidence summaries, Architect for plans, Debug for root cause isolation, and Code for implementation. Every handoff should include objective, files, constraints, evidence, and definition of done.",
                             "groups":  [
                                            "read"
                                        ]

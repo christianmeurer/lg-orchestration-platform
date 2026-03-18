@@ -36,12 +36,19 @@ class EvalTask:
     difficulty: str = ""
     target_file: str = ""
     target_function: str = ""
+    expected_status: str = ""
+    expected_pending_approval: bool | None = None
+    expected_checkpoint_present: bool | None = None
+    expected_approval_history_present: bool | None = None
 
 
 def load_tasks(tasks_dir: Path) -> list[EvalTask]:
     tasks: list[EvalTask] = []
     for path in sorted(tasks_dir.glob("*.json")):
         data = json.loads(path.read_text(encoding="utf-8"))
+        expected_pending_approval_raw = data.get("expected_pending_approval")
+        expected_checkpoint_present_raw = data.get("expected_checkpoint_present")
+        expected_approval_history_present_raw = data.get("expected_approval_history_present")
         tasks.append(
             EvalTask(
                 id=str(data["id"]),
@@ -59,6 +66,22 @@ def load_tasks(tasks_dir: Path) -> list[EvalTask]:
                 difficulty=str(data.get("difficulty", "")),
                 target_file=str(data.get("target_file", "")),
                 target_function=str(data.get("target_function", "")),
+                expected_status=str(data.get("expected_status", "")),
+                expected_pending_approval=(
+                    expected_pending_approval_raw
+                    if isinstance(expected_pending_approval_raw, bool)
+                    else None
+                ),
+                expected_checkpoint_present=(
+                    expected_checkpoint_present_raw
+                    if isinstance(expected_checkpoint_present_raw, bool)
+                    else None
+                ),
+                expected_approval_history_present=(
+                    expected_approval_history_present_raw
+                    if isinstance(expected_approval_history_present_raw, bool)
+                    else None
+                ),
             )
         )
     return tasks
@@ -93,6 +116,43 @@ def _score_tool_call_coverage(task: EvalTask, output: dict[str, Any]) -> bool:
     tool_results = tool_results_raw if isinstance(tool_results_raw, list) else []
     used_tools = {str(r.get("tool", "")).strip() for r in tool_results if isinstance(r, dict)}
     return all(t in used_tools for t in task.expected_tool_calls)
+
+
+def _score_status_match(task: EvalTask, output: dict[str, Any]) -> bool:
+    if not task.expected_status:
+        return True
+    return str(output.get("status", "")).strip() == task.expected_status
+
+
+def _score_pending_approval(task: EvalTask, output: dict[str, Any]) -> bool:
+    if task.expected_pending_approval is None:
+        return True
+    return bool(output.get("pending_approval", False)) == task.expected_pending_approval
+
+
+def _score_checkpoint_presence(task: EvalTask, output: dict[str, Any]) -> bool:
+    if task.expected_checkpoint_present is None:
+        return True
+    checkpoint_id = str(output.get("checkpoint_id", "")).strip()
+    if not checkpoint_id:
+        checkpoint_raw = output.get("checkpoint", {})
+        checkpoint = dict(checkpoint_raw) if isinstance(checkpoint_raw, dict) else {}
+        checkpoint_id = str(
+            checkpoint.get("latest_checkpoint_id") or checkpoint.get("resume_checkpoint_id") or ""
+        ).strip()
+    return bool(checkpoint_id) == task.expected_checkpoint_present
+
+
+def _score_approval_history(task: EvalTask, output: dict[str, Any]) -> bool:
+    if task.expected_approval_history_present is None:
+        return True
+    history_raw = output.get("approval_history")
+    if not isinstance(history_raw, list):
+        approval_raw = output.get("approval", {})
+        approval = dict(approval_raw) if isinstance(approval_raw, dict) else {}
+        history_raw = approval.get("history", [])
+    present = isinstance(history_raw, list) and len(history_raw) > 0
+    return present == task.expected_approval_history_present
 
 
 def _score_recovery_packet(task: EvalTask, output: dict[str, Any]) -> bool:
@@ -153,6 +213,7 @@ def score_task(task: EvalTask, output: dict[str, Any]) -> dict[str, Any]:
     actual_intent = str(output.get("intent", "")).strip()
     halt_reason = str(output.get("halt_reason", "")).strip()
     final_present = bool(str(output.get("final", "")).strip())
+    actual_status = str(output.get("status", "")).strip()
     tool_results_raw = output.get("tool_results", [])
     tool_results = tool_results_raw if isinstance(tool_results_raw, list) else []
     verification_raw = output.get("verification", {})
@@ -171,6 +232,10 @@ def score_task(task: EvalTask, output: dict[str, Any]) -> dict[str, Any]:
         "failure_fingerprint_present": _score_failure_fingerprint_present(output),
         "compression_tracking": _score_compression_tracking(output),
         "tool_call_coverage": _score_tool_call_coverage(task, output),
+        "status_match": _score_status_match(task, output),
+        "pending_approval_match": _score_pending_approval(task, output),
+        "checkpoint_presence_match": _score_checkpoint_presence(task, output),
+        "approval_history_match": _score_approval_history(task, output),
     }
     passed_checks = sum(1 for ok in checks.values() if ok)
     max_checks = len(checks)
@@ -183,6 +248,8 @@ def score_task(task: EvalTask, output: dict[str, Any]) -> dict[str, Any]:
         "actual_intent": actual_intent,
         "expected_halt_reason": task.expected_halt_reason,
         "actual_halt_reason": halt_reason,
+        "expected_status": task.expected_status,
+        "actual_status": actual_status,
         "final_present": final_present,
         "acceptance_ok": acceptance_ok,
         "tool_results_count": len(tool_results),
@@ -236,6 +303,22 @@ def evaluate_tasks(
         1 for result in results
         if bool(result.get("checks", {}).get("tool_call_coverage", False))
     ) / total if total else 0.0
+    status_accuracy = sum(
+        1 for result in results
+        if bool(result.get("checks", {}).get("status_match", False))
+    ) / total if total else 0.0
+    pending_approval_accuracy = sum(
+        1 for result in results
+        if bool(result.get("checks", {}).get("pending_approval_match", False))
+    ) / total if total else 0.0
+    checkpoint_presence_accuracy = sum(
+        1 for result in results
+        if bool(result.get("checks", {}).get("checkpoint_presence_match", False))
+    ) / total if total else 0.0
+    approval_history_accuracy = sum(
+        1 for result in results
+        if bool(result.get("checks", {}).get("approval_history_match", False))
+    ) / total if total else 0.0
 
     return {
         "summary": {
@@ -252,6 +335,10 @@ def evaluate_tasks(
             "failure_fingerprint_present": failure_fingerprint_present,
             "compression_tracking": compression_tracking,
             "tool_call_coverage": tool_call_coverage,
+            "status_accuracy": status_accuracy,
+            "pending_approval_accuracy": pending_approval_accuracy,
+            "checkpoint_presence_accuracy": checkpoint_presence_accuracy,
+            "approval_history_accuracy": approval_history_accuracy,
         },
         "results": results,
     }
@@ -275,7 +362,11 @@ def _render_text_report(report: dict[str, Any]) -> str:
             f"acceptance_criteria_track={float(summary.get('acceptance_criteria_tracking', 0.0)):.2f} "
             f"failure_fingerprint={float(summary.get('failure_fingerprint_present', 0.0)):.2f} "
             f"compression_track={float(summary.get('compression_tracking', 0.0)):.2f} "
-            f"tool_call_coverage={float(summary.get('tool_call_coverage', 0.0)):.2f}"
+            f"tool_call_coverage={float(summary.get('tool_call_coverage', 0.0)):.2f} "
+            f"status_acc={float(summary.get('status_accuracy', 0.0)):.2f} "
+            f"pending_approval_acc={float(summary.get('pending_approval_accuracy', 0.0)):.2f} "
+            f"checkpoint_presence_acc={float(summary.get('checkpoint_presence_accuracy', 0.0)):.2f} "
+            f"approval_history_acc={float(summary.get('approval_history_accuracy', 0.0)):.2f}"
         )
     ]
     for result in results:

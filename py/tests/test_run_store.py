@@ -19,6 +19,10 @@ def _make_record(run_id: str = "run1", status: str = "running") -> dict:
         "request_id": "req-abc",
         "auth_subject": "",
         "client_ip": "127.0.0.1",
+        "thread_id": "thread-1",
+        "checkpoint_id": "cp-1",
+        "pending_approval": False,
+        "pending_approval_summary": "",
     }
 
 
@@ -90,6 +94,23 @@ def test_upsert_idempotent_update(tmp_path: Path) -> None:
         assert row["status"] == "succeeded"
         assert row["exit_code"] == 0
         assert row["finished_at"] == "2026-01-01T00:01:00Z"
+    finally:
+        store.close()
+
+
+def test_upsert_persists_approval_summary_fields(tmp_path: Path) -> None:
+    store = RunStore(db_path=tmp_path / "runs.sqlite")
+    try:
+        record = _make_record("approval-run", status="suspended")
+        record["pending_approval"] = True
+        record["pending_approval_summary"] = "apply_patch requires approval"
+        store.upsert(record)
+        row = store.get_run("approval-run")
+        assert row is not None
+        assert row["thread_id"] == "thread-1"
+        assert row["checkpoint_id"] == "cp-1"
+        assert row["pending_approval"] == 1
+        assert row["pending_approval_summary"] == "apply_patch requires approval"
     finally:
         store.close()
 

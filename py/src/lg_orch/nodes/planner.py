@@ -8,7 +8,7 @@ from typing import Any
 from lg_orch.logging import get_logger
 from lg_orch.memory import ensure_history_policy, get_compression_summary, prune_pre_verification_history
 from lg_orch.model_routing import latest_model_route, record_inference_telemetry, record_model_route
-from lg_orch.state import PlannerOutput, PlanStep, ToolCall
+from lg_orch.state import AgentHandoff, HandoffEvidence, PlannerOutput, PlanStep, ToolCall
 from lg_orch.tools import InferenceClient
 from lg_orch.trace import append_event
 
@@ -86,6 +86,54 @@ def _planner_mcp_prompt(repo_context: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def _default_step_handoff(request: str, *, step_id: str, expected_outcome: str) -> AgentHandoff | None:
+    intent = _classify_intent(request)
+    if intent not in {"code_change", "refactor", "debug"}:
+        return None
+
+    objective = "Prepare a minimal patch proposal grounded in the gathered repository context."
+    constraints = [
+        "Prefer the smallest correct diff.",
+        "Stay within the declared file scope or hand back a narrower follow-up request.",
+        "Keep the change compatible with the planned verification steps.",
+    ]
+    if intent == "debug":
+        objective = "Prepare a minimal repair grounded in the gathered repository context and failing evidence."
+        constraints.append("Preserve the failing reproduction until the fix is ready for verification.")
+
+    return AgentHandoff(
+        producer="planner",
+        consumer="coder",
+        objective=objective,
+        file_scope=[],
+        evidence=[
+            HandoffEvidence(kind="request", ref="user_request", detail=request.strip()),
+            HandoffEvidence(kind="expected_outcome", ref=step_id, detail=expected_outcome),
+        ],
+        constraints=constraints,
+        acceptance_checks=[
+            "The proposed patch is grounded in gathered repository context.",
+            "The change remains minimal and reviewable.",
+        ],
+        retry_budget=1,
+        provenance=[f"plan:{step_id}"],
+    )
+
+
+def _first_step_handoff(plan_payload: dict[str, Any]) -> dict[str, Any] | None:
+    steps_raw = plan_payload.get("steps", [])
+    if not isinstance(steps_raw, list):
+        return None
+
+    for step in steps_raw:
+        if not isinstance(step, dict):
+            continue
+        handoff_raw = step.get("handoff")
+        if isinstance(handoff_raw, dict):
+            return dict(handoff_raw)
+    return None
+
+
 def _default_plan(request: str = "") -> PlannerOutput:
     tools: list[ToolCall] = [ToolCall(tool="list_files", input={"path": ".", "recursive": False})]
     expected_outcome = "Top-level repository structure captured."
@@ -103,14 +151,21 @@ def _default_plan(request: str = "") -> PlannerOutput:
         )
         expected_outcome = "Top-level repository structure and TODOs captured."
 
+    step_id = "step-1"
+
     return PlannerOutput(
         steps=[
             PlanStep(
-                id="step-1",
+                id=step_id,
                 description="Collect repository context.",
                 tools=tools,
                 expected_outcome=expected_outcome,
                 files_touched=[],
+                handoff=_default_step_handoff(
+                    request,
+                    step_id=step_id,
+                    expected_outcome=expected_outcome,
+                ),
             )
         ],
         verification=[],
@@ -328,7 +383,12 @@ def planner(state: dict[str, Any]) -> dict[str, Any]:
             plan_payload["recovery"] = _recovery_action_from_packet(recovery_packet)
         if plan_payload.get("recovery_packet") is None and recovery_packet:
             plan_payload["recovery_packet"] = recovery_packet
-        out = {**state, "intent": intent, "plan": plan_payload}
+        out = {
+            **state,
+            "intent": intent,
+            "plan": plan_payload,
+            "active_handoff": _first_step_handoff(plan_payload),
+        }
         out = record_inference_telemetry(
             out,
             node_name="planner",
@@ -351,7 +411,12 @@ def planner(state: dict[str, Any]) -> dict[str, Any]:
         log.error("planner_failed", error=str(exc))
         fallback_plan = _default_plan(request).model_dump()
         fallback_plan["rollback"] = "Plan generation failed; deterministic fallback used."
-        out = {**state, "intent": str(route.get("intent", "analysis") or "analysis"), "plan": fallback_plan}
+        out = {
+            **state,
+            "intent": str(route.get("intent", "analysis") or "analysis"),
+            "plan": fallback_plan,
+            "active_handoff": _first_step_handoff(fallback_plan),
+        }
         step_count = len(out.get("plan", {}).get("steps", []))
         out = append_event(
             out,

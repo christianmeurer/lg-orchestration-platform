@@ -31,6 +31,8 @@ def write_run_trace(*, repo_root: Path, out_dir: Path, state: dict[str, Any]) ->
     verification = dict(verification_raw) if isinstance(verification_raw, dict) else {}
     undo_raw = state.get("undo", {})
     undo = dict(undo_raw) if isinstance(undo_raw, dict) else {}
+    approval_raw = state.get("_approval_context", {})
+    approval = dict(approval_raw) if isinstance(approval_raw, dict) else {}
     recovery_packet_raw = state.get("recovery_packet", {})
     recovery_packet = (
         dict(recovery_packet_raw) if isinstance(recovery_packet_raw, dict) else None
@@ -64,6 +66,7 @@ def write_run_trace(*, repo_root: Path, out_dir: Path, state: dict[str, Any]) ->
         "tool_results": list(state.get("tool_results", [])),
         "verification": verification,
         "recovery_packet": recovery_packet,
+        "approval": approval,
         "loop_summaries": list(state.get("loop_summaries", [])),
         "checkpoint": checkpoint,
         "snapshots": list(state.get("snapshots", [])),

@@ -477,6 +477,28 @@ def cli(argv: list[str] | None = None) -> int:
     trace_out_dir = str(trace_out_dir_raw).strip() if trace_out_dir_raw is not None else ""
     import os
 
+    resume_approvals: dict[str, Any] | None = None
+    resume_approvals_raw = str(os.environ.get("LG_RESUME_APPROVALS_JSON", "")).strip()
+    if resume_approvals_raw:
+        try:
+            parsed_resume_approvals = json.loads(resume_approvals_raw)
+        except json.JSONDecodeError as exc:
+            log.warning("resume_approvals_json_invalid", error=str(exc))
+        else:
+            if isinstance(parsed_resume_approvals, dict):
+                resume_approvals = parsed_resume_approvals
+
+    approval_context: dict[str, Any] | None = None
+    approval_context_raw = str(os.environ.get("LG_APPROVAL_CONTEXT_JSON", "")).strip()
+    if approval_context_raw:
+        try:
+            parsed_approval_context = json.loads(approval_context_raw)
+        except json.JSONDecodeError as exc:
+            log.warning("approval_context_json_invalid", error=str(exc))
+        else:
+            if isinstance(parsed_approval_context, dict):
+                approval_context = parsed_approval_context
+
     request_id = str(os.environ.get("LG_REQUEST_ID", "")).strip()
     remote_api_auth_subject = str(os.environ.get("LG_REMOTE_API_AUTH_SUBJECT", "")).strip()
     remote_api_client_ip = str(os.environ.get("LG_REMOTE_API_CLIENT_IP", "")).strip()
@@ -616,6 +638,10 @@ def cli(argv: list[str] | None = None) -> int:
             "auth_subject": remote_api_auth_subject,
             "client_ip": remote_api_client_ip,
         }
+    if resume_approvals is not None:
+        state["_resume_approvals"] = resume_approvals
+    if approval_context is not None:
+        state["_approval_context"] = approval_context
 
     out: dict[str, Any] = {}
     view = str(getattr(args, "view", "classic"))

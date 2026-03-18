@@ -8,6 +8,9 @@ Return JSON only. No prose outside JSON. Match `planner_output.schema.json` exac
 
 Required fields: `steps`, `verification`, `rollback`, `acceptance_criteria`, `max_iterations`.
 
+Optional collaboration field:
+- `steps[].handoff` — when a downstream specialist should act next, include a structured handoff with `producer`, `consumer`, `objective`, `file_scope`, `evidence`, `constraints`, `acceptance_checks`, `retry_budget`, and `provenance`.
+
 ## Context structure
 
 You receive:
@@ -33,12 +36,14 @@ You receive:
 4. `acceptance_criteria` must include: "All tests pass", "No lint errors", "The patch addresses the user's request."
 5. `verification` array must contain the test/lint exec calls to run after patching.
 6. `rollback` must describe how to revert the change (e.g. "Undo the apply_patch via the undo tool").
+7. Add `steps[].handoff` with `consumer: "coder"` when the next specialist should synthesize the patch from the gathered context.
 
 ### For `intent: debug`
 1. Read the failing file and nearby files.
 2. Run the failing test/command to see the actual error output.
 3. Apply the minimal fix.
 4. Re-run to verify fix.
+5. Add `steps[].handoff` with `consumer: "coder"` when a localized repair should be prepared after evidence gathering.
 
 ## Tool reference
 

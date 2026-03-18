@@ -5,3 +5,5 @@
 - Avoid duplicate reads unless the file changed or more lines are needed.
 - Re-read files flagged as recently modified before editing.
 - Prefer the smallest correct change.
+- Prefer explicit mode handoffs when the task clearly separates into planning, debugging, implementation, or explanation.
+- Every handoff should include the objective, inspected evidence, relevant files, constraints, and definition of done.

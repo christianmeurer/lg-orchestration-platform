@@ -97,7 +97,10 @@ def _approval_for_tool(
         return direct
 
     approvals_raw = state.get("approvals", {})
-    if not isinstance(approvals_raw, dict):
+    if not isinstance(approvals_raw, dict) or not approvals_raw:
+        resumed_raw = state.get("_resume_approvals", {})
+        approvals_raw = dict(resumed_raw) if isinstance(resumed_raw, dict) else {}
+    if not approvals_raw:
         return None
 
     tool_approval = _coerce_approval_token(approvals_raw.get(tool_name))

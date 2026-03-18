@@ -239,7 +239,7 @@ Goal:
 3. **VSCode extension activation.** Wire `vscode-extension/src/extension.ts` to at least: display current run status, show the last verifier report, and surface approval prompts for mutation plans. Without this, the platform has no viable distribution channel.
 4. **Outcome quality benchmark.** Add a curated set of 10 known-good bug-fix tasks with `expected_patch` assertions. Pass rate (not only structural behavior) is what enables real parity comparisons. The current eval suite tests routing and loop mechanics but does not measure whether the agent produces correct code.
 
-Status: **Pending.**
+Status: **Completed.** The repository now has concurrent runner fan-out, streaming inference in interactive router/planner paths, an activated VS Code extension, and the real-world repair benchmark.
 
 ### Wave 7: SOTA platform UX/UI
 
@@ -273,7 +273,80 @@ Design references:
 - [Linear](https://linear.app) — motion design and transition polish
 - VS Code [Webview API](https://code.visualstudio.com/api/extension-guides/webview) — native editor UX patterns
 
-Status: **Pending.**
+Status: **In Progress.** The live SPA and VS Code extension now ship approval actions, approval history, checkpoint visibility, inline diffs, run history, and verifier output. The remaining work is premium polish and richer interaction design rather than missing operator fundamentals.
+
+### Wave 8: collaborative agents and governed autonomy
+
+The next wave should combine the two highest-leverage findings from the current repository state:
+
+1. Lula still behaves primarily as a strong staged specialist pipeline rather than a fully collaborative agent system.
+2. Lula can detect approval-required execution states, but it still lacks the full governed execution loop needed for enterprise-grade operator control.
+
+This wave should therefore pair **contract-first collaborative agents** with a **governed-autonomy control plane** rather than treating them as competing directions.
+
+Targets:
+
+- [`py/src/lg_orch/graph.py`](../py/src/lg_orch/graph.py)
+- [`py/src/lg_orch/state.py`](../py/src/lg_orch/state.py)
+- new `py/src/lg_orch/nodes/coder.py`
+- [`py/src/lg_orch/nodes/planner.py`](../py/src/lg_orch/nodes/planner.py)
+- [`py/src/lg_orch/nodes/router.py`](../py/src/lg_orch/nodes/router.py)
+- [`py/src/lg_orch/nodes/verifier.py`](../py/src/lg_orch/nodes/verifier.py)
+- [`py/src/lg_orch/remote_api.py`](../py/src/lg_orch/remote_api.py)
+- [`py/src/lg_orch/run_store.py`](../py/src/lg_orch/run_store.py)
+- [`py/src/lg_orch/trace.py`](../py/src/lg_orch/trace.py)
+- [`py/src/lg_orch/visualize.py`](../py/src/lg_orch/visualize.py)
+- [`vscode-extension/src/extension.ts`](../vscode-extension/src/extension.ts)
+- [`schemas/planner_output.schema.json`](../schemas/planner_output.schema.json)
+- [`schemas/verifier_report.schema.json`](../schemas/verifier_report.schema.json)
+- [`eval/tasks/`](../eval/tasks/)
+
+Goal:
+
+#### A. Contract-first collaborative agents
+
+1. **Add an explicit coder specialist.**
+   - Insert a coder node between planner and executor so patch synthesis is no longer implicit inside the planner.
+2. **Introduce a uniform handoff envelope.**
+   - Planner, coder, verifier, and recovery paths should exchange structured artifacts containing objective, file scope, evidence, constraints, acceptance checks, retry budget, and provenance.
+3. **Retune the router into a topology selector.**
+   - The router should decide not only lane and model tier, but also whether the next path is planner-only, planner-to-coder, or verifier-driven repair.
+4. **Make verifier-directed retries specialist-aware.**
+   - Localized implementation failures should route to coder; broader contract or architecture failures should route back to planner or context rebuilding.
+5. **Keep execution deterministic.**
+   - Do not collapse execution back into free-form LLM behavior. The Rust runner boundary remains a core design strength.
+
+#### B. Governed-autonomy control plane
+
+1. **Approval API.**
+   - Add approve/reject endpoints so pending operations can be acted on through the API rather than only displayed in UI.
+2. **Suspend/resume orchestration.**
+   - Treat approval-required execution as a first-class suspended run state and resume from checkpoints after approval.
+3. **Durable approval state and audit trail.**
+   - Persist approver identity, challenge id, timestamps, operation class, and affected paths in the run store and trace artifacts.
+4. **Client wiring.**
+   - Replace placeholder approval buttons in the SPA and VS Code extension with real API-backed actions.
+5. **Eval coverage.**
+   - Add approval-path tasks covering block-before-approval, resume-after-approval, reject termination, and audit metadata preservation.
+
+Roadmap before coding:
+
+1. **Slice 1 — contracts first.**
+   - Extend state and schemas with handoff envelopes and coder-facing task contracts.
+2. **Slice 2 — explicit coder loop.**
+   - Add the coder node, wire planner-to-coder-to-executor flow, and update verifier retry routing.
+3. **Slice 3 — governed execution.**
+   - Add approval endpoints, suspended run state, durable approval persistence, and resume logic.
+4. **Slice 4 — client surfaces and evals.**
+   - Wire SPA and VS Code controls to the approval API and cover the new control-flow paths in eval tasks and tests.
+
+Expected outcome:
+
+- Lula becomes a clearer multi-role system inside a single run: router, planner, coder, deterministic executor, verifier, reporter.
+- Risky actions become observable, pausable, resumable, and auditable across API, SPA, and VS Code.
+- The platform moves closer to enterprise-grade parity without prematurely expanding into uncontrolled multi-agent behavior.
+
+Status: **In Progress.** The repository now has explicit planner → coder → executor flow, typed handoff envelopes, coder-targeted verifier retries, suspended run state, approve/reject endpoints, durable approval audit persistence, SPA/VS Code approval controls, and approval/suspend-resume eval coverage. Remaining work is refinement, richer operator workflows, and deeper scheduler evolution.
 
 ## 6. Practical file order
 

@@ -10,14 +10,14 @@ A production-grade LangGraph orchestration platform (Python) paired with a high-
 
 Lula is a full-stack agentic coding platform with:
 
-- **Autonomous plan/execute/verify/recover loops** — explicit recovery contracts, failure fingerprinting, loop summaries, and acceptance criteria
+- **Autonomous plan/execute/code/verify/recover loops** — explicit recovery contracts, failure fingerprinting, loop summaries, acceptance criteria, and a dedicated coder specialist between planning and execution
 - **Heterogeneous model routing** — `interactive`, `deep_planning`, and `recovery` lanes with compression pressure, cache affinity, and latency sensitivity
 - **Algorithmic context compression** — stable-prefix / working-set split, token budgets, salience-scored fact packs
 - **Full MCP protocol surface** — `tools/list`, `tools/call`, `resources/list`, `resources/read`, `prompts/list`, `prompts/get` with zero-trust schema hash pinning
 - **Episodic + procedural memory** — cross-session recovery facts and verified tool sequences persisted in SQLite
 - **Hardened Rust runner** — Linux namespace isolation (`unshare`), command allowlist, approval gates, redaction pipeline, prompt-injection detection
-- **Live run API** — `RemoteAPIService` with durable SQLite run store, multi-user namespace isolation, rate limiting, and a frontend SPA at `GET /`
-- **VS Code extension** — configurable settings, inline diff, run history, verifier report panel, remote API polling
+- **Live run API** — `RemoteAPIService` with durable SQLite run store, multi-user namespace isolation, rate limiting, suspended runs, approve/reject endpoints, and a frontend SPA at `GET /`
+- **VS Code extension** — configurable settings, inline diff, run history, verifier report panel, remote API polling, suspended-run approval actions, and approval-history visibility
 - **GitHub Actions CI** — Python lint/type/test, Rust clippy/test/fmt, Docker build, optional E2E with secrets
 
 ## Architecture
@@ -38,11 +38,12 @@ Lula is a full-stack agentic coding platform with:
 ┌────────────────────▼─────────────────────────┐
 │        LangGraph Orchestrator (Python)       │
 │  router → context_builder → planner          │
-│       → policy_gate → executor               │
+│       → policy_gate → coder → executor       │
 │       → verifier → reporter                  │
 │                                              │
 │  Episodic memory  · Procedural cache         │
 │  Context compression  · Recovery contracts   │
+│  Suspended approval state · Audit trail      │
 └────────────────────┬─────────────────────────┘
                      │ HTTP
 ┌────────────────────▼─────────────────────────┐
@@ -139,9 +140,11 @@ All runtime config lives in `configs/runtime.{dev|stage|prod}.toml`.
           ↓                    │
        router                  │
           ↓                    │
-       planner                 │
+        planner                 │
           ↓                    │
-      executor                 │
+         coder                  │
+          ↓                    │
+       executor                 │
           ↓                    │
       verifier                 │
           ↓ (retry)            │
@@ -151,7 +154,7 @@ All runtime config lives in `configs/runtime.{dev|stage|prod}.toml`.
        reporter ────────────> END
 ```
 
-Recovery routing: `verifier` checks the outcome. If tools fail, it routes back to `policy_gate` for a bounded retry loop. `policy_gate` enforces loop budgets (`max_loops`). If budgets allow, `policy_gate` routes to `context_builder`, `router`, or `planner` based on the requested retry target. If budgets are exhausted or the verification succeeds, execution proceeds to `reporter`.
+Recovery routing: `verifier` checks the outcome. If tools fail, it routes back to `policy_gate` for a bounded retry loop. `policy_gate` enforces loop budgets (`max_loops`). If budgets allow, `policy_gate` routes to `context_builder`, `router`, `planner`, or `coder` based on the requested retry target. If budgets are exhausted or the verification succeeds, execution proceeds to `reporter`.
 
 ## Memory subsystems
 
@@ -177,6 +180,7 @@ Recovery routing: `verifier` checks the outcome. If tools fail, it routes back t
 - **Constant-time auth**: bearer token comparison uses XOR-fold to prevent timing side-channels.
 - **Redaction pipeline**: runner strips paths, usernames, and IP addresses from MCP responses before returning to orchestrator.
 - **Approval gates**: `apply_patch` and state-modifying `exec` calls require explicit approval tokens.
+- **Governed autonomy**: suspended runs persist approval state, checkpoint identifiers, and approval history so they can be resumed or rejected through the API and clients.
 - **Rate limiting**: token-bucket rate limiter on remote API (`rate_limit_rps`).
 - **Circuit breaker**: `InferenceClient` opens after 5 consecutive failures; retries 429/5xx with backoff.
 
@@ -191,7 +195,10 @@ Recovery routing: `verifier` checks the outcome. If tools fail, it routes back t
 | `POST` | `/v1/runs` | Create run |
 | `GET` | `/v1/runs/{id}` | Run detail + trace |
 | `GET` | `/v1/runs/{id}/logs` | Stdout logs |
+| `GET` | `/v1/runs/{id}/stream` | SSE live run updates |
 | `POST` | `/v1/runs/{id}/cancel` | Cancel run |
+| `POST` | `/v1/runs/{id}/approve` | Approve and resume a suspended run |
+| `POST` | `/v1/runs/{id}/reject` | Reject a suspended run |
 
 ## VS Code extension
 
@@ -202,6 +209,7 @@ The extension (`vscode-extension/`) provides:
 - Inline diff of `apply_patch` results
 - Verifier report panel — shows the verification JSON inline after each run
 - Pending approval section with **Approve** / **Reject** buttons for gated exec calls
+- Approval history and checkpoint visibility for suspended runs
 - Run history (last N runs, configurable)
 - All values configurable via VS Code settings — no hardcoded addresses or keys
 
@@ -305,18 +313,20 @@ uv run lg-orch trace-serve artifacts/runs --port 8000
 | 3 — Run API + persistence | `RemoteAPIService`, SQLite run store, durable run listing, trace-backed detail views, cancellation |
 | 4 — Provider expansion + routing | DigitalOcean Gradient AI + OpenAI-compatible providers, lane-aware routing, inference telemetry (latency, usage, cache headers) |
 | 5 — Agent quality | Recovery packets, loop summaries, stable-prefix/working-set context compression with provenance, episodic recovery facts, procedural cache, eval suite |
+| 6 — Execution quality | Concurrent runner fan-out, streaming inference in interactive paths, activated VS Code extension, real-world repair benchmark |
+| 8 — Collaborative agents + governed autonomy (foundation) | Explicit coder node, typed handoff envelopes, coder-directed retries, suspended runs, approve/reject API, durable approval audit trail, SPA/VS Code approval flows |
 | Deployment fixes | `LG_RUNNER_BASE_URL` env override, k8s runner split (`infra/k8s/runner-deployment.yaml` + `runner-service.yaml`), `do_deploy.sh` EV-ref preservation, DO model slug correction (`openai-gpt-4.1`), `runner.api_key` optional |
 
 ## Roadmap
 
-### Wave 6 — execution quality, streaming, distribution (next)
+### Wave 6 — execution quality, streaming, distribution
 
 | Item | File | Impact |
 |---|---|---|
-| Concurrent Rust batch fan-out | [`rs/runner/src/main.rs`](rs/runner/src/main.rs) | Remove primary throughput bottleneck — replace serial tool loop with `tokio::JoinSet` |
-| Streaming inference wired to interactive lane | [`py/src/lg_orch/tools/inference_client.py`](py/src/lg_orch/tools/inference_client.py) | `chat_completion_stream()` exists, needs wiring to planner/router nodes |
-| VSCode extension activation | [`vscode-extension/src/extension.ts`](vscode-extension/src/extension.ts) | Distribution channel: run status, verifier report panel, approval buttons |
-| Outcome quality benchmark | [`eval/run.py`](eval/run.py) + new `eval/tasks/real_world_repair.json` | Measure pass rate on known-good bug-fix tasks, not only structural behavior |
+| Concurrent Rust batch fan-out | [`rs/runner/src/main.rs`](rs/runner/src/main.rs) | Shipped with JoinSet fan-out for multi-tool batches |
+| Streaming inference wired to interactive lane | [`py/src/lg_orch/tools/inference_client.py`](py/src/lg_orch/tools/inference_client.py) | Shipped across interactive planner/router paths |
+| VSCode extension activation | [`vscode-extension/src/extension.ts`](vscode-extension/src/extension.ts) | Shipped with run status, verifier panel, approvals, and approval-history UX |
+| Outcome quality benchmark | [`eval/run.py`](eval/run.py) + [`eval/tasks/real_world_repair.json`](eval/tasks/real_world_repair.json) | Shipped with repair benchmark and approval/suspend-resume eval scoring |
 
 ### Wave 7 — SOTA platform UX/UI
 
@@ -325,11 +335,13 @@ The most sophisticated agentic backend is invisible without a product-quality in
 1. **Live run console with streaming timeline** — WebSocket/SSE-backed view; each graph node pulses as it activates, tool calls appear in real-time, lane is highlighted
 2. **Animated agent graph visualization** — Mermaid or D3 force graph with active-node highlighting, edge animation in data-flow direction, recovery routing made visible
 3. **Inline diff and verifier panel** — GitHub-style syntax-highlighted unified diff for `apply_patch` results; approval/reject buttons inline in the activity stream
-4. **Run history and full-text search** — persistent left-panel run history with request text, duration, verification status, model used
+4. **Run history and full-text search** — persistent left-panel run history with request text, duration, verification status, model used; suspended runs now surface checkpoint and approval state
 5. **Design-system-quality layout** — Tailwind CSS + shadcn/ui (no Node.js build step in runtime image), VS Code dark theme parity, semantic color coding, responsive 1024–1440px
 6. **VS Code extension premium UX** — vscode-webview-ui-toolkit, respects active color theme, inline gutter diffs, agent activity in sidebar
 
 Design references: Vercel AI Playground (streaming token viz), Replit Ghostwriter (live agent trace), Cursor composer (multi-file diff approval), Linear (motion design polish).
+
+Current state: Wave 7 is partially implemented. The live SPA and VS Code extension now expose real approval controls, approval history, checkpoint visibility, inline diffs, and verifier output; the remaining gap is deeper premium polish rather than basic operator functionality.
 
 ### Future pillars (from [`docs/sota_2026_plan.md`](docs/sota_2026_plan.md) §9)
 

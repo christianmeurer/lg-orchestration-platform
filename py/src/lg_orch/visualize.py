@@ -169,6 +169,8 @@ def render_trace_dashboard(payload: dict[str, Any], *, width: int = 88) -> str:
     tools_raw = payload.get("tool_results", [])
     verification_raw = payload.get("verification", {})
     verification = verification_raw if isinstance(verification_raw, dict) else {}
+    approval_raw = payload.get("approval", {})
+    approval = approval_raw if isinstance(approval_raw, dict) else {}
     halt_reason = str(payload.get("halt_reason", "")).strip()
     final = str(payload.get("final", ""))
 
@@ -186,6 +188,12 @@ def render_trace_dashboard(payload: dict[str, Any], *, width: int = 88) -> str:
         )
     if halt_reason:
         summary_lines.append(f"halt_reason: {halt_reason}")
+    if bool(approval.get("pending", False)):
+        summary_lines.append("approval: pending")
+    history_raw = approval.get("history", [])
+    history = history_raw if isinstance(history_raw, list) else []
+    if history:
+        summary_lines.append(f"approval_history: {len(history)}")
     if not summary_lines:
         summary_lines.append("No verification summary captured.")
 
@@ -223,6 +231,8 @@ def render_trace_dashboard_html(
     working_set = working_set_raw if isinstance(working_set_raw, dict) else {}
     checkpoint_raw = payload.get("checkpoint", {})
     checkpoint = checkpoint_raw if isinstance(checkpoint_raw, dict) else {}
+    approval_raw = payload.get("approval", {})
+    approval = approval_raw if isinstance(approval_raw, dict) else {}
     events_raw = payload.get("events", [])
     tools_raw = payload.get("tool_results", [])
     halt_reason = str(payload.get("halt_reason", "")).strip()
@@ -311,6 +321,16 @@ def render_trace_dashboard_html(
         summary_lines.append(
             f"  <li><strong>checkpoint</strong><span>{escape(checkpoint_text)}</span></li>"
         )
+    if bool(approval.get("pending", False)):
+        summary_lines.append(
+            f"  <li><strong>approval</strong><span>{escape(str(approval.get('summary', 'pending approval')).strip() or 'pending approval')}</span></li>"
+        )
+    approval_history_raw = approval.get("history", [])
+    approval_history = [entry for entry in approval_history_raw if isinstance(entry, dict)] if isinstance(approval_history_raw, list) else []
+    if approval_history:
+        summary_lines.append(
+            f"  <li><strong>approval_history</strong><span>{len(approval_history)}</span></li>"
+        )
     if index_href:
         summary_lines.append(
             "  <li><strong>site</strong>"
@@ -332,6 +352,23 @@ def render_trace_dashboard_html(
         _html_card("Tool Results", f'<ul class="items">\n{tool_items}\n</ul>'),
         _html_card("Final Output", f'<pre>{escape(final or "(empty)")}</pre>'),
     ]
+
+    if approval_history:
+        approval_items = "\n".join(
+            (
+                "<li>"
+                f'<span class="mono">{escape(str(entry.get("ts", "")))}</span>'
+                '<div class="stack">'
+                f'<strong>{escape(str(entry.get("decision", "")).strip() or "decision")}</strong>'
+                f'<span class="muted">actor={escape(str(entry.get("actor", "")).strip() or "unknown")} '
+                f'challenge={escape(str(entry.get("challenge_id", "")).strip() or "—")}</span>'
+                f'<span>{escape(str(entry.get("rationale", "")).strip() or "(no rationale)")}</span>'
+                "</div>"
+                "</li>"
+            )
+            for entry in approval_history[-12:]
+        )
+        cards.insert(1, _html_card("Approval History", f'<ul class="items">\n{approval_items}\n</ul>'))
 
     return _html_document(
         title="Lula Dashboard",
@@ -363,6 +400,8 @@ def render_trace_site_index_html(runs: list[dict[str, Any]]) -> str:
             checkpoint_id = str(run.get("checkpoint_id", "")).strip()
             if checkpoint_id:
                 parts.append(f"checkpoint={checkpoint_id}")
+            if bool(run.get("pending_approval", False)):
+                parts.append("approval=pending")
             if not parts:
                 return ""
             return " · " + " · ".join(parts)
@@ -551,6 +590,9 @@ def render_run_viewer_spa(*, api_base_url: str = "", mermaid_graph: str = "") ->
       align-items: center;
       margin-top: 3px;
     }}
+    .approval-history {{ list-style: none; display: grid; gap: 6px; }}
+    .approval-history li {{ font-size: 11px; padding: 6px 0; border-top: 1px solid var(--border); }}
+    .approval-history li:first-child {{ border-top: 0; padding-top: 0; }}
     .run-card .rc-time {{ font-size: 10px; color: var(--muted); }}
     /* ── Right panel: detail ────────────────────────────────── */
     #detail-panel {{
@@ -771,6 +813,27 @@ function isInProgress(s) {{
   return s === 'running' || s === 'starting' || s === 'cancelling';
 }}
 
+async function approvalAction(action) {{
+  if (!_selected) return;
+  try {{
+    const res = await fetch(API + '/v1/runs/' + encodeURIComponent(_selected) + '/' + action, {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json', ...bearerHeaders() }},
+      body: JSON.stringify({{ actor: 'spa' }}),
+    }});
+    if (!res.ok) return;
+    const run = await res.json();
+    const idx = _runs.findIndex(r => r.run_id === run.run_id);
+    if (idx >= 0) _runs[idx] = run;
+    renderList();
+    renderDetail(run, _selected);
+    if (_activeSSE) {{ _activeSSE.close(); _activeSSE = null; }}
+    if (run.run_id && isInProgress(run.status)) {{
+      setTimeout(() => openSSEStream(run.run_id), 50);
+    }}
+  }} catch {{}}
+}}
+
 // ── Run list ─────────────────────────────────────────────────
 async function fetchList() {{
   try {{
@@ -857,6 +920,7 @@ function renderDetail(run, runId) {{
   }}
 
   const inProgress = isInProgress(run.status);
+  const approvalHistory = Array.isArray(run.approval_history) ? run.approval_history : [];
   let html = '';
 
   // Action bar
@@ -885,9 +949,25 @@ function renderDetail(run, runId) {{
     <dt>intent</dt><dd>${{esc(intent || '—')}} ${{lanePill(lane)}}</dd>
     <dt>run_id</dt><dd style="font-family:ui-monospace;font-size:10px">${{esc(run.run_id)}}</dd>
     <dt>started</dt><dd>${{fmtTime(run.started_at)}}</dd>
+    ${{run.thread_id ? `<dt>thread</dt><dd style="font-family:ui-monospace;font-size:10px">${{esc(run.thread_id)}}</dd>` : ''}}
+    ${{run.checkpoint_id ? `<dt>checkpoint</dt><dd style="font-family:ui-monospace;font-size:10px">${{esc(run.checkpoint_id)}}</dd>` : ''}}
     ${{run.finished_at ? `<dt>finished</dt><dd>${{fmtTime(run.finished_at)}}</dd>` : ''}}
     ${{run.exit_code != null ? `<dt>exit_code</dt><dd>${{esc(String(run.exit_code))}}</dd>` : ''}}
   </dl></div>`;
+
+  if (approvalHistory.length) {{
+    const items = approvalHistory.map(entry => `
+      <li>
+        <strong>${{esc(entry.decision || 'decision')}}</strong>
+        <div class="rc-meta">
+          <span class="rc-time">${{esc(entry.ts || '')}}</span>
+          <span>${{esc(entry.actor || 'unknown')}}</span>
+          <span>${{esc(entry.challenge_id || '—')}}</span>
+        </div>
+        <div class="muted">${{esc(entry.rationale || '(no rationale)')}}</div>
+      </li>`).join('');
+    html += `<div class="card"><h2>Approval History</h2><ul class="approval-history">${{items}}</ul></div>`;
+  }}
 
   // Final output
   const finalOut = (t.final || '').trim();
@@ -1059,8 +1139,8 @@ async function submitRun() {{
   }} catch {{}}
 }}
 
-function approveMutation() {{ console.log('approve'); /* TODO: wire to approval token API */ }}
-function rejectMutation() {{  console.log('reject'); }}
+function approveMutation() {{ void approvalAction('approve'); }}
+function rejectMutation() {{ void approvalAction('reject'); }}
 
 // ── Auth ─────────────────────────────────────────────────────
 function bearerHeaders() {{

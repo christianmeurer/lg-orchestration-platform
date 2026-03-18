@@ -19,6 +19,10 @@ _COLUMNS = (
     "request_id",
     "auth_subject",
     "client_ip",
+    "thread_id",
+    "checkpoint_id",
+    "pending_approval",
+    "pending_approval_summary",
     "namespace",
 )
 
@@ -36,6 +40,10 @@ CREATE TABLE IF NOT EXISTS runs (
     request_id   TEXT NOT NULL DEFAULT '',
     auth_subject TEXT NOT NULL DEFAULT '',
     client_ip    TEXT NOT NULL DEFAULT '',
+    thread_id    TEXT NOT NULL DEFAULT '',
+    checkpoint_id TEXT NOT NULL DEFAULT '',
+    pending_approval INTEGER NOT NULL DEFAULT 0,
+    pending_approval_summary TEXT NOT NULL DEFAULT '',
     namespace    TEXT NOT NULL DEFAULT ''
 )
 """
@@ -103,14 +111,27 @@ class RunStore:
         self._migrate()
 
     def _migrate(self) -> None:
-        for table in ("runs", "recovery_facts"):
+        run_columns = (
+            ("namespace", "TEXT NOT NULL DEFAULT ''"),
+            ("thread_id", "TEXT NOT NULL DEFAULT ''"),
+            ("checkpoint_id", "TEXT NOT NULL DEFAULT ''"),
+            ("pending_approval", "INTEGER NOT NULL DEFAULT 0"),
+            ("pending_approval_summary", "TEXT NOT NULL DEFAULT ''"),
+        )
+        for column, spec in run_columns:
             try:
-                self._conn.execute(
-                    f"ALTER TABLE {table} ADD COLUMN namespace TEXT NOT NULL DEFAULT ''"
-                )
+                self._conn.execute(f"ALTER TABLE runs ADD COLUMN {column} {spec}")
                 self._conn.commit()
             except sqlite3.OperationalError:
-                pass  # Column already exists
+                pass
+
+        try:
+            self._conn.execute(
+                "ALTER TABLE recovery_facts ADD COLUMN namespace TEXT NOT NULL DEFAULT ''"
+            )
+            self._conn.commit()
+        except sqlite3.OperationalError:
+            pass
 
     def upsert(self, record: dict[str, Any]) -> None:
         data = {k: record[k] for k in _COLUMNS if k in record}

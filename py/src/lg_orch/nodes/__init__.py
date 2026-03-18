@@ -1,4 +1,5 @@
 __all__ = [
+    "coder",
     "context_builder",
     "executor",
     "ingest",
@@ -9,6 +10,7 @@ __all__ = [
     "verifier",
 ]
 
+from lg_orch.nodes.coder import coder
 from lg_orch.nodes.context_builder import context_builder
 from lg_orch.nodes.executor import executor
 from lg_orch.nodes.ingest import ingest

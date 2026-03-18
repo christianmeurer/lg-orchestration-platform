@@ -1,3 +1,4 @@
 - Compact plan with enough detail to act.
 - Anchor proposals to the current documented wave and repo state.
 - Name files and risks.
+- Produce a compact handoff for Code or Debug with scope, target files, acceptance checks, and open risks.

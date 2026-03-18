@@ -57,6 +57,194 @@ def _trace_path_for_run(repo_root: Path, trace_out_dir: Path, run_id: str) -> Pa
     return trace_dir.resolve() / f"run-{run_id}.json"
 
 
+def _approval_token_for_challenge(challenge_id: str) -> str:
+    return f"approve:{challenge_id}"
+
+
+def _tool_name_for_approval(*, operation_class: str, challenge_id: str) -> str:
+    joined = f"{operation_class}:{challenge_id}".lower()
+    if "apply_patch" in joined:
+        return "apply_patch"
+    if "exec" in joined:
+        return "exec"
+    return "apply_patch"
+
+
+def _approval_summary(details: dict[str, Any]) -> str:
+    operation_class = _non_empty_str(details.get("operation_class")) or "mutation"
+    challenge_id = _non_empty_str(details.get("challenge_id"))
+    reason = _non_empty_str(details.get("reason")) or "approval_required"
+    summary = f"{operation_class} requires approval"
+    if challenge_id is not None:
+        summary = f"{summary} ({challenge_id})"
+    if reason not in {"approval_required", "challenge_required", "missing_approval_token"}:
+        summary = f"{summary}: {reason}"
+    return summary
+
+
+def _approval_state_from_trace(trace_payload: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(trace_payload, dict):
+        return {
+            "pending": False,
+            "summary": "",
+            "details": {},
+            "history": [],
+            "thread_id": "",
+            "checkpoint_id": "",
+        }
+
+    checkpoint_raw = trace_payload.get("checkpoint", {})
+    checkpoint = dict(checkpoint_raw) if isinstance(checkpoint_raw, dict) else {}
+    thread_id = str(checkpoint.get("thread_id", "")).strip()
+    checkpoint_id = str(
+        checkpoint.get("latest_checkpoint_id") or checkpoint.get("resume_checkpoint_id") or ""
+    ).strip()
+
+    approval_raw = trace_payload.get("approval", {})
+    approval = dict(approval_raw) if isinstance(approval_raw, dict) else {}
+    has_explicit_pending = "pending" in approval
+    pending_details_raw = approval.get("pending_details", {})
+    pending_details = dict(pending_details_raw) if isinstance(pending_details_raw, dict) else {}
+    history_raw = approval.get("history", [])
+    history = [dict(entry) for entry in history_raw if isinstance(entry, dict)] if isinstance(history_raw, list) else []
+    pending = bool(approval.get("pending", False))
+    summary = str(approval.get("summary", "")).strip()
+
+    if not has_explicit_pending and not pending_details:
+        tool_results_raw = trace_payload.get("tool_results", [])
+        tool_results = [entry for entry in tool_results_raw if isinstance(entry, dict)] if isinstance(tool_results_raw, list) else []
+        for result in reversed(tool_results):
+            artifacts_raw = result.get("artifacts", {})
+            artifacts = dict(artifacts_raw) if isinstance(artifacts_raw, dict) else {}
+            if str(artifacts.get("error", "")).strip().lower() != "approval_required":
+                continue
+            approval_details_raw = artifacts.get("approval", {})
+            if isinstance(approval_details_raw, dict):
+                pending_details = dict(approval_details_raw)
+                pending = True
+                break
+
+    if pending_details and not summary:
+        summary = _approval_summary(pending_details)
+
+    return {
+        "pending": pending,
+        "summary": summary,
+        "details": pending_details,
+        "history": history,
+        "thread_id": thread_id,
+        "checkpoint_id": checkpoint_id,
+    }
+
+
+def _apply_approval_state_to_record(record: "RunRecord", approval_state: dict[str, Any]) -> None:
+    thread_id = str(approval_state.get("thread_id", "")).strip()
+    checkpoint_id = str(approval_state.get("checkpoint_id", "")).strip()
+    if thread_id:
+        record.thread_id = thread_id
+    if checkpoint_id:
+        record.checkpoint_id = checkpoint_id
+
+    history_raw = approval_state.get("history", [])
+    if isinstance(history_raw, list) and history_raw:
+        record.approval_history = [dict(entry) for entry in history_raw if isinstance(entry, dict)]
+
+    pending_details_raw = approval_state.get("details", {})
+    pending_details = dict(pending_details_raw) if isinstance(pending_details_raw, dict) else {}
+    if bool(approval_state.get("pending", False)) and not record.cancel_requested:
+        record.status = "suspended"
+        record.pending_approval = True
+        record.pending_approval_summary = str(approval_state.get("summary", "")).strip()
+        record.pending_approval_details = pending_details
+    else:
+        record.pending_approval = False
+        record.pending_approval_summary = ""
+        record.pending_approval_details = {}
+
+
+def _apply_trace_state_to_payload(
+    payload: dict[str, Any],
+    trace_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    out = dict(payload)
+    out["trace_ready"] = trace_payload is not None
+    out["trace"] = trace_payload
+    approval_state = _approval_state_from_trace(trace_payload)
+    out["thread_id"] = str(approval_state.get("thread_id", "")).strip() or str(out.get("thread_id", "")).strip()
+    out["checkpoint_id"] = str(approval_state.get("checkpoint_id", "")).strip() or str(out.get("checkpoint_id", "")).strip()
+    out["pending_approval"] = bool(approval_state.get("pending", out.get("pending_approval", False)))
+    out["pending_approval_summary"] = str(
+        approval_state.get("summary", out.get("pending_approval_summary", ""))
+    ).strip()
+    details_raw = approval_state.get("details", {})
+    out["pending_approval_details"] = dict(details_raw) if isinstance(details_raw, dict) else {}
+    history_raw = approval_state.get("history", [])
+    if isinstance(history_raw, list) and history_raw:
+        out["approval_history"] = [dict(entry) for entry in history_raw if isinstance(entry, dict)]
+    else:
+        out.setdefault("approval_history", [])
+    if out["pending_approval"] and str(out.get("status", "")).strip() not in {"cancelled", "rejected"}:
+        out["status"] = "suspended"
+    return out
+
+
+def _write_trace_approval_state(
+    trace_path: Path,
+    *,
+    pending: bool,
+    pending_details: dict[str, Any] | None,
+    history: list[dict[str, Any]],
+    last_decision: dict[str, Any] | None,
+) -> None:
+    if not trace_path.is_file():
+        return
+    try:
+        payload_raw = json.loads(trace_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(payload_raw, dict):
+        return
+
+    approval_raw = payload_raw.get("approval", {})
+    approval = dict(approval_raw) if isinstance(approval_raw, dict) else {}
+    approval["pending"] = pending
+    approval["history"] = history
+    if pending_details:
+        approval["pending_details"] = pending_details
+        approval["summary"] = _approval_summary(pending_details)
+    else:
+        approval.pop("pending_details", None)
+        approval["summary"] = ""
+    if last_decision is not None:
+        approval["last_decision"] = last_decision
+    payload_raw["approval"] = approval
+    try:
+        trace_path.write_text(json.dumps(payload_raw, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        return
+
+
+def _resume_argv(record: "RunRecord") -> list[str]:
+    argv: list[str] = []
+    idx = 0
+    while idx < len(record.argv):
+        token = record.argv[idx]
+        if token == "--resume":
+            idx += 1
+            continue
+        if token in {"--thread-id", "--checkpoint-id"}:
+            idx += 2
+            continue
+        argv.append(token)
+        idx += 1
+    argv.append("--resume")
+    if record.thread_id:
+        argv.extend(["--thread-id", record.thread_id])
+    if record.checkpoint_id:
+        argv.extend(["--checkpoint-id", record.checkpoint_id])
+    return argv
+
+
 def _json_response(status: int, payload: dict[str, Any]) -> tuple[int, str, bytes]:
     body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
     return status, _JSON_CONTENT_TYPE, body
@@ -182,6 +370,12 @@ class RunRecord:
     auth_subject: str = ""
     client_ip: str = ""
     cancel_requested: bool = False
+    thread_id: str = ""
+    checkpoint_id: str = ""
+    pending_approval: bool = False
+    pending_approval_summary: str = ""
+    pending_approval_details: dict[str, Any] = field(default_factory=dict)
+    approval_history: list[dict[str, Any]] = field(default_factory=list)
 
 
 class RemoteAPIService:
@@ -290,6 +484,8 @@ class RemoteAPIService:
                 request_id=request_id,
                 auth_subject=auth_subject,
                 client_ip=client_ip,
+                thread_id=_non_empty_str(payload.get("thread_id")) or "",
+                checkpoint_id=_non_empty_str(payload.get("checkpoint_id")) or "",
             )
 
         if self._run_store is not None:
@@ -349,9 +545,7 @@ class RemoteAPIService:
             return None
 
         trace_payload = self._load_trace(Path(payload["trace_path"]))
-        payload["trace_ready"] = trace_payload is not None
-        payload["trace"] = trace_payload
-        return payload
+        return _apply_trace_state_to_payload(payload, trace_payload)
 
     def get_logs(self, run_id: str) -> dict[str, Any] | None:
         normalized_run_id = _normalized_run_id(run_id)
@@ -408,6 +602,148 @@ class RemoteAPIService:
         )
         return payload
 
+    def approve_run(self, run_id: str, payload: dict[str, Any], *, auth_subject: str = "") -> dict[str, Any] | None:
+        normalized_run_id = _normalized_run_id(run_id)
+        if normalized_run_id is None:
+            return None
+
+        actor = _non_empty_str(payload.get("actor")) or auth_subject or "operator"
+        rationale = _non_empty_str(payload.get("rationale")) or ""
+        provided_challenge_id = _non_empty_str(payload.get("challenge_id"))
+
+        with self._lock:
+            record = self._runs.get(normalized_run_id)
+            if record is None:
+                return None
+            self._refresh_record_locked(record)
+            if not record.pending_approval:
+                raise ValueError("approval_not_pending")
+            challenge_id = _non_empty_str(record.pending_approval_details.get("challenge_id"))
+            if challenge_id is None:
+                raise ValueError("approval_challenge_missing")
+            if provided_challenge_id is not None and provided_challenge_id != challenge_id:
+                raise ValueError("challenge_id_mismatch")
+            if not record.thread_id or not record.checkpoint_id:
+                raise ValueError("resume_checkpoint_missing")
+
+            approval_entry = {
+                "decision": "approved",
+                "actor": actor,
+                "rationale": rationale,
+                "challenge_id": challenge_id,
+                "ts": _utc_now(),
+            }
+            operation_class = _non_empty_str(record.pending_approval_details.get("operation_class")) or "apply_patch"
+            tool_name = _tool_name_for_approval(operation_class=operation_class, challenge_id=challenge_id)
+            approval_token = {
+                "challenge_id": challenge_id,
+                "token": _approval_token_for_challenge(challenge_id),
+            }
+            approvals_payload = {tool_name: approval_token, "mutations": {tool_name: approval_token}}
+            approval_history = list(record.approval_history)
+            approval_history.append(approval_entry)
+
+            run_env = dict(os.environ)
+            if record.request_id:
+                run_env["LG_REQUEST_ID"] = record.request_id
+            if record.auth_subject:
+                run_env["LG_REMOTE_API_AUTH_SUBJECT"] = record.auth_subject
+            if record.client_ip:
+                run_env["LG_REMOTE_API_CLIENT_IP"] = record.client_ip
+            run_env["LG_RESUME_APPROVALS_JSON"] = json.dumps(approvals_payload, ensure_ascii=False)
+            run_env["LG_APPROVAL_CONTEXT_JSON"] = json.dumps(
+                {
+                    "pending": False,
+                    "history": approval_history,
+                    "last_decision": approval_entry,
+                },
+                ensure_ascii=False,
+            )
+            argv = _resume_argv(record)
+            process = _spawn_run_subprocess(argv=argv, cwd=self._repo_root, env=run_env)
+
+            record.argv = argv
+            record.process = process
+            record.started_at = _utc_now()
+            record.finished_at = None
+            record.exit_code = None
+            record.status = "running"
+            record.pending_approval = False
+            record.pending_approval_summary = ""
+            record.pending_approval_details = {}
+            record.approval_history = approval_history
+            record.logs.append(f"[approval] approved by {actor}")
+            payload_out = self._summary_payload_locked(record)
+            trace_path = record.trace_path
+
+        _write_trace_approval_state(
+            trace_path,
+            pending=False,
+            pending_details=None,
+            history=approval_history,
+            last_decision=approval_entry,
+        )
+        if self._run_store is not None:
+            self._run_store.upsert(payload_out)
+        _start_daemon_thread(
+            target=lambda: self._capture_process_output(normalized_run_id),
+            name=f"lg-orch-run-{normalized_run_id}",
+        )
+        resumed = self.get_run(normalized_run_id)
+        if resumed is None:
+            raise RuntimeError("run_not_found")
+        self._log.info("remote_api_run_resumed", run_id=normalized_run_id, actor=actor)
+        return resumed
+
+    def reject_run(self, run_id: str, payload: dict[str, Any], *, auth_subject: str = "") -> dict[str, Any] | None:
+        normalized_run_id = _normalized_run_id(run_id)
+        if normalized_run_id is None:
+            return None
+
+        actor = _non_empty_str(payload.get("actor")) or auth_subject or "operator"
+        rationale = _non_empty_str(payload.get("rationale")) or ""
+
+        with self._lock:
+            record = self._runs.get(normalized_run_id)
+            if record is None:
+                return None
+            self._refresh_record_locked(record)
+            if not record.pending_approval:
+                raise ValueError("approval_not_pending")
+
+            challenge_id = _non_empty_str(record.pending_approval_details.get("challenge_id")) or ""
+            approval_entry = {
+                "decision": "rejected",
+                "actor": actor,
+                "rationale": rationale,
+                "challenge_id": challenge_id,
+                "ts": _utc_now(),
+            }
+            approval_history = list(record.approval_history)
+            approval_history.append(approval_entry)
+            record.pending_approval = False
+            record.pending_approval_summary = ""
+            record.pending_approval_details = {}
+            record.approval_history = approval_history
+            record.finished_at = _utc_now()
+            record.exit_code = 1
+            record.status = "rejected"
+            record.logs.append(f"[approval] rejected by {actor}")
+            payload_out = self._summary_payload_locked(record)
+            trace_path = record.trace_path
+
+        _write_trace_approval_state(
+            trace_path,
+            pending=False,
+            pending_details=None,
+            history=approval_history,
+            last_decision=approval_entry,
+        )
+        if self._run_store is not None:
+            self._run_store.upsert(payload_out)
+        self._log.info("remote_api_run_rejected", run_id=normalized_run_id, actor=actor)
+        return self.get_run(normalized_run_id)
+
     def _capture_process_output(self, run_id: str) -> None:
         with self._lock:
             record = self._runs.get(run_id)
@@ -453,12 +789,23 @@ class RemoteAPIService:
                 record.status = "cancelled"
             else:
                 record.status = "succeeded" if exit_code == 0 else "failed"
-            payload = self._summary_payload_locked(record)
             trace_path = record.trace_path
+            approval_history = list(record.approval_history)
+
+        trace_raw = self._load_trace(trace_path)
+        approval_state = _approval_state_from_trace(trace_raw)
+
+        with self._lock:
+            record = self._runs.get(run_id)
+            if record is None:
+                return
+            _apply_approval_state_to_record(record, approval_state)
+            payload = self._summary_payload_locked(record)
+            approval_history = list(record.approval_history)
+            pending_details = dict(record.pending_approval_details)
         if self._run_store is not None:
             self._run_store.upsert(payload)
             try:
-                trace_raw = self._load_trace(trace_path)
                 if trace_raw is not None:
                     state_dict = trace_raw.get("state", trace_raw)
                     facts_raw = state_dict.get("facts", []) if isinstance(state_dict, dict) else []
@@ -467,6 +814,15 @@ class RemoteAPIService:
                         self._run_store.upsert_recovery_facts(run_id, facts)
             except Exception:
                 pass
+
+        if payload.get("pending_approval"):
+            _write_trace_approval_state(
+                trace_path,
+                pending=True,
+                pending_details=pending_details,
+                history=approval_history,
+                last_decision=approval_history[-1] if approval_history else None,
+            )
 
         # Procedural memory: cache verified tool sequences on success
         if exit_code == 0 and self._procedure_cache is not None:
@@ -505,6 +861,8 @@ class RemoteAPIService:
             record.status = "cancelled"
         else:
             record.status = "succeeded" if exit_code == 0 else "failed"
+        trace_raw = self._load_trace(record.trace_path)
+        _apply_approval_state_to_record(record, _approval_state_from_trace(trace_raw))
         if self._run_store is not None:
             self._run_store.upsert(self._summary_payload_locked(record))
 
@@ -524,6 +882,11 @@ class RemoteAPIService:
             "request_id": record.request_id,
             "auth_subject": record.auth_subject,
             "client_ip": record.client_ip,
+            "thread_id": record.thread_id,
+            "checkpoint_id": record.checkpoint_id,
+            "pending_approval": record.pending_approval,
+            "pending_approval_summary": record.pending_approval_summary,
+            "approval_history": list(record.approval_history),
             "cancel_requested": record.cancel_requested,
             "cancellable": record.finished_at is None and not record.cancel_requested,
         }
@@ -549,13 +912,11 @@ class RemoteAPIService:
                     trace = self._load_trace(record.trace_path)
                     new_logs = record.logs[seen_log_lines:]
                     seen_log_lines = len(record.logs)
-                    payload = {
+                    payload = _apply_trace_state_to_payload({
                         **summary,
                         "log_lines": len(record.logs),
                         "new_log_lines": new_logs,
-                        "trace_ready": trace is not None,
-                        "trace": trace,
-                    }
+                    }, trace)
             if payload is None:
                 data = json.dumps({"error": "not_found", "run_id": run_id})
                 try:
@@ -681,6 +1042,27 @@ def _api_http_response(
             return _json_response(405, {"error": "method_not_allowed"})
         run_id = path_parts[2]
         payload = service.cancel_run(run_id)
+        if payload is None:
+            return _json_response(404, {"error": "not_found", "run_id": run_id})
+        return _json_response(202, payload)
+
+    if len(path_parts) == 4 and path_parts[:2] == ["v1", "runs"] and path_parts[3] in {"approve", "reject"}:
+        if method != "POST":
+            return _json_response(405, {"error": "method_not_allowed"})
+        try:
+            payload_raw = json.loads((request_body or b"{}").decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return _json_response(400, {"error": "invalid_json"})
+        if not isinstance(payload_raw, dict):
+            return _json_response(400, {"error": "invalid_json"})
+        run_id = path_parts[2]
+        try:
+            if path_parts[3] == "approve":
+                payload = service.approve_run(run_id, payload_raw, auth_subject=auth_subject)
+            else:
+                payload = service.reject_run(run_id, payload_raw, auth_subject=auth_subject)
+        except ValueError as exc:
+            return _json_response(409, {"error": str(exc), "run_id": run_id})
         if payload is None:
             return _json_response(404, {"error": "not_found", "run_id": run_id})
         return _json_response(202, payload)

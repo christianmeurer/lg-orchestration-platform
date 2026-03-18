@@ -321,7 +321,27 @@ def test_classify_retry_returns_test_failure_post_change() -> None:
     assert label == "test_failure_post_change"
     assert recovery["failure_class"] == "test_failure_post_change"
     assert recovery["plan_action"] == "amend"
-    assert recovery["retry_target"] == "planner"
+    assert recovery["retry_target"] == "coder"
+
+
+def test_classify_retry_routes_localized_failure_to_coder_after_patch() -> None:
+    tool_results: list[dict[str, Any]] = [
+        _patch_ok(),
+        {
+            "tool": "exec",
+            "ok": False,
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": "lint failed in updated module",
+            "diagnostics": [],
+            "timing_ms": 1,
+            "artifacts": {},
+        },
+    ]
+    recovery, label = _classify_retry(tool_results, current_loop=0)
+    assert label == "localized_verification_failure"
+    assert recovery["failure_class"] == "localized_verification_failure"
+    assert recovery["retry_target"] == "coder"
 
 
 def test_classify_retry_budget_exceeded_takes_priority() -> None:
@@ -405,3 +425,37 @@ def test_formal_verification_skipped_for_invalid_url() -> None:
     assert result is not None
     assert result["ok"] is False
     assert result["artifacts"]["error"] == "invalid_base_url"
+
+
+def test_verifier_emits_next_handoff_for_coder_repair() -> None:
+    out = verifier(
+        _base_state(
+            active_handoff={
+                "producer": "coder",
+                "consumer": "executor",
+                "objective": "Execute the bounded tool sequence.",
+                "file_scope": ["py/src/lg_orch/state.py"],
+                "evidence": [],
+                "constraints": [],
+                "acceptance_checks": [],
+                "retry_budget": 1,
+                "provenance": ["coder:step-1"],
+            },
+            tool_results=[
+                _patch_ok(),
+                {
+                    "tool": "run_tests",
+                    "ok": False,
+                    "exit_code": 1,
+                    "stdout": "FAILED tests/test_state.py::test_x",
+                    "stderr": "assertion failed",
+                    "diagnostics": [],
+                    "timing_ms": 1,
+                    "artifacts": {},
+                },
+            ],
+        )
+    )
+    assert out["verification"]["retry_target"] == "coder"
+    assert out["verification"]["next_handoff"]["consumer"] == "coder"
+    assert out["active_handoff"]["consumer"] == "coder"

@@ -75,6 +75,11 @@ def test_write_run_trace_creates_file() -> None:
                 "auth_subject": "bearer",
                 "client_ip": "203.0.113.10",
             },
+            "_approval_context": {
+                "pending": False,
+                "history": [{"decision": "approved", "actor": "bearer"}],
+                "last_decision": {"decision": "approved", "actor": "bearer"},
+            },
             "recovery_packet": {
                 "failure_class": "verification_failed",
                 "failure_fingerprint": "fp-1",
@@ -111,6 +116,7 @@ def test_write_run_trace_creates_file() -> None:
         assert data["tool_results"] == []
         assert data["verification"]["ok"] is True
         assert data["recovery_packet"]["failure_fingerprint"] == "fp-1"
+        assert data["approval"]["history"][0]["decision"] == "approved"
         assert data["loop_summaries"][0]["loop"] == 1
         assert data["checkpoint"]["thread_id"] == "thread-a"
         assert data["snapshots"][0]["id"] == "snap-1"

@@ -60,10 +60,14 @@ class LgOrchExtension {
     latestTracePath = null;
     latestFinalOutput = '';
     latestInlineDiff = '';
+    latestVerifierReport = '';
     runnerStatus = 'stopped';
     requestStatus = 'idle';
     requestRunning = false;
     activeRemoteRunId = null;
+    pendingApproval = false;
+    pendingApprovalSummary = '';
+    approvalHistory = '';
     runHistory = [];
     chatParticipant;
     constructor(context) {
@@ -167,6 +171,12 @@ class LgOrchExtension {
             case 'clearRunHistory':
                 this.runHistory.splice(0, this.runHistory.length);
                 this.refresh();
+                return;
+            case 'approveRun':
+                await this.approveRemoteRun();
+                return;
+            case 'rejectRun':
+                await this.rejectRemoteRun();
                 return;
             default:
                 return;
@@ -292,6 +302,10 @@ class LgOrchExtension {
         this.latestTracePath = null;
         this.latestFinalOutput = '';
         this.latestInlineDiff = '';
+        this.latestVerifierReport = '';
+        this.pendingApproval = false;
+        this.pendingApprovalSummary = '';
+        this.approvalHistory = '';
         this.appendLog(`[run] request: ${request}`);
         progressCallback?.('Initializing run...');
         this.refresh();
@@ -323,7 +337,9 @@ class LgOrchExtension {
             if (this.runHistory.length > maxHistory) {
                 this.runHistory.splice(0, this.runHistory.length - maxHistory);
             }
-            this.activeRemoteRunId = null;
+            if (!this.pendingApproval) {
+                this.activeRemoteRunId = null;
+            }
             this.refresh();
         }
         return success;
@@ -356,6 +372,7 @@ class LgOrchExtension {
         const summary = await this.findLatestTrace(workspaceRoot);
         this.latestTracePath = summary.tracePath;
         this.latestFinalOutput = summary.finalOutput;
+        this.latestVerifierReport = summary.verifierReport;
         if (summary.tracePath) {
             this.appendLog(`[trace] latest: ${summary.tracePath}`);
         }
@@ -422,6 +439,63 @@ class LgOrchExtension {
         this.appendLog(`[remote] cancel requested: ${runId}`);
         const detail = await this.requestJson('POST', `${remoteApiBaseUrl}/v1/runs/${encodeURIComponent(runId)}/cancel`, {}, remoteApiBearerToken);
         this.applyRemoteRunDetails(detail);
+    }
+    async approveRemoteRun() {
+        const remoteApiBaseUrl = this.getRemoteApiBaseUrl();
+        const runId = this.activeRemoteRunId;
+        if (!remoteApiBaseUrl || !runId) {
+            this.appendLog('[approval] remote approval unavailable');
+            return;
+        }
+        const remoteApiBearerToken = this.getRemoteApiBearerToken();
+        this.appendLog(`[approval] approving ${runId}`);
+        const detail = await this.requestJson('POST', `${remoteApiBaseUrl}/v1/runs/${encodeURIComponent(runId)}/approve`, { actor: 'vscode' }, remoteApiBearerToken);
+        this.applyRemoteRunDetails(detail);
+        if (runId && isRemoteRunInProgress(this.requestStatus)) {
+            void this.followRemoteRunAfterApproval(remoteApiBaseUrl, runId);
+        }
+    }
+    async rejectRemoteRun() {
+        const remoteApiBaseUrl = this.getRemoteApiBaseUrl();
+        const runId = this.activeRemoteRunId;
+        if (!remoteApiBaseUrl || !runId) {
+            this.appendLog('[approval] remote rejection unavailable');
+            return;
+        }
+        const remoteApiBearerToken = this.getRemoteApiBearerToken();
+        this.appendLog(`[approval] rejecting ${runId}`);
+        const detail = await this.requestJson('POST', `${remoteApiBaseUrl}/v1/runs/${encodeURIComponent(runId)}/reject`, { actor: 'vscode' }, remoteApiBearerToken);
+        this.applyRemoteRunDetails(detail);
+    }
+    async followRemoteRunAfterApproval(remoteApiBaseUrl, runId) {
+        const remoteApiBearerToken = this.getRemoteApiBearerToken();
+        const pollIntervalMs = this.getRemotePollIntervalMs();
+        let logCount = 0;
+        this.requestRunning = true;
+        this.activeRemoteRunId = runId;
+        this.refresh();
+        try {
+            while (true) {
+                const detail = await this.requestJson('GET', `${remoteApiBaseUrl}/v1/runs/${encodeURIComponent(runId)}`, undefined, remoteApiBearerToken);
+                this.applyRemoteRunDetails(detail);
+                const logs = await this.requestJson('GET', `${remoteApiBaseUrl}/v1/runs/${encodeURIComponent(runId)}/logs`, undefined, remoteApiBearerToken);
+                logCount = this.appendRemoteLogs(logs, logCount);
+                if (!isRemoteRunInProgress(this.requestStatus)) {
+                    break;
+                }
+                await delay(pollIntervalMs);
+            }
+            const finalDetail = await this.requestJson('GET', `${remoteApiBaseUrl}/v1/runs/${encodeURIComponent(runId)}`, undefined, remoteApiBearerToken);
+            this.applyRemoteRunDetails(finalDetail);
+            this.appendRemoteLogs(await this.requestJson('GET', `${remoteApiBaseUrl}/v1/runs/${encodeURIComponent(runId)}/logs`, undefined, remoteApiBearerToken), logCount);
+        }
+        catch (error) {
+            this.appendLog(`[approval] follow-up failed: ${asErrorMessage(error)}`);
+        }
+        finally {
+            this.requestRunning = false;
+            this.refresh();
+        }
     }
     async runCommand(label, command, args, cwd) {
         this.appendLog(`[${label}] ${command} ${args.join(' ')}`);
@@ -504,10 +578,11 @@ class LgOrchExtension {
     }
     applyRemoteRunDetails(detail) {
         this.requestStatus = typeof detail.status === 'string' && detail.status.trim() ? detail.status : 'running';
+        const hasPendingApproval = detail.pending_approval === true;
         if (typeof detail.run_id === 'string' && detail.run_id.trim()) {
             this.activeRemoteRunId = detail.run_id.trim();
         }
-        if (detail.cancellable === false || this.requestStatus === 'cancelled' || !isRemoteRunInProgress(this.requestStatus)) {
+        if (detail.cancellable === false || this.requestStatus === 'cancelled' || (!isRemoteRunInProgress(this.requestStatus) && !hasPendingApproval)) {
             this.activeRemoteRunId = null;
         }
         if (typeof detail.trace_path === 'string' && detail.trace_path.trim()) {
@@ -518,6 +593,35 @@ class LgOrchExtension {
             if (this.isShowInlineDiff()) {
                 this.latestInlineDiff = this.extractInlineDiff(detail.trace);
             }
+            if (detail.trace.verification !== undefined && detail.trace.verification !== null) {
+                try {
+                    this.latestVerifierReport = JSON.stringify(detail.trace.verification, null, 2);
+                }
+                catch {
+                    this.latestVerifierReport = String(detail.trace.verification);
+                }
+            }
+        }
+        const approvalHistory = Array.isArray(detail.approval_history) ? detail.approval_history : [];
+        if (approvalHistory.length > 0) {
+            try {
+                this.approvalHistory = JSON.stringify(approvalHistory, null, 2);
+            }
+            catch {
+                this.approvalHistory = String(approvalHistory);
+            }
+        }
+        else {
+            this.approvalHistory = '';
+        }
+        if (hasPendingApproval) {
+            this.pendingApproval = true;
+            this.pendingApprovalSummary = typeof detail.pending_approval_summary === 'string'
+                ? detail.pending_approval_summary : '';
+        }
+        if (!hasPendingApproval && !isRemoteRunInProgress(this.requestStatus)) {
+            this.pendingApproval = false;
+            this.pendingApprovalSummary = '';
         }
         this.refresh();
     }
@@ -686,7 +790,7 @@ class LgOrchExtension {
             names = await fs.readdir(traceDir);
         }
         catch {
-            return { tracePath: null, finalOutput: '' };
+            return { tracePath: null, finalOutput: '', verifierReport: '' };
         }
         const candidates = await Promise.all(names
             .filter((name) => name.endsWith('.json'))
@@ -696,7 +800,7 @@ class LgOrchExtension {
             return { fullPath, mtimeMs: stats.mtimeMs };
         }));
         if (candidates.length === 0) {
-            return { tracePath: null, finalOutput: '' };
+            return { tracePath: null, finalOutput: '', verifierReport: '' };
         }
         candidates.sort((left, right) => right.mtimeMs - left.mtimeMs);
         const latest = candidates[0];
@@ -704,9 +808,19 @@ class LgOrchExtension {
             const raw = await fs.readFile(latest.fullPath, 'utf8');
             const parsed = JSON.parse(raw);
             const finalOutput = isRecord(parsed) ? this.formatOutput(parsed.final) : '';
+            let verifierReport = '';
+            if (isRecord(parsed) && parsed.verification !== undefined && parsed.verification !== null) {
+                try {
+                    verifierReport = JSON.stringify(parsed.verification, null, 2);
+                }
+                catch {
+                    verifierReport = String(parsed.verification);
+                }
+            }
             return {
                 tracePath: this.toDisplayPath(workspaceRoot, latest.fullPath),
                 finalOutput,
+                verifierReport,
             };
         }
         catch (error) {
@@ -714,6 +828,7 @@ class LgOrchExtension {
             return {
                 tracePath: this.toDisplayPath(workspaceRoot, latest.fullPath),
                 finalOutput: '',
+                verifierReport: '',
             };
         }
     }
@@ -784,6 +899,10 @@ class LgOrchExtension {
             runHistory: [...this.runHistory].reverse(),
             showInlineDiff: this.isShowInlineDiff(),
             inlineDiff: this.latestInlineDiff,
+            verifierReport: this.latestVerifierReport,
+            pendingApproval: this.pendingApproval,
+            pendingApprovalSummary: this.pendingApprovalSummary,
+            approvalHistory: this.approvalHistory,
         };
     }
     renderHtml() {
@@ -884,9 +1003,28 @@ class LgOrchExtension {
       </div>
     </section>
 
+    <section id="approvalSection" style="display:none">
+      <h2>&#x26A0; Pending Approval</h2>
+      <div id="approvalSummary" style="padding:8px;background:var(--vscode-inputValidation-warningBackground);border-radius:4px;"></div>
+      <div style="margin-top:8px;display:flex;gap:8px;">
+        <button id="approveBtn">Approve</button>
+        <button id="rejectBtn">Reject</button>
+      </div>
+    </section>
+
+    <section id="approvalHistorySection" style="display:none">
+      <h2>Approval History</h2>
+      <pre id="approvalHistory"></pre>
+    </section>
+
     <section>
       <h2>Final Output</h2>
       <pre id="finalOutput"></pre>
+    </section>
+
+    <section id="verifierSection">
+      <h2>Verifier Report</h2>
+      <pre id="verifierReport"></pre>
     </section>
 
     <section id="diffSection" style="display:none">
@@ -948,6 +1086,35 @@ class LgOrchExtension {
           diffSection.style.display = 'none';
         }
 
+        const verifierReportEl = document.getElementById('verifierReport');
+        const verifierSection = document.getElementById('verifierSection');
+        if (state.verifierReport) {
+          verifierReportEl.textContent = state.verifierReport;
+          verifierSection.style.display = '';
+        } else {
+          verifierReportEl.textContent = '';
+          verifierSection.style.display = 'none';
+        }
+
+        const approvalSection = document.getElementById('approvalSection');
+        const approvalSummary = document.getElementById('approvalSummary');
+        if (state.pendingApproval) {
+          approvalSummary.textContent = state.pendingApprovalSummary || 'Mutation plan awaiting approval.';
+          approvalSection.style.display = '';
+        } else {
+          approvalSection.style.display = 'none';
+        }
+
+        const approvalHistorySection = document.getElementById('approvalHistorySection');
+        const approvalHistory = document.getElementById('approvalHistory');
+        if (state.approvalHistory) {
+          approvalHistory.textContent = state.approvalHistory;
+          approvalHistorySection.style.display = '';
+        } else {
+          approvalHistory.textContent = '';
+          approvalHistorySection.style.display = 'none';
+        }
+
         const historyContainer = document.getElementById('runHistory');
         historyContainer.innerHTML = '';
         for (const entry of (state.runHistory || [])) {
@@ -962,6 +1129,13 @@ class LgOrchExtension {
 
       document.getElementById('clearHistory').addEventListener('click', () => {
         vscodeApi.postMessage({ type: 'clearRunHistory' });
+      });
+
+      document.getElementById('approveBtn').addEventListener('click', () => {
+        vscodeApi.postMessage({ type: 'approveRun' });
+      });
+      document.getElementById('rejectBtn').addEventListener('click', () => {
+        vscodeApi.postMessage({ type: 'rejectRun' });
       });
     </script>
   </body>

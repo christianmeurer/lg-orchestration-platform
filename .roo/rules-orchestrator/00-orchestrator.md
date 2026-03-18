@@ -2,3 +2,5 @@
 - Reuse prior findings before spawning more work.
 - Pass only needed context, but enough to act.
 - Summarize outcomes briefly.
+- Prefer Ask for evidence summaries, Architect for file-scoped plans, Debug for root-cause isolation, and Code for implementation and verification.
+- Require each handoff to return scope, files, evidence, constraints, and the next action.

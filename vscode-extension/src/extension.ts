@@ -46,6 +46,7 @@ interface ViewModel {
   verifierReport: string;
   pendingApproval: boolean;
   pendingApprovalSummary: string;
+  approvalHistory: string;
 }
 
 interface RemoteRunDetails {
@@ -59,6 +60,9 @@ interface RemoteRunDetails {
   trace?: unknown;
   pending_approval?: unknown;
   pending_approval_summary?: unknown;
+  approval_history?: unknown;
+  checkpoint_id?: unknown;
+  thread_id?: unknown;
   verification?: unknown;
 }
 
@@ -80,6 +84,7 @@ class LgOrchExtension {
   private activeRemoteRunId: string | null = null;
   private pendingApproval = false;
   private pendingApprovalSummary = '';
+  private approvalHistory = '';
   private readonly runHistory: RunHistoryEntry[] = [];
 
   private chatParticipant: vscode.ChatParticipant | undefined;
@@ -212,17 +217,10 @@ class LgOrchExtension {
         this.refresh();
         return;
       case 'approveRun':
-        this.appendLog('[approval] user approved');
-        this.pendingApproval = false;
-        this.pendingApprovalSummary = '';
-        this.refresh();
+        await this.approveRemoteRun();
         return;
       case 'rejectRun':
-        this.appendLog('[approval] user rejected');
-        this.pendingApproval = false;
-        this.pendingApprovalSummary = '';
-        this.requestStatus = 'rejected';
-        this.refresh();
+        await this.rejectRemoteRun();
         return;
       default:
         return;
@@ -376,6 +374,7 @@ class LgOrchExtension {
     this.latestVerifierReport = '';
     this.pendingApproval = false;
     this.pendingApprovalSummary = '';
+    this.approvalHistory = '';
     this.appendLog(`[run] request: ${request}`);
     progressCallback?.('Initializing run...');
     this.refresh();
@@ -405,7 +404,9 @@ class LgOrchExtension {
       if (this.runHistory.length > maxHistory) {
         this.runHistory.splice(0, this.runHistory.length - maxHistory);
       }
-      this.activeRemoteRunId = null;
+      if (!this.pendingApproval) {
+        this.activeRemoteRunId = null;
+      }
       this.refresh();
     }
     return success;
@@ -569,6 +570,98 @@ class LgOrchExtension {
     this.applyRemoteRunDetails(detail);
   }
 
+  private async approveRemoteRun(): Promise<void> {
+    const remoteApiBaseUrl = this.getRemoteApiBaseUrl();
+    const runId = this.activeRemoteRunId;
+    if (!remoteApiBaseUrl || !runId) {
+      this.appendLog('[approval] remote approval unavailable');
+      return;
+    }
+    const remoteApiBearerToken = this.getRemoteApiBearerToken();
+    this.appendLog(`[approval] approving ${runId}`);
+    const detail = await this.requestJson<RemoteRunDetails>(
+      'POST',
+      `${remoteApiBaseUrl}/v1/runs/${encodeURIComponent(runId)}/approve`,
+      { actor: 'vscode' },
+      remoteApiBearerToken,
+    );
+    this.applyRemoteRunDetails(detail);
+    if (runId && isRemoteRunInProgress(this.requestStatus)) {
+      void this.followRemoteRunAfterApproval(remoteApiBaseUrl, runId);
+    }
+  }
+
+  private async rejectRemoteRun(): Promise<void> {
+    const remoteApiBaseUrl = this.getRemoteApiBaseUrl();
+    const runId = this.activeRemoteRunId;
+    if (!remoteApiBaseUrl || !runId) {
+      this.appendLog('[approval] remote rejection unavailable');
+      return;
+    }
+    const remoteApiBearerToken = this.getRemoteApiBearerToken();
+    this.appendLog(`[approval] rejecting ${runId}`);
+    const detail = await this.requestJson<RemoteRunDetails>(
+      'POST',
+      `${remoteApiBaseUrl}/v1/runs/${encodeURIComponent(runId)}/reject`,
+      { actor: 'vscode' },
+      remoteApiBearerToken,
+    );
+    this.applyRemoteRunDetails(detail);
+  }
+
+  private async followRemoteRunAfterApproval(remoteApiBaseUrl: string, runId: string): Promise<void> {
+    const remoteApiBearerToken = this.getRemoteApiBearerToken();
+    const pollIntervalMs = this.getRemotePollIntervalMs();
+    let logCount = 0;
+    this.requestRunning = true;
+    this.activeRemoteRunId = runId;
+    this.refresh();
+    try {
+      while (true) {
+        const detail = await this.requestJson<RemoteRunDetails>(
+          'GET',
+          `${remoteApiBaseUrl}/v1/runs/${encodeURIComponent(runId)}`,
+          undefined,
+          remoteApiBearerToken,
+        );
+        this.applyRemoteRunDetails(detail);
+        const logs = await this.requestJson<RemoteRunLogs>(
+          'GET',
+          `${remoteApiBaseUrl}/v1/runs/${encodeURIComponent(runId)}/logs`,
+          undefined,
+          remoteApiBearerToken,
+        );
+        logCount = this.appendRemoteLogs(logs, logCount);
+        if (!isRemoteRunInProgress(this.requestStatus)) {
+          break;
+        }
+        await delay(pollIntervalMs);
+      }
+
+      const finalDetail = await this.requestJson<RemoteRunDetails>(
+        'GET',
+        `${remoteApiBaseUrl}/v1/runs/${encodeURIComponent(runId)}`,
+        undefined,
+        remoteApiBearerToken,
+      );
+      this.applyRemoteRunDetails(finalDetail);
+      this.appendRemoteLogs(
+        await this.requestJson<RemoteRunLogs>(
+          'GET',
+          `${remoteApiBaseUrl}/v1/runs/${encodeURIComponent(runId)}/logs`,
+          undefined,
+          remoteApiBearerToken,
+        ),
+        logCount,
+      );
+    } catch (error: unknown) {
+      this.appendLog(`[approval] follow-up failed: ${asErrorMessage(error)}`);
+    } finally {
+      this.requestRunning = false;
+      this.refresh();
+    }
+  }
+
   private async runCommand(label: string, command: string, args: readonly string[], cwd: string): Promise<number> {
     this.appendLog(`[${label}] ${command} ${args.join(' ')}`);
 
@@ -666,12 +759,13 @@ class LgOrchExtension {
 
   private applyRemoteRunDetails(detail: RemoteRunDetails): void {
     this.requestStatus = typeof detail.status === 'string' && detail.status.trim() ? detail.status : 'running';
+    const hasPendingApproval = detail.pending_approval === true;
 
     if (typeof detail.run_id === 'string' && detail.run_id.trim()) {
       this.activeRemoteRunId = detail.run_id.trim();
     }
 
-    if (detail.cancellable === false || this.requestStatus === 'cancelled' || !isRemoteRunInProgress(this.requestStatus)) {
+    if (detail.cancellable === false || this.requestStatus === 'cancelled' || (!isRemoteRunInProgress(this.requestStatus) && !hasPendingApproval)) {
       this.activeRemoteRunId = null;
     }
 
@@ -693,13 +787,24 @@ class LgOrchExtension {
       }
     }
 
-    if (detail.pending_approval === true) {
+    const approvalHistory = Array.isArray(detail.approval_history) ? detail.approval_history : [];
+    if (approvalHistory.length > 0) {
+      try {
+        this.approvalHistory = JSON.stringify(approvalHistory, null, 2);
+      } catch {
+        this.approvalHistory = String(approvalHistory);
+      }
+    } else {
+      this.approvalHistory = '';
+    }
+
+    if (hasPendingApproval) {
       this.pendingApproval = true;
       this.pendingApprovalSummary = typeof detail.pending_approval_summary === 'string'
         ? detail.pending_approval_summary : '';
     }
 
-    if (!isRemoteRunInProgress(this.requestStatus)) {
+    if (!hasPendingApproval && !isRemoteRunInProgress(this.requestStatus)) {
       this.pendingApproval = false;
       this.pendingApprovalSummary = '';
     }
@@ -1014,6 +1119,7 @@ class LgOrchExtension {
       verifierReport: this.latestVerifierReport,
       pendingApproval: this.pendingApproval,
       pendingApprovalSummary: this.pendingApprovalSummary,
+      approvalHistory: this.approvalHistory,
     };
   }
 
@@ -1125,6 +1231,11 @@ class LgOrchExtension {
       </div>
     </section>
 
+    <section id="approvalHistorySection" style="display:none">
+      <h2>Approval History</h2>
+      <pre id="approvalHistory"></pre>
+    </section>
+
     <section>
       <h2>Final Output</h2>
       <pre id="finalOutput"></pre>
@@ -1211,6 +1322,16 @@ class LgOrchExtension {
           approvalSection.style.display = '';
         } else {
           approvalSection.style.display = 'none';
+        }
+
+        const approvalHistorySection = document.getElementById('approvalHistorySection');
+        const approvalHistory = document.getElementById('approvalHistory');
+        if (state.approvalHistory) {
+          approvalHistory.textContent = state.approvalHistory;
+          approvalHistorySection.style.display = '';
+        } else {
+          approvalHistory.textContent = '';
+          approvalHistorySection.style.display = 'none';
         }
 
         const historyContainer = document.getElementById('runHistory');

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from lg_orch.graph import route_after_policy_gate, route_after_verifier
+from lg_orch.graph import export_mermaid, route_after_policy_gate, route_after_verifier
 
 
 def _state(**overrides: Any) -> dict[str, Any]:
@@ -30,6 +30,10 @@ def test_route_after_policy_gate_routes_to_planner_when_requested() -> None:
     assert route_after_policy_gate(_state(retry_target="planner")) == "planner"
 
 
+def test_route_after_policy_gate_routes_to_coder_when_requested() -> None:
+    assert route_after_policy_gate(_state(retry_target="coder")) == "coder"
+
+
 def test_route_after_policy_gate_routes_to_context_builder_when_requested() -> None:
     assert route_after_policy_gate(_state(retry_target="context_builder")) == "context_builder"
 
@@ -40,3 +44,10 @@ def test_route_after_verifier_success_goes_to_reporter() -> None:
 
 def test_route_after_verifier_failure_reenters_budget_gate() -> None:
     assert route_after_verifier({"verification": {"ok": False}}) == "policy_gate"
+
+
+def test_export_mermaid_includes_coder_node_and_edges() -> None:
+    mermaid = export_mermaid()
+    assert 'coder["coder"]' in mermaid
+    assert "planner --> coder" in mermaid
+    assert "coder --> executor" in mermaid

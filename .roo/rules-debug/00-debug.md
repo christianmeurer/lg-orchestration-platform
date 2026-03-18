@@ -2,3 +2,4 @@
 - Prefer the narrowest search and reproduction path that can prove the failure.
 - Explain the fix briefly but completely.
 - Verify after the fix.
+- Return a compact root-cause packet: repro, failing evidence, likely fix surface, and verification command.

@@ -97,6 +97,7 @@ def test_render_trace_dashboard_combines_sections() -> None:
         "request": "Find bug",
         "intent": "debug",
         "verification": {"ok": False, "acceptance_ok": False},
+        "approval": {"pending": True, "history": [{"decision": "approved"}]},
         "halt_reason": "plan_max_iterations_exhausted",
         "events": [{"ts_ms": 1, "kind": "ingest", "data": {}}],
         "tool_results": [{"tool": "search_files", "ok": True}],
@@ -109,6 +110,8 @@ def test_render_trace_dashboard_combines_sections() -> None:
     assert "Final Output" in result
     assert "Verification" in result
     assert "acceptance: failed" in result
+    assert "approval: pending" in result
+    assert "approval_history: 1" in result
     assert "halt_reason: plan_max_iterations_exhausted" in result
     assert "Done" in result
 
@@ -119,6 +122,11 @@ def test_render_trace_dashboard_html_combines_sections() -> None:
         "request": "Find bug",
         "intent": "debug",
         "verification": {"ok": True, "acceptance_ok": False},
+        "approval": {
+            "pending": True,
+            "summary": "apply_patch requires approval",
+            "history": [{"decision": "approved", "actor": "chris", "ts": "2026-01-01T00:00:00Z"}],
+        },
         "halt_reason": "plan_max_iterations_exhausted",
         "telemetry": {
             "diagnostics": [{"tool": "exec", "summary": "x"}],
@@ -144,6 +152,8 @@ def test_render_trace_dashboard_html_combines_sections() -> None:
     assert "diagnostics" in result
     assert "thread-a" in result
     assert "cp-1" in result
+    assert "Approval History" in result
+    assert "apply_patch requires approval" in result
     assert "Done" in result
 
 
@@ -156,6 +166,8 @@ def test_render_run_viewer_spa_returns_html() -> None:
 def test_render_run_viewer_spa_contains_api_calls() -> None:
     result = render_run_viewer_spa()
     assert "/v1/runs" in result
+    assert "approvalAction('approve')" in result
+    assert "approvalAction('reject')" in result
 
 
 def test_render_run_viewer_spa_contains_submit_form() -> None:
@@ -172,6 +184,7 @@ def test_render_run_viewer_spa_diff_css_classes() -> None:
     result = render_run_viewer_spa()
     assert ".diff-add" in result
     assert ".diff-remove" in result
+    assert "Approval History" in result
 
 
 def test_render_trace_site_index_html_lists_runs() -> None:

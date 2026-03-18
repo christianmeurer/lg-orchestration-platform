@@ -152,6 +152,10 @@ def test_load_tasks_parses_new_fields(tmp_path: Path) -> None:
                 "budget_max_loops": 3,
                 "expected_recovery_packet_present": True,
                 "description": "A test task description.",
+                "expected_status": "suspended",
+                "expected_pending_approval": True,
+                "expected_checkpoint_present": True,
+                "expected_approval_history_present": True,
             }
         ),
         encoding="utf-8",
@@ -162,6 +166,10 @@ def test_load_tasks_parses_new_fields(tmp_path: Path) -> None:
     assert t.budget_max_loops == 3
     assert t.expected_recovery_packet_present is True
     assert t.description == "A test task description."
+    assert t.expected_status == "suspended"
+    assert t.expected_pending_approval is True
+    assert t.expected_checkpoint_present is True
+    assert t.expected_approval_history_present is True
 
 
 def test_load_tasks_new_fields_defaults(tmp_path: Path) -> None:
@@ -181,6 +189,10 @@ def test_load_tasks_new_fields_defaults(tmp_path: Path) -> None:
     assert tasks[0].budget_max_loops == 1
     assert tasks[0].expected_recovery_packet_present is False
     assert tasks[0].description == ""
+    assert tasks[0].expected_status == ""
+    assert tasks[0].expected_pending_approval is None
+    assert tasks[0].expected_checkpoint_present is None
+    assert tasks[0].expected_approval_history_present is None
 
 
 def test_score_recovery_packet_present_and_expected() -> None:
@@ -266,7 +278,7 @@ def test_score_task_has_seven_checks() -> None:
             "verification": {"acceptance_ok": False},
         },
     )
-    assert len(result["checks"]) == 11
+    assert len(result["checks"]) == 15
 
 
 def test_evaluate_tasks_summary_has_recovery_keys() -> None:
@@ -294,5 +306,42 @@ def test_evaluate_tasks_summary_has_recovery_keys() -> None:
     )
     assert "recovery_packet_accuracy" in report["summary"]
     assert "loop_summary_quality" in report["summary"]
+    assert "status_accuracy" in report["summary"]
+    assert "pending_approval_accuracy" in report["summary"]
+    assert "checkpoint_presence_accuracy" in report["summary"]
+    assert "approval_history_accuracy" in report["summary"]
     assert report["summary"]["loop_summary_quality"] == 1.0
     assert report["summary"]["recovery_packet_accuracy"] == 1.0
+
+
+def test_score_task_tracks_approval_control_plane_fields() -> None:
+    module = _load_eval_run_module()
+    task = module.EvalTask(
+        id="approval",
+        request="approve the run",
+        expected_intent="analysis",
+        expected_status="suspended",
+        expected_pending_approval=True,
+        expected_checkpoint_present=True,
+        expected_approval_history_present=True,
+    )
+    result = module.score_task(
+        task,
+        {
+            "intent": "analysis",
+            "halt_reason": "",
+            "final": "done",
+            "status": "suspended",
+            "pending_approval": True,
+            "checkpoint_id": "cp-123",
+            "approval_history": [{"decision": "approved"}],
+            "tool_results": [],
+            "verification": {"acceptance_ok": True, "ok": True},
+            "route": {"lane": "interactive"},
+            "telemetry": {"compression_summary": {"total_events": 1}},
+        },
+    )
+    assert result["checks"]["status_match"] is True
+    assert result["checks"]["pending_approval_match"] is True
+    assert result["checks"]["checkpoint_presence_match"] is True
+    assert result["checks"]["approval_history_match"] is True

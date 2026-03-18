@@ -4,6 +4,8 @@ import pytest
 from pydantic import ValidationError
 
 from lg_orch.state import (
+    AgentHandoff,
+    HandoffEvidence,
     OrchState,
     PlannerOutput,
     PlanStep,
@@ -35,6 +37,26 @@ def test_tool_call_forbids_extra() -> None:
 # --- PlanStep ---
 
 
+def _handoff() -> AgentHandoff:
+    return AgentHandoff(
+        producer="planner",
+        consumer="coder",
+        objective="Prepare a minimal patch.",
+        file_scope=["py/src/lg_orch/state.py"],
+        evidence=[HandoffEvidence(kind="request", detail="implement the change", ref="user_request")],
+        constraints=["Prefer the smallest correct diff."],
+        acceptance_checks=["The patch addresses the request."],
+        retry_budget=1,
+        provenance=["plan:step-1"],
+    )
+
+
+def test_agent_handoff_valid() -> None:
+    handoff = _handoff()
+    assert handoff.consumer == "coder"
+    assert handoff.evidence[0].kind == "request"
+
+
 def test_plan_step_valid() -> None:
     ps = PlanStep(id="s1", description="do thing", expected_outcome="done", files_touched=["a.py"])
     assert ps.id == "s1"
@@ -49,6 +71,12 @@ def test_plan_step_with_tools() -> None:
         expected_outcome="ok",
     )
     assert len(ps.tools) == 1
+
+
+def test_plan_step_accepts_handoff() -> None:
+    ps = PlanStep(id="s1", description="d", expected_outcome="ok", handoff=_handoff())
+    assert ps.handoff is not None
+    assert ps.handoff.consumer == "coder"
 
 
 def test_plan_step_forbids_extra() -> None:
@@ -159,6 +187,12 @@ def test_verifier_report_accepts_recovery_packet() -> None:
     assert vr.recovery_packet.loop == 2
 
 
+def test_verifier_report_accepts_next_handoff() -> None:
+    vr = VerifierReport(ok=False, checks=[], retry_target="planner", next_handoff=_handoff())
+    assert vr.next_handoff is not None
+    assert vr.next_handoff.producer == "planner"
+
+
 # --- OrchState ---
 
 
@@ -195,6 +229,7 @@ def test_orch_state_model_dump_roundtrip() -> None:
 
 def test_orch_state_new_phase1_fields_defaults() -> None:
     os_ = OrchState(request="hi")
+    assert os_.active_handoff is None
     assert os_.retry_target is None
     assert os_.recovery_packet is None
     assert os_.context_reset_requested is False

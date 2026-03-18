@@ -1,0 +1,12 @@
+{
+  "id": "approval-suspend-resume-001",
+  "request": "Apply a guarded patch and require operator approval before continuing.",
+  "expected_intent": "code_change",
+  "expected_status": "suspended",
+  "expected_pending_approval": true,
+  "expected_checkpoint_present": true,
+  "expected_approval_history_present": false,
+  "expected_acceptance_ok": false,
+  "require_final": false,
+  "description": "A governed-autonomy run should suspend on approval-required mutation, expose checkpoint metadata, and wait for operator action."
+}
