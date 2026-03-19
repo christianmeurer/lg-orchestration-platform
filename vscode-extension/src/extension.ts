@@ -5,6 +5,9 @@ import * as https from 'https';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { OrchestratorClient } from './api/OrchestratorClient';
+import { RunTreeProvider, RunItem } from './RunTreeProvider';
+import { RunPanelProvider } from './RunPanelProvider';
 
 const DEFAULT_REMOTE_POLL_INTERVAL_MS = 1000;
 const LOG_LIMIT = 1000;
@@ -1367,6 +1370,56 @@ let extensionInstance: LgOrchExtension | undefined;
 export function activate(context: vscode.ExtensionContext): void {
   extensionInstance = new LgOrchExtension(context);
   extensionInstance.register();
+
+  const getClient = (): OrchestratorClient => {
+    const baseUrl = vscode.workspace
+      .getConfiguration('lula')
+      .get<string>('remoteApiBaseUrl', '')
+      .trim() || 'http://localhost:8765';
+    const token = vscode.workspace
+      .getConfiguration('lula')
+      .get<string>('remoteApiBearerToken', '')
+      .trim() || null;
+    return new OrchestratorClient(baseUrl, token);
+  };
+
+  const runTreeProvider = new RunTreeProvider(getClient());
+  const runPanelProvider = new RunPanelProvider();
+
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider('orchestratorRuns', runTreeProvider),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('orchestrator.refreshRuns', () => {
+      runTreeProvider.refresh();
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('orchestrator.openRun', (item: RunItem) => {
+      runPanelProvider.openPanel(item.runId, getClient(), context);
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('orchestrator.newRun', async () => {
+      const task = await vscode.window.showInputBox({ prompt: 'Task description', ignoreFocusOut: true });
+      if (!task || !task.trim()) {
+        return;
+      }
+      const client = getClient();
+      try {
+        const run = await client.postRun(task.trim());
+        runTreeProvider.refresh();
+        void vscode.window.showInformationMessage(`Run started: ${run.run_id}`);
+      } catch (error: unknown) {
+        void vscode.window.showErrorMessage(
+          `Failed to start run: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }),
+  );
 }
 
 export async function deactivate(): Promise<void> {

@@ -17,10 +17,42 @@
     "onCommand:lgOrch.stopRunner",
     "onCommand:lgOrch.openRunHistory",
     "onCommand:lgOrch.clearRunHistory",
-    "onChatParticipant:lula"
+    "onChatParticipant:lula",
+    "onView:orchestratorRuns",
+    "onCommand:orchestrator.refreshRuns",
+    "onCommand:orchestrator.openRun",
+    "onCommand:orchestrator.newRun"
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "id": "orchestratorRuns",
+          "name": "Orchestrator Runs"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "orchestrator.refreshRuns",
+          "when": "view == orchestratorRuns",
+          "group": "navigation"
+        },
+        {
+          "command": "orchestrator.newRun",
+          "when": "view == orchestratorRuns",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "orchestrator.openRun",
+          "when": "view == orchestratorRuns"
+        }
+      ]
+    },
     "chatParticipants": [
       {
         "id": "lula",
@@ -63,6 +95,20 @@
       {
         "command": "lgOrch.viewInlineDiff",
         "title": "Lula: View Inline Diff"
+      },
+      {
+        "command": "orchestrator.refreshRuns",
+        "title": "Refresh Runs",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "orchestrator.openRun",
+        "title": "Open Run Panel"
+      },
+      {
+        "command": "orchestrator.newRun",
+        "title": "New Orchestrator Run",
+        "icon": "$(add)"
       }
     ],
     "configuration": {

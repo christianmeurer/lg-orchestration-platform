@@ -338,77 +338,39 @@ body {
   flex-shrink: 0;
 }
 
-/* Horizontal scrollable row that holds all pipeline nodes */
-#node-graph {
+/* D3 force graph container — fills the remaining panel height */
+#graph-container {
   flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  padding: 0 20px;
-  overflow-x: auto;
-  min-height: 0;
-}
-
-/* Wrapper for each node + its left arrow */
-.pipeline-node {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-}
-
-/* The box itself */
-.node-box {
-  padding: 8px 14px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--muted);
-  background: var(--surface2);
-  transition: border-color 0.3s, color 0.3s, background 0.3s, box-shadow 0.3s;
-  white-space: nowrap;
-  text-align: center;
+  min-height: 500px;
+  overflow: hidden;
+  background: var(--bg);
   position: relative;
 }
 
-/* Active node: pulsing accent highlight */
-.node-box.active {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: #1a2a3a;
-  animation: node-pulse 1.2s ease-in-out infinite;
+/* SVG node circles */
+.graph-node {
+  cursor: grab;
 }
 
-/* Completed node: green check */
-.node-box.done {
-  border-color: var(--ok);
-  color: var(--ok);
-  background: #122217;
+.graph-node:active {
+  cursor: grabbing;
 }
 
+/* Active nodes receive the SVG glow filter via JS class toggle */
+.graph-node-active {
+  filter: url(#glow-active);
+}
+
+/* Pulse-glow keyframe used by active node circles */
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.6; }
+}
+
+/* Retain node-pulse for legacy CSS compatibility */
 @keyframes node-pulse {
   0%, 100% { box-shadow: 0 0 0 0   rgba(88, 166, 255, 0.5); }
   50%       { box-shadow: 0 0 0 5px rgba(88, 166, 255, 0); }
-}
-
-/* Checkmark overlay shown once a node is done */
-.node-check {
-  display: none;
-  margin-left: 5px;
-  color: var(--ok);
-}
-
-.node-box.done .node-check {
-  display: inline;
-}
-
-/* Arrow connector between nodes */
-.pipe-arrow {
-  color: var(--border);
-  padding: 0 6px;
-  font-size: 14px;
-  user-select: none;
-  flex-shrink: 0;
 }
 
 /* ── Buttons ─────────────────────────────────────────────────── */

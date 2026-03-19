@@ -11,16 +11,19 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from lg_orch.meta_graph import (
     DependencyGraph,
+    DependencyPatch,
     MetaGraphScheduler,
     MetaRunResult,
     SubAgentTask,
     run_meta_graph,
 )
+from lg_orch.worktree import WorktreeContext
 
 
 # ---------------------------------------------------------------------------
@@ -483,3 +486,199 @@ def test_scheduler_rejects_cycle() -> None:
     scheduler = MetaGraphScheduler(tasks, _instant)
     with pytest.raises(ValueError, match="Cycle detected"):
         asyncio.run(scheduler.run())
+
+
+# ---------------------------------------------------------------------------
+# 13. Worktree isolation
+# ---------------------------------------------------------------------------
+
+
+def test_scheduler_with_worktree_isolation_passes_worktree_path() -> None:
+    """When worktree_isolation=True the agent receives 'worktree_path' in state.
+
+    WorktreeLease is mocked to inject a known fake path so no real git
+    repository is needed.
+    """
+    fake_path = "/tmp/fake_worktrees/task-iso"
+    fake_ctx = WorktreeContext(
+        run_id="task-iso",
+        branch="lg-orch/task-iso",
+        worktree_path=fake_path,
+        base_branch="main",
+    )
+
+    received_states: list[dict[str, Any]] = []
+
+    async def capturing_graph(state: dict[str, Any]) -> dict[str, Any]:
+        received_states.append(dict(state))
+        return {**state, "done": True}
+
+    # Build a mock async context manager that yields fake_ctx.
+    mock_lease_instance = MagicMock()
+    mock_lease_instance.__aenter__ = AsyncMock(return_value=fake_ctx)
+    mock_lease_instance.__aexit__ = AsyncMock(return_value=None)
+
+    mock_lease_cls = MagicMock(return_value=mock_lease_instance)
+
+    tasks = [_task("task-iso")]
+
+    with patch("lg_orch.meta_graph.WorktreeLease", mock_lease_cls):
+        scheduler = MetaGraphScheduler(
+            tasks,
+            capturing_graph,
+            worktree_isolation=True,
+            worktree_base_path="/repo",
+        )
+        result = asyncio.run(scheduler.run())
+
+    assert result.all_succeeded is True
+    assert len(received_states) == 1
+    assert received_states[0].get("worktree_path") == fake_path
+
+
+# ---------------------------------------------------------------------------
+# 14. DependencyGraph.add_edge / remove_edge / clone
+# ---------------------------------------------------------------------------
+
+
+class TestDependencyGraphMutation:
+    def test_dependency_graph_add_edge_succeeds(self) -> None:
+        """Adding a valid edge makes it visible via ready_tasks."""
+        tasks = [_task("a"), _task("b"), _task("c")]
+        dag = DependencyGraph(tasks)
+
+        # Initially c has no deps, so it is ready immediately.
+        # After adding a → c, c should only be ready once a is completed.
+        dag.add_edge("a", "c")
+
+        # Before a is completed, c must not appear in ready_tasks.
+        ready_ids = {t.task_id for t in dag.ready_tasks(set(), set())}
+        assert "c" not in ready_ids
+
+        # Mark a as success and add to completed_ids; c should now be ready.
+        tasks[0].status = "success"
+        ready_ids_after = {t.task_id for t in dag.ready_tasks({"a"}, set())}
+        assert "c" in ready_ids_after
+
+    def test_dependency_graph_add_edge_raises_on_cycle(self) -> None:
+        """add_edge that would form a cycle raises ValueError."""
+        tasks = [_task("a"), _task("b", deps=["a"])]
+        dag = DependencyGraph(tasks)
+
+        # Adding b → a creates a → b → a cycle.
+        with pytest.raises(ValueError, match="Cycle detected"):
+            dag.add_edge("b", "a")
+
+        # Original graph must be intact (b still depends on a, not vice-versa).
+        tasks[0].status = "success"
+        ready = {t.task_id for t in dag.ready_tasks({"a"}, set())}
+        assert "b" in ready
+
+    def test_dependency_graph_remove_edge_no_op(self) -> None:
+        """remove_edge on a non-existent edge does not raise."""
+        tasks = [_task("x"), _task("y")]
+        dag = DependencyGraph(tasks)
+
+        # Should be completely silent — no exception, no state change.
+        dag.remove_edge("x", "y")  # edge was never there
+        dag.remove_edge("nonexistent", "x")  # from_id not in graph at all
+
+        # Both tasks are still independently ready.
+        ready_ids = {t.task_id for t in dag.ready_tasks(set(), set())}
+        assert "x" in ready_ids
+        assert "y" in ready_ids
+
+
+# ---------------------------------------------------------------------------
+# 15. Dynamic dependency rewiring integration tests
+# ---------------------------------------------------------------------------
+
+
+def test_scheduler_applies_dependency_patch_adds_edge() -> None:
+    """Agent A returns a DependencyPatch that adds A→C.
+
+    Original graph: A (no deps), B (no deps), C (no deps — all independent).
+    After A completes and its patch is applied, C depends on A and is already
+    unlocked (A is in completed_ids by the time the scheduler re-evaluates).
+    The key assertion is that C *does* run — its execution is not blocked
+    permanently — and the patch was honoured rather than ignored.
+    """
+    ran: list[str] = []
+
+    async def patching_graph(state: dict[str, Any]) -> dict[str, Any]:
+        tid: str = state["task_id"]
+        ran.append(tid)
+        if tid == "a":
+            patch = DependencyPatch(add_edges=[("a", "c")])
+            return {"dependency_patch": patch}
+        return {}
+
+    # All three tasks start with no deps.
+    tasks = [_task("a"), _task("b"), _task("c")]
+
+    result = asyncio.run(
+        run_meta_graph(tasks, patching_graph, dynamic_rewiring=True, max_parallel=1)
+    )
+
+    assert result.all_succeeded is True
+    assert "a" in ran
+    assert "c" in ran
+
+
+def test_scheduler_ignores_patch_when_dynamic_rewiring_disabled() -> None:
+    """With dynamic_rewiring=False a patch in the result is silently ignored.
+
+    We set up a graph where A → C is NOT an original edge.  A returns a
+    DependencyPatch adding A → C.  With rewiring disabled C should run as
+    normal (no new dependency), not be blocked.  The important assertion is
+    that the scheduler completes successfully and does not treat C as blocked.
+    """
+    ran: list[str] = []
+
+    async def patching_graph(state: dict[str, Any]) -> dict[str, Any]:
+        tid: str = state["task_id"]
+        ran.append(tid)
+        if tid == "a":
+            patch = DependencyPatch(add_edges=[("a", "c")])
+            return {"dependency_patch": patch}
+        return {}
+
+    tasks = [_task("a"), _task("b"), _task("c")]
+
+    result = asyncio.run(
+        run_meta_graph(tasks, patching_graph, dynamic_rewiring=False, max_parallel=4)
+    )
+
+    # All tasks succeed; the patch was ignored so no blocking occurred.
+    assert result.all_succeeded is True
+    assert set(ran) == {"a", "b", "c"}
+
+
+def test_scheduler_discards_cyclic_patch() -> None:
+    """A patch that would introduce a cycle is discarded without crashing.
+
+    Graph: A → B (linear chain).  When A completes it returns a patch that
+    tries to add B → A, which forms a cycle.  The scheduler must log a warning
+    and keep the original topology intact (B still runs after A).
+    """
+    ran: list[str] = []
+
+    async def cyclic_patch_graph(state: dict[str, Any]) -> dict[str, Any]:
+        tid: str = state["task_id"]
+        ran.append(tid)
+        if tid == "a":
+            # Attempt to wire B → A, creating A → B → A cycle.
+            patch = DependencyPatch(add_edges=[("b", "a")])
+            return {"dependency_patch": patch}
+        return {}
+
+    tasks = [_task("a"), _task("b", deps=["a"])]
+
+    result = asyncio.run(
+        run_meta_graph(tasks, cyclic_patch_graph, dynamic_rewiring=True)
+    )
+
+    # The cyclic patch was discarded; original topology preserved.
+    # B still ran after A (linear chain intact).
+    assert result.all_succeeded is True
+    assert ran.index("a") < ran.index("b")

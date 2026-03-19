@@ -7,11 +7,13 @@
  *   GET  /runs/{id}/stream   — SSE live event stream (Wave 7 endpoint)
  *   POST /runs/{id}/approve  — approve pending operation
  *   POST /runs/{id}/reject   — reject pending operation
+ *
+ * Wave 7: D3 v7 force-directed graph visualisation of agent nodes.
  */
 
 'use strict';
 
-// ── Pipeline node names in execution order ───────────────────
+// ── Pipeline node names ───────────────────────────────────────
 const PIPELINE_NODES = [
   'ingest',
   'policy_gate',
@@ -24,21 +26,43 @@ const PIPELINE_NODES = [
   'reporter',
 ];
 
+// ── Graph topology ────────────────────────────────────────────
+const GRAPH_LINKS = [
+  { source: 'ingest',          target: 'policy_gate',     retry: false },
+  { source: 'policy_gate',     target: 'context_builder', retry: false },
+  { source: 'policy_gate',     target: 'reporter',        retry: false },
+  { source: 'context_builder', target: 'router',          retry: false },
+  { source: 'router',          target: 'planner',         retry: false },
+  { source: 'planner',         target: 'coder',           retry: false },
+  { source: 'coder',           target: 'executor',        retry: false },
+  { source: 'executor',        target: 'verifier',        retry: false },
+  { source: 'verifier',        target: 'reporter',        retry: false },
+  { source: 'verifier',        target: 'policy_gate',     retry: true  },
+];
+
+// ── Node visual state colours ─────────────────────────────────
+const NODE_COLORS = {
+  idle:   { fill: '#1c2128', stroke: '#444' },
+  active: { fill: '#1f6feb', stroke: '#58a6ff' },
+  done:   { fill: '#238636', stroke: '#3fb950' },
+  error:  { fill: '#b62324', stroke: '#f85149' },
+};
+
 // ── Application state ─────────────────────────────────────────
-/** The run_id currently displayed in the console, or null. */
 let _selectedRunId = null;
-
-/** The active EventSource connection, or null. */
 let _activeSSE = null;
-
-/** Set of node names that have completed in the current run. */
 let _completedNodes = new Set();
-
-/** The name of the currently active (pulsing) node, or null. */
 let _activeNode = null;
-
-/** setInterval handle for the 5-second run-list refresh. */
 let _listTimer = null;
+
+/** Per-node state: 'idle' | 'active' | 'done' | 'error' */
+let _nodeStates = {};
+
+/** D3 simulation instance (kept for resize). */
+let _simulation = null;
+
+/** D3 selection of node circles (for state updates). */
+let _nodeSelection = null;
 
 // ── HTML escaping ─────────────────────────────────────────────
 
@@ -122,7 +146,6 @@ function renderRunList(runs) {
   const el = document.getElementById('run-list');
   if (!el) return;
 
-  // Show most recent first
   const sorted = [...runs].sort((a, b) =>
     (b.created_at || '').localeCompare(a.created_at || '')
   );
@@ -156,25 +179,21 @@ function renderRunList(runs) {
 function selectRun(runId) {
   _selectedRunId = runId;
 
-  // Tear down any existing stream
   if (_activeSSE) {
     _activeSSE.close();
     _activeSSE = null;
   }
 
-  // Reset console state
   _completedNodes = new Set();
   _activeNode = null;
   clearEventLog();
   resetNodeGraph();
   hideBanner();
   hideCompleteBanner();
-  updateStatusBadge('connecting…');
+  updateStatusBadge('connecting\u2026');
 
-  // Re-render sidebar to highlight selected item
   refreshRunList();
 
-  // Hide empty state, show panels
   const empty = document.getElementById('empty-state');
   if (empty) empty.style.display = 'none';
   const logPanel = document.getElementById('event-log-panel');
@@ -182,7 +201,6 @@ function selectRun(runId) {
   const graphPanel = document.getElementById('graph-panel');
   if (graphPanel) graphPanel.style.display = 'flex';
 
-  // Open SSE stream to the new Wave-7 endpoint
   const url = '/runs/' + encodeURIComponent(runId) + '/stream';
   const es = new EventSource(url);
   _activeSSE = es;
@@ -207,7 +225,6 @@ function selectRun(runId) {
  * @param {object} event  Parsed JSON from the SSE data frame.
  */
 function handleSSEEvent(event) {
-  // ── Done sentinel — stream is complete ──────────────────
   if (event.type === 'done') {
     if (_activeSSE) {
       _activeSSE.close();
@@ -215,17 +232,14 @@ function handleSSEEvent(event) {
     }
     showSpinner(false);
     showCompleteBanner();
-    // Deactivate the last node if still pulsing
     if (_activeNode) {
-      const el = document.getElementById('node-' + _activeNode);
-      if (el) { el.classList.remove('active'); el.classList.add('done'); }
+      setNodeState(_activeNode, 'done');
       _activeNode = null;
     }
     refreshRunList();
     return;
   }
 
-  // ── Server-side error ────────────────────────────────────
   if (event.error) {
     appendEventRow({
       kind: 'error',
@@ -236,7 +250,6 @@ function handleSSEEvent(event) {
     return;
   }
 
-  // ── Approval requested ───────────────────────────────────
   if (event.type === 'approval_requested' || event.kind === 'approval_requested') {
     const summary =
       event.summary ||
@@ -246,8 +259,6 @@ function handleSSEEvent(event) {
     return;
   }
 
-  // ── Full run payload (replayed for completed runs) ───────
-  // Identified by having both `status` and `run_id` keys.
   if ('status' in event && 'run_id' in event) {
     updateStatusBadge(event.status || '?');
     if (event.pending_approval) {
@@ -258,7 +269,6 @@ function handleSSEEvent(event) {
     return;
   }
 
-  // ── Normal trace event: { ts_ms, kind, data } ───────────
   if (event.kind) {
     appendEventRow(event);
     handleNodeEvent(event);
@@ -279,18 +289,15 @@ function appendEventRow(event) {
 
   const kind = String(event.kind || 'event');
   const tsMs = event.ts_ms || Date.now();
-  // Use HH:MM:SS from the event timestamp
   const ts = new Date(tsMs).toISOString().slice(11, 19);
   const data = event.data || {};
 
-  // Build a short human-readable detail string
   let detail = '';
-  if (data.name)    detail = data.name;
-  else if (data.text)   detail = String(data.text).slice(0, 120);
+  if (data.name)         detail = data.name;
+  else if (data.text)    detail = String(data.text).slice(0, 120);
   else if (data.message) detail = String(data.message).slice(0, 120);
-  else if (data.tool)   detail = data.tool;
+  else if (data.tool)    detail = data.tool;
 
-  // Map kind to a safe CSS class name (replace unsafe chars with _)
   const kindCls = kind.replace(/[^a-z_]/g, '_');
 
   const row = document.createElement('div');
@@ -301,8 +308,6 @@ function appendEventRow(event) {
     `<span class="ev-detail">${esc(detail)}</span>`;
 
   log.appendChild(row);
-
-  // Auto-scroll to bottom
   log.scrollTop = log.scrollHeight;
 }
 
@@ -334,50 +339,215 @@ function updateStatusBadge(status) {
 
 // ── Complete banner ───────────────────────────────────────────
 
-/** Show the "Run complete ✓" banner at the bottom of the event log. */
 function showCompleteBanner() {
   const el = document.getElementById('run-complete-banner');
   if (el) el.classList.add('visible');
 }
 
-/** Hide the complete banner (called when a new run is selected). */
 function hideCompleteBanner() {
   const el = document.getElementById('run-complete-banner');
   if (el) el.classList.remove('visible');
 }
 
-// ── Node graph ────────────────────────────────────────────────
+// ── D3 Force Graph ────────────────────────────────────────────
 
 /**
- * Inject the horizontal pipeline graph into #node-graph.
- * Creates one .pipeline-node div per node name in PIPELINE_NODES.
+ * Initialise per-node state to idle.
+ */
+function _initNodeStates() {
+  _nodeStates = {};
+  PIPELINE_NODES.forEach((n) => { _nodeStates[n] = 'idle'; });
+}
+
+/**
+ * Set a single node's state and redraw its visual representation.
+ * @param {string} name
+ * @param {'idle'|'active'|'done'|'error'} state
+ */
+function setNodeState(name, state) {
+  if (!(name in _nodeStates)) return;
+  _nodeStates[name] = state;
+  _applyNodeVisuals();
+}
+
+/**
+ * Push current _nodeStates onto the SVG circles and their filters.
+ */
+function _applyNodeVisuals() {
+  if (!_nodeSelection) return;
+  _nodeSelection
+    .attr('fill', (d) => NODE_COLORS[_nodeStates[d.id] || 'idle'].fill)
+    .attr('stroke', (d) => NODE_COLORS[_nodeStates[d.id] || 'idle'].stroke)
+    .attr('class', (d) => {
+      const st = _nodeStates[d.id] || 'idle';
+      return st === 'active' ? 'graph-node graph-node-active' : 'graph-node';
+    });
+}
+
+/**
+ * Build the D3 v7 force-directed graph inside #graph-container.
+ * Safe to call multiple times — clears the container first.
  */
 function buildNodeGraph() {
-  const el = document.getElementById('node-graph');
-  if (!el) return;
+  const container = document.getElementById('graph-container');
+  if (!container) return;
 
-  el.innerHTML = PIPELINE_NODES.map((name, i) =>
-    `<div class="pipeline-node">` +
-    (i > 0 ? `<span class="pipe-arrow">&rarr;</span>` : '') +
-    `<div class="node-box" id="node-${esc(name)}">` +
-    `${esc(name)}<span class="node-check"> &#x2713;</span>` +
-    `</div>` +
-    `</div>`
-  ).join('');
+  // Clear previous SVG if any
+  container.innerHTML = '';
+
+  _initNodeStates();
+
+  const W = container.clientWidth  || 600;
+  const H = container.clientHeight || 500;
+
+  // ── SVG root ─────────────────────────────────────────────────
+  const svg = d3.select(container)
+    .append('svg')
+    .attr('width', '100%')
+    .attr('height', '100%')
+    .attr('viewBox', `0 0 ${W} ${H}`)
+    .style('display', 'block');
+
+  // ── Defs: arrow markers + glow filter ───────────────────────
+  const defs = svg.append('defs');
+
+  // Arrow for regular edges
+  defs.append('marker')
+    .attr('id', 'arrow-regular')
+    .attr('viewBox', '0 -5 10 10')
+    .attr('refX', 32)
+    .attr('refY', 0)
+    .attr('markerWidth', 6)
+    .attr('markerHeight', 6)
+    .attr('orient', 'auto')
+    .append('path')
+    .attr('d', 'M0,-5L10,0L0,5')
+    .attr('fill', '#30363d');
+
+  // Arrow for retry edge
+  defs.append('marker')
+    .attr('id', 'arrow-retry')
+    .attr('viewBox', '0 -5 10 10')
+    .attr('refX', 32)
+    .attr('refY', 0)
+    .attr('markerWidth', 6)
+    .attr('markerHeight', 6)
+    .attr('orient', 'auto')
+    .append('path')
+    .attr('d', 'M0,-5L10,0L0,5')
+    .attr('fill', '#f0883e');
+
+  // Glow filter for active nodes
+  const glowFilter = defs.append('filter')
+    .attr('id', 'glow-active')
+    .attr('x', '-50%')
+    .attr('y', '-50%')
+    .attr('width', '200%')
+    .attr('height', '200%');
+  glowFilter.append('feGaussianBlur')
+    .attr('stdDeviation', '4')
+    .attr('result', 'blur');
+  const feMerge = glowFilter.append('feMerge');
+  feMerge.append('feMergeNode').attr('in', 'blur');
+  feMerge.append('feMergeNode').attr('in', 'SourceGraphic');
+
+  // ── Graph data ───────────────────────────────────────────────
+  const nodes = PIPELINE_NODES.map((id) => ({ id }));
+  const links = GRAPH_LINKS.map((l) => ({ ...l }));
+
+  // ── Force simulation ─────────────────────────────────────────
+  _simulation = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id((d) => d.id).distance(120))
+    .force('charge', d3.forceManyBody().strength(-400))
+    .force('center', d3.forceCenter(W / 2, H / 2))
+    .force('collide', d3.forceCollide(40));
+
+  // ── Link layer ───────────────────────────────────────────────
+  const link = svg.append('g')
+    .attr('class', 'links')
+    .selectAll('line')
+    .data(links)
+    .join('line')
+    .attr('stroke', (d) => d.retry ? '#f0883e' : '#30363d')
+    .attr('stroke-width', 1.5)
+    .attr('stroke-dasharray', (d) => d.retry ? '5,3' : null)
+    .attr('marker-end', (d) => d.retry ? 'url(#arrow-retry)' : 'url(#arrow-regular)');
+
+  // ── Node layer ───────────────────────────────────────────────
+  const nodeGroup = svg.append('g')
+    .attr('class', 'nodes')
+    .selectAll('g')
+    .data(nodes)
+    .join('g')
+    .call(
+      d3.drag()
+        .on('start', (event, d) => {
+          if (!event.active) _simulation.alphaTarget(0.3).restart();
+          d.fx = d.x;
+          d.fy = d.y;
+        })
+        .on('drag', (event, d) => {
+          d.fx = event.x;
+          d.fy = event.y;
+        })
+        .on('end', (event, d) => {
+          if (!event.active) _simulation.alphaTarget(0);
+          d.fx = null;
+          d.fy = null;
+        })
+    );
+
+  // Circle
+  _nodeSelection = nodeGroup.append('circle')
+    .attr('r', 22)
+    .attr('class', 'graph-node')
+    .attr('fill', NODE_COLORS.idle.fill)
+    .attr('stroke', NODE_COLORS.idle.stroke)
+    .attr('stroke-width', 2);
+
+  // Label
+  nodeGroup.append('text')
+    .attr('text-anchor', 'middle')
+    .attr('dy', 36)
+    .attr('font-size', 11)
+    .attr('font-family', 'sans-serif')
+    .attr('fill', '#8b949e')
+    .text((d) => d.id);
+
+  // ── Tick handler ─────────────────────────────────────────────
+  _simulation.on('tick', () => {
+    link
+      .attr('x1', (d) => d.source.x)
+      .attr('y1', (d) => d.source.y)
+      .attr('x2', (d) => d.target.x)
+      .attr('y2', (d) => d.target.y);
+
+    nodeGroup.attr('transform', (d) => `translate(${d.x},${d.y})`);
+  });
+
+  // ── Responsive resize ─────────────────────────────────────────
+  if (typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver(() => {
+      const nw = container.clientWidth  || 600;
+      const nh = container.clientHeight || 500;
+      svg.attr('viewBox', `0 0 ${nw} ${nh}`);
+      if (_simulation) {
+        _simulation.force('center', d3.forceCenter(nw / 2, nh / 2));
+        _simulation.alpha(0.3).restart();
+      }
+    });
+    ro.observe(container);
+  }
 }
 
-/** Remove all active/done CSS classes from every pipeline node box. */
+/** Reset all nodes to idle state. */
 function resetNodeGraph() {
-  PIPELINE_NODES.forEach((name) => {
-    const el = document.getElementById('node-' + name);
-    if (el) {
-      el.classList.remove('active', 'done');
-    }
-  });
+  _initNodeStates();
+  _applyNodeVisuals();
 }
 
 /**
- * Handle `node_start` and `node_end` trace events to animate the pipeline.
+ * Handle `node_start` and `node_end` trace events to animate the graph.
  * @param {object} event  Trace event.
  */
 function handleNodeEvent(event) {
@@ -385,27 +555,21 @@ function handleNodeEvent(event) {
   const data = event.data || {};
   const nodeName = String(data.name || '').toLowerCase();
 
-  // Only handle events for known pipeline nodes
   if (!nodeName || !PIPELINE_NODES.includes(nodeName)) return;
 
   if (kind === 'node_start') {
-    // Deactivate the previously active node (without marking it done)
     if (_activeNode && _activeNode !== nodeName) {
-      const prev = document.getElementById('node-' + _activeNode);
-      if (prev) prev.classList.remove('active');
+      // Leave previous node in its current done/error state if already set,
+      // otherwise drop back to idle.
+      if (_nodeStates[_activeNode] === 'active') {
+        setNodeState(_activeNode, 'idle');
+      }
     }
     _activeNode = nodeName;
-    const el = document.getElementById('node-' + nodeName);
-    if (el) {
-      el.classList.remove('done');
-      el.classList.add('active');
-    }
+    setNodeState(nodeName, 'active');
   } else if (kind === 'node_end') {
-    const el = document.getElementById('node-' + nodeName);
-    if (el) {
-      el.classList.remove('active');
-      el.classList.add('done');
-    }
+    const ok = data.ok !== false;
+    setNodeState(nodeName, ok ? 'done' : 'error');
     _completedNodes.add(nodeName);
     if (_activeNode === nodeName) _activeNode = null;
   }
@@ -415,7 +579,7 @@ function handleNodeEvent(event) {
 
 /**
  * Show the approval banner with a summary message.
- * @param {string} summary  Human-readable description of what needs approval.
+ * @param {string} summary
  */
 function showApprovalBanner(summary) {
   const banner = document.getElementById('approval-banner');
@@ -432,7 +596,6 @@ function hideBanner() {
 
 /**
  * Approve the pending operation for the selected run.
- * Calls POST /runs/{id}/approve and reopens the SSE stream.
  * Exposed as window.approveRun for onclick handlers.
  */
 function approveRun() {
@@ -446,7 +609,6 @@ function approveRun() {
     .then((data) => {
       hideBanner();
       if (data && data.run_id) {
-        // Reopen stream for the resumed run
         selectRun(data.run_id);
       }
     })
@@ -455,7 +617,6 @@ function approveRun() {
 
 /**
  * Reject the pending operation for the selected run.
- * Calls POST /runs/{id}/reject and refreshes the sidebar.
  * Exposed as window.rejectRun for onclick handlers.
  */
 function rejectRun() {
@@ -477,30 +638,24 @@ function rejectRun() {
 // ── Bootstrap ─────────────────────────────────────────────────
 
 /**
- * Initialise the SPA: build the node graph, load runs, start polling.
- * Called once the DOM is ready.
+ * Initialise the SPA: build the D3 force graph, load runs, start polling.
  */
 function init() {
   buildNodeGraph();
 
-  // Hide panels until a run is selected
   const logPanel = document.getElementById('event-log-panel');
   if (logPanel) logPanel.style.display = 'none';
   const graphPanel = document.getElementById('graph-panel');
   if (graphPanel) graphPanel.style.display = 'none';
 
   refreshRunList();
-
-  // Auto-refresh run list every 5 seconds
   _listTimer = setInterval(refreshRunList, 5000);
 }
 
-// Expose functions needed by inline onclick="" attributes in index.html
-window.selectRun   = selectRun;
-window.approveRun  = approveRun;
-window.rejectRun   = rejectRun;
+window.selectRun  = selectRun;
+window.approveRun = approveRun;
+window.rejectRun  = rejectRun;
 
-// Start when the DOM is ready (supports both deferred and inline script)
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);
 } else {
