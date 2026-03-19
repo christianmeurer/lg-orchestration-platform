@@ -869,3 +869,209 @@ def test_push_run_event_sends_through_active_stream(
     kinds = {ev.get("kind") for ev in parsed}
     assert "tool_call" in kinds
     assert parsed[-1] == {"type": "done"}
+
+
+# ---------------------------------------------------------------------------
+# GET /runs/search tests
+# ---------------------------------------------------------------------------
+
+
+def test_runs_search_returns_results_when_matches_exist(tmp_path: Path) -> None:
+    from lg_orch.run_store import RunStore
+
+    db_path = tmp_path / "runs.sqlite"
+    store = RunStore(db_path=db_path)
+    store.upsert(
+        {
+            "run_id": "search-abc",
+            "request": "deploy the kubernetes cluster",
+            "status": "succeeded",
+            "created_at": "2026-01-01T00:00:00Z",
+            "started_at": "2026-01-01T00:00:00Z",
+            "finished_at": "2026-01-01T00:01:00Z",
+            "exit_code": 0,
+            "trace_out_dir": "artifacts/runs",
+            "trace_path": "artifacts/runs/run-search-abc.json",
+            "request_id": "",
+            "auth_subject": "",
+            "client_ip": "",
+        }
+    )
+    service = RemoteAPIService(repo_root=tmp_path, run_store=store)
+
+    status, content_type, body = _api_http_response(
+        service,
+        method="GET",
+        request_path="/runs/search?q=kubernetes",
+        request_body=None,
+    )
+    assert status == 200
+    assert content_type == "application/json; charset=utf-8"
+    payload = json.loads(body.decode("utf-8"))
+    assert "results" in payload
+    assert "total" in payload
+    assert payload["total"] >= 1
+    run_ids = [r["run_id"] for r in payload["results"]]
+    assert "search-abc" in run_ids
+
+    store.close()
+
+
+def test_runs_search_returns_empty_when_no_matches(tmp_path: Path) -> None:
+    from lg_orch.run_store import RunStore
+
+    db_path = tmp_path / "runs.sqlite"
+    store = RunStore(db_path=db_path)
+    store.upsert(
+        {
+            "run_id": "no-match-run",
+            "request": "analyze the pipeline",
+            "status": "running",
+            "created_at": "2026-01-01T00:00:00Z",
+            "started_at": "2026-01-01T00:00:00Z",
+            "finished_at": None,
+            "exit_code": None,
+            "trace_out_dir": "artifacts/runs",
+            "trace_path": "artifacts/runs/run-no-match-run.json",
+            "request_id": "",
+            "auth_subject": "",
+            "client_ip": "",
+        }
+    )
+    service = RemoteAPIService(repo_root=tmp_path, run_store=store)
+
+    status, _, body = _api_http_response(
+        service,
+        method="GET",
+        request_path="/runs/search?q=xyzzy_nonexistent_token_99",
+        request_body=None,
+    )
+    assert status == 200
+    payload = json.loads(body.decode("utf-8"))
+    assert payload["results"] == []
+    assert payload["total"] == 0
+
+    store.close()
+
+
+def test_runs_search_returns_422_when_q_missing(tmp_path: Path) -> None:
+    service = RemoteAPIService(repo_root=tmp_path)
+
+    status, _, body = _api_http_response(
+        service,
+        method="GET",
+        request_path="/runs/search",
+        request_body=None,
+    )
+    assert status == 422
+    payload = json.loads(body.decode("utf-8"))
+    assert payload["error"] == "missing_required_param"
+    assert payload["param"] == "q"
+
+
+# ---------------------------------------------------------------------------
+# Wave-8 multi-path approval policy tests
+# ---------------------------------------------------------------------------
+
+
+def test_set_approval_policy_timed(tmp_path: Path) -> None:
+    service = RemoteAPIService(repo_root=tmp_path)
+
+    status, content_type, body = _api_http_response(
+        service,
+        method="POST",
+        request_path="/runs/run-timed-001/approval-policy",
+        request_body=json.dumps(
+            {
+                "policy": {
+                    "kind": "timed",
+                    "timeout_seconds": 120.0,
+                    "auto_action": "reject",
+                }
+            }
+        ).encode("utf-8"),
+    )
+    assert status == 200
+    assert content_type == "application/json; charset=utf-8"
+    payload = json.loads(body.decode("utf-8"))
+    assert payload["status"] == "policy_set"
+    assert payload["run_id"] == "run-timed-001"
+
+
+def test_vote_on_run_returns_pending(tmp_path: Path) -> None:
+    service = RemoteAPIService(repo_root=tmp_path)
+
+    # set a quorum(2) policy first
+    _api_http_response(
+        service,
+        method="POST",
+        request_path="/runs/run-quorum-001/approval-policy",
+        request_body=json.dumps(
+            {"policy": {"kind": "quorum", "required_approvals": 2, "required_rejections": 2}}
+        ).encode("utf-8"),
+    )
+
+    status, _, body = _api_http_response(
+        service,
+        method="POST",
+        request_path="/runs/run-quorum-001/vote",
+        request_body=json.dumps(
+            {"reviewer_id": "alice", "role": None, "action": "approve", "comment": "lgtm"}
+        ).encode("utf-8"),
+    )
+    assert status == 200
+    payload = json.loads(body.decode("utf-8"))
+    assert payload["status"] == "pending"
+    assert payload["votes_cast"] == 1
+
+
+def test_vote_on_run_resolves_to_approved(tmp_path: Path) -> None:
+    service = RemoteAPIService(repo_root=tmp_path)
+
+    _api_http_response(
+        service,
+        method="POST",
+        request_path="/runs/run-quorum-002/approval-policy",
+        request_body=json.dumps(
+            {"policy": {"kind": "quorum", "required_approvals": 2, "required_rejections": 2}}
+        ).encode("utf-8"),
+    )
+
+    _api_http_response(
+        service,
+        method="POST",
+        request_path="/runs/run-quorum-002/vote",
+        request_body=json.dumps(
+            {"reviewer_id": "alice", "role": None, "action": "approve", "comment": ""}
+        ).encode("utf-8"),
+    )
+
+    status, _, body = _api_http_response(
+        service,
+        method="POST",
+        request_path="/runs/run-quorum-002/vote",
+        request_body=json.dumps(
+            {"reviewer_id": "bob", "role": None, "action": "approve", "comment": ""}
+        ).encode("utf-8"),
+    )
+    assert status == 200
+    payload = json.loads(body.decode("utf-8"))
+    assert payload["status"] == "approved"
+    assert payload["votes_cast"] == 2
+
+
+def test_vote_on_run_returns_404_without_policy(tmp_path: Path) -> None:
+    service = RemoteAPIService(repo_root=tmp_path)
+
+    status, _, body = _api_http_response(
+        service,
+        method="POST",
+        request_path="/runs/run-no-policy/vote",
+        request_body=json.dumps(
+            {"reviewer_id": "alice", "role": None, "action": "approve", "comment": ""}
+        ).encode("utf-8"),
+    )
+    assert status == 404
+    payload = json.loads(body.decode("utf-8"))
+    assert payload["error"] == "policy_not_found"
+    assert payload["run_id"] == "run-no-policy"

@@ -120,3 +120,29 @@ def test_spa_main_js_returns_js(tmp_path: Path) -> None:
     assert "approveRun" in js            # approval action
     assert "rejectRun" in js             # rejection action
     assert "refreshRunList" in js        # sidebar polling
+
+
+def test_index_html_contains_d3_cdn_script(tmp_path: Path) -> None:
+    """index.html must include the D3 v7 CDN script tag (jsDelivr)."""
+    spa_dir = Path(__file__).parent.parent / "src" / "lg_orch" / "spa"
+    index_path = spa_dir / "index.html"
+    if not index_path.exists():
+        pytest.skip("spa/index.html not present — skipping test")
+
+    html = index_path.read_text(encoding="utf-8")
+    assert "cdn.jsdelivr.net/npm/d3@7" in html, (
+        "index.html must load D3 v7 from the jsDelivr CDN"
+    )
+
+
+def test_main_js_uses_force_simulation(tmp_path: Path) -> None:
+    """main.js must contain 'forceSimulation' confirming D3 graph is wired."""
+    spa_dir = Path(__file__).parent.parent / "src" / "lg_orch" / "spa"
+    main_js_path = spa_dir / "main.js"
+    if not main_js_path.exists():
+        pytest.skip("spa/main.js not present — skipping test")
+
+    js = main_js_path.read_text(encoding="utf-8")
+    assert "forceSimulation" in js, (
+        "main.js must use d3.forceSimulation to build the agent activity graph"
+    )

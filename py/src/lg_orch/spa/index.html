@@ -5,8 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LG Orchestration &mdash; Live Console</title>
   <!--
-    Self-contained SPA: no external CSS/JS dependencies.
-    Works when opened directly from disk (file://) with no server.
+    Self-contained SPA: no external CSS/JS dependencies except D3 v7 (CDN).
     Canonical sources: spa/style.css and spa/main.js
   -->
   <style>
@@ -140,29 +139,17 @@ body {
   padding: 6px 12px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
   color: var(--muted); border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
-#node-graph {
-  flex: 1; display: flex; align-items: center; justify-content: flex-start;
-  padding: 0 20px; overflow-x: auto; min-height: 0;
+/* D3 force graph container */
+#graph-container {
+  flex: 1; min-height: 500px; overflow: hidden; background: var(--bg); position: relative;
 }
-.pipeline-node { display: flex; align-items: center; flex-shrink: 0; }
-.node-box {
-  padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px;
-  font-size: 11px; font-weight: 600; color: var(--muted); background: var(--surface2);
-  transition: border-color .3s, color .3s, background .3s, box-shadow .3s;
-  white-space: nowrap; text-align: center; position: relative;
+.graph-node { cursor: grab; }
+.graph-node:active { cursor: grabbing; }
+.graph-node-active { filter: url(#glow-active); }
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.6; }
 }
-.node-box.active {
-  border-color: var(--accent); color: var(--accent); background: #1a2a3a;
-  animation: node-pulse 1.2s ease-in-out infinite;
-}
-.node-box.done { border-color: var(--ok); color: var(--ok); background: #122217; }
-@keyframes node-pulse {
-  0%, 100% { box-shadow: 0 0 0 0   rgba(88,166,255,.5); }
-  50%       { box-shadow: 0 0 0 5px rgba(88,166,255,0);  }
-}
-.node-check { display: none; margin-left: 5px; color: var(--ok); }
-.node-box.done .node-check { display: inline; }
-.pipe-arrow { color: var(--border); padding: 0 6px; font-size: 14px; user-select: none; flex-shrink: 0; }
 /* ── Buttons ──────────────────────────────────────────────────*/
 .btn {
   background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;
@@ -229,14 +216,15 @@ body {
     <!-- Node graph (bottom 40%) — hidden until a run is selected -->
     <div id="graph-panel">
       <div id="graph-header">Pipeline</div>
-      <div id="node-graph">
-        <!-- pipeline nodes injected by JS -->
+      <div id="graph-container">
+        <!-- D3 force graph injected by JS -->
       </div>
     </div>
 
   </div><!-- #main -->
 </div><!-- #layout -->
 
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 <script>
 'use strict';
 
@@ -246,12 +234,37 @@ var PIPELINE_NODES = [
   'planner', 'coder', 'executor', 'verifier', 'reporter'
 ];
 
+// ── Graph topology ────────────────────────────────────────────
+var GRAPH_LINKS = [
+  { source: 'ingest',          target: 'policy_gate',     retry: false },
+  { source: 'policy_gate',     target: 'context_builder', retry: false },
+  { source: 'policy_gate',     target: 'reporter',        retry: false },
+  { source: 'context_builder', target: 'router',          retry: false },
+  { source: 'router',          target: 'planner',         retry: false },
+  { source: 'planner',         target: 'coder',           retry: false },
+  { source: 'coder',           target: 'executor',        retry: false },
+  { source: 'executor',        target: 'verifier',        retry: false },
+  { source: 'verifier',        target: 'reporter',        retry: false },
+  { source: 'verifier',        target: 'policy_gate',     retry: true  }
+];
+
+// ── Node visual state colours ─────────────────────────────────
+var NODE_COLORS = {
+  idle:   { fill: '#1c2128', stroke: '#444' },
+  active: { fill: '#1f6feb', stroke: '#58a6ff' },
+  done:   { fill: '#238636', stroke: '#3fb950' },
+  error:  { fill: '#b62324', stroke: '#f85149' }
+};
+
 // ── Application state ─────────────────────────────────────────
 var _selectedRunId  = null;
 var _activeSSE      = null;
 var _completedNodes = new Set();
 var _activeNode     = null;
 var _listTimer      = null;
+var _nodeStates     = {};
+var _simulation     = null;
+var _nodeSelection  = null;
 
 // ── Utilities ─────────────────────────────────────────────────
 function esc(s) {
@@ -318,7 +331,6 @@ function selectRun(runId) {
   updateStatusBadge('connecting\u2026');
   refreshRunList();
 
-  // Show panels, hide empty state
   var empty = document.getElementById('empty-state');
   if (empty) empty.style.display = 'none';
   var logPanel = document.getElementById('event-log-panel');
@@ -340,38 +352,32 @@ function selectRun(runId) {
 }
 
 function handleSSEEvent(event) {
-  // Done sentinel
   if (event.type === 'done') {
     if (_activeSSE) { _activeSSE.close(); _activeSSE = null; }
     showSpinner(false);
     showCompleteBanner();
     if (_activeNode) {
-      var el = document.getElementById('node-' + _activeNode);
-      if (el) { el.classList.remove('active'); el.classList.add('done'); }
+      setNodeState(_activeNode, 'done');
       _activeNode = null;
     }
     refreshRunList();
     return;
   }
-  // Server error
   if (event.error) {
     appendEventRow({ kind: 'error', ts_ms: Date.now(), data: { message: event.error } });
     showSpinner(false);
     return;
   }
-  // Approval requested
   if (event.type === 'approval_requested' || event.kind === 'approval_requested') {
     var summary = event.summary || (event.data && event.data.summary) || 'Approval required';
     showApprovalBanner(summary);
     return;
   }
-  // Full run payload (replayed for completed runs)
   if ('status' in event && 'run_id' in event) {
     updateStatusBadge(event.status || '?');
     if (event.pending_approval) showApprovalBanner(event.pending_approval_summary || 'Approval required');
     return;
   }
-  // Normal trace event
   if (event.kind) {
     appendEventRow(event);
     handleNodeEvent(event);
@@ -429,25 +435,143 @@ function hideCompleteBanner() {
   if (el) el.classList.remove('visible');
 }
 
-// ── Node graph ────────────────────────────────────────────────
+// ── D3 Force Graph ────────────────────────────────────────────
+function _initNodeStates() {
+  _nodeStates = {};
+  PIPELINE_NODES.forEach(function(n) { _nodeStates[n] = 'idle'; });
+}
+
+function _applyNodeVisuals() {
+  if (!_nodeSelection) return;
+  _nodeSelection
+    .attr('fill', function(d) { return NODE_COLORS[_nodeStates[d.id] || 'idle'].fill; })
+    .attr('stroke', function(d) { return NODE_COLORS[_nodeStates[d.id] || 'idle'].stroke; })
+    .attr('class', function(d) {
+      var st = _nodeStates[d.id] || 'idle';
+      return st === 'active' ? 'graph-node graph-node-active' : 'graph-node';
+    });
+}
+
+function setNodeState(name, state) {
+  if (!(name in _nodeStates)) return;
+  _nodeStates[name] = state;
+  _applyNodeVisuals();
+}
+
 function buildNodeGraph() {
-  var el = document.getElementById('node-graph');
-  if (!el) return;
-  el.innerHTML = PIPELINE_NODES.map(function(name, i) {
-    return '<div class="pipeline-node">' +
-      (i > 0 ? '<span class="pipe-arrow">&rarr;</span>' : '') +
-      '<div class="node-box" id="node-' + esc(name) + '">' +
-        esc(name) + '<span class="node-check"> &#x2713;</span>' +
-      '</div>' +
-      '</div>';
-  }).join('');
+  var container = document.getElementById('graph-container');
+  if (!container) return;
+  container.innerHTML = '';
+  _initNodeStates();
+
+  var W = container.clientWidth  || 600;
+  var H = container.clientHeight || 500;
+
+  var svg = d3.select(container)
+    .append('svg')
+    .attr('width', '100%')
+    .attr('height', '100%')
+    .attr('viewBox', '0 0 ' + W + ' ' + H)
+    .style('display', 'block');
+
+  var defs = svg.append('defs');
+
+  defs.append('marker')
+    .attr('id', 'arrow-regular')
+    .attr('viewBox', '0 -5 10 10')
+    .attr('refX', 32).attr('refY', 0)
+    .attr('markerWidth', 6).attr('markerHeight', 6)
+    .attr('orient', 'auto')
+    .append('path').attr('d', 'M0,-5L10,0L0,5').attr('fill', '#30363d');
+
+  defs.append('marker')
+    .attr('id', 'arrow-retry')
+    .attr('viewBox', '0 -5 10 10')
+    .attr('refX', 32).attr('refY', 0)
+    .attr('markerWidth', 6).attr('markerHeight', 6)
+    .attr('orient', 'auto')
+    .append('path').attr('d', 'M0,-5L10,0L0,5').attr('fill', '#f0883e');
+
+  var glowFilter = defs.append('filter')
+    .attr('id', 'glow-active')
+    .attr('x', '-50%').attr('y', '-50%')
+    .attr('width', '200%').attr('height', '200%');
+  glowFilter.append('feGaussianBlur').attr('stdDeviation', '4').attr('result', 'blur');
+  var feMerge = glowFilter.append('feMerge');
+  feMerge.append('feMergeNode').attr('in', 'blur');
+  feMerge.append('feMergeNode').attr('in', 'SourceGraphic');
+
+  var nodes = PIPELINE_NODES.map(function(id) { return { id: id }; });
+  var links = GRAPH_LINKS.map(function(l) { return Object.assign({}, l); });
+
+  _simulation = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id(function(d) { return d.id; }).distance(120))
+    .force('charge', d3.forceManyBody().strength(-400))
+    .force('center', d3.forceCenter(W / 2, H / 2))
+    .force('collide', d3.forceCollide(40));
+
+  var link = svg.append('g').attr('class', 'links')
+    .selectAll('line').data(links).join('line')
+    .attr('stroke', function(d) { return d.retry ? '#f0883e' : '#30363d'; })
+    .attr('stroke-width', 1.5)
+    .attr('stroke-dasharray', function(d) { return d.retry ? '5,3' : null; })
+    .attr('marker-end', function(d) { return d.retry ? 'url(#arrow-retry)' : 'url(#arrow-regular)'; });
+
+  var nodeGroup = svg.append('g').attr('class', 'nodes')
+    .selectAll('g').data(nodes).join('g')
+    .call(d3.drag()
+      .on('start', function(event, d) {
+        if (!event.active) _simulation.alphaTarget(0.3).restart();
+        d.fx = d.x; d.fy = d.y;
+      })
+      .on('drag', function(event, d) { d.fx = event.x; d.fy = event.y; })
+      .on('end', function(event, d) {
+        if (!event.active) _simulation.alphaTarget(0);
+        d.fx = null; d.fy = null;
+      })
+    );
+
+  _nodeSelection = nodeGroup.append('circle')
+    .attr('r', 22)
+    .attr('class', 'graph-node')
+    .attr('fill', NODE_COLORS.idle.fill)
+    .attr('stroke', NODE_COLORS.idle.stroke)
+    .attr('stroke-width', 2);
+
+  nodeGroup.append('text')
+    .attr('text-anchor', 'middle')
+    .attr('dy', 36)
+    .attr('font-size', 11)
+    .attr('font-family', 'sans-serif')
+    .attr('fill', '#8b949e')
+    .text(function(d) { return d.id; });
+
+  _simulation.on('tick', function() {
+    link
+      .attr('x1', function(d) { return d.source.x; })
+      .attr('y1', function(d) { return d.source.y; })
+      .attr('x2', function(d) { return d.target.x; })
+      .attr('y2', function(d) { return d.target.y; });
+    nodeGroup.attr('transform', function(d) { return 'translate(' + d.x + ',' + d.y + ')'; });
+  });
+
+  if (typeof ResizeObserver !== 'undefined') {
+    var ro = new ResizeObserver(function() {
+      var nw = container.clientWidth  || 600;
+      var nh = container.clientHeight || 500;
+      svg.attr('viewBox', '0 0 ' + nw + ' ' + nh);
+      if (_simulation) {
+        _simulation.force('center', d3.forceCenter(nw / 2, nh / 2));
+        _simulation.alpha(0.3).restart();
+      }
+    });
+    ro.observe(container);
+  }
 }
 
 function resetNodeGraph() {
-  PIPELINE_NODES.forEach(function(name) {
-    var el = document.getElementById('node-' + name);
-    if (el) { el.classList.remove('active', 'done'); }
-  });
+  _initNodeStates();
+  _applyNodeVisuals();
 }
 
 function handleNodeEvent(event) {
@@ -457,15 +581,13 @@ function handleNodeEvent(event) {
   if (!nodeName || PIPELINE_NODES.indexOf(nodeName) === -1) return;
   if (kind === 'node_start') {
     if (_activeNode && _activeNode !== nodeName) {
-      var prev = document.getElementById('node-' + _activeNode);
-      if (prev) prev.classList.remove('active');
+      if (_nodeStates[_activeNode] === 'active') setNodeState(_activeNode, 'idle');
     }
     _activeNode = nodeName;
-    var el = document.getElementById('node-' + nodeName);
-    if (el) { el.classList.remove('done'); el.classList.add('active'); }
+    setNodeState(nodeName, 'active');
   } else if (kind === 'node_end') {
-    var el2 = document.getElementById('node-' + nodeName);
-    if (el2) { el2.classList.remove('active'); el2.classList.add('done'); }
+    var ok = data.ok !== false;
+    setNodeState(nodeName, ok ? 'done' : 'error');
     _completedNodes.add(nodeName);
     if (_activeNode === nodeName) _activeNode = null;
   }
@@ -522,7 +644,6 @@ function init() {
   _listTimer = setInterval(refreshRunList, 5000);
 }
 
-// Expose for HTML onclick attributes
 window.selectRun  = selectRun;
 window.approveRun = approveRun;
 window.rejectRun  = rejectRun;

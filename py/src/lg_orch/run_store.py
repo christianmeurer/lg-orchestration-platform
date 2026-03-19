@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 _COLUMNS = (
     "run_id",
@@ -101,6 +104,39 @@ CREATE VIRTUAL TABLE IF NOT EXISTS semantic_memories_fts USING fts5(
 )
 """
 
+_CREATE_RUNS_FTS = """\
+CREATE VIRTUAL TABLE IF NOT EXISTS runs_fts USING fts5(
+    run_id,
+    request,
+    status,
+    summary,
+    content='runs'
+)
+"""
+
+_CREATE_RUNS_FTS_INSERT_TRIGGER = """\
+CREATE TRIGGER IF NOT EXISTS runs_fts_ai AFTER INSERT ON runs BEGIN
+    INSERT INTO runs_fts(rowid, run_id, request, status, summary)
+    VALUES (new.rowid, new.run_id, new.request, new.status, new.pending_approval_summary);
+END
+"""
+
+_CREATE_RUNS_FTS_UPDATE_TRIGGER = """\
+CREATE TRIGGER IF NOT EXISTS runs_fts_au AFTER UPDATE ON runs BEGIN
+    INSERT INTO runs_fts(runs_fts, rowid, run_id, request, status, summary)
+    VALUES ('delete', old.rowid, old.run_id, old.request, old.status, old.pending_approval_summary);
+    INSERT INTO runs_fts(rowid, run_id, request, status, summary)
+    VALUES (new.rowid, new.run_id, new.request, new.status, new.pending_approval_summary);
+END
+"""
+
+_CREATE_RUNS_FTS_DELETE_TRIGGER = """\
+CREATE TRIGGER IF NOT EXISTS runs_fts_ad AFTER DELETE ON runs BEGIN
+    INSERT INTO runs_fts(runs_fts, rowid, run_id, request, status, summary)
+    VALUES ('delete', old.rowid, old.run_id, old.request, old.status, old.pending_approval_summary);
+END
+"""
+
 _RECOVERY_FACT_COLUMNS = (
     "fingerprint",
     "run_id",
@@ -131,6 +167,7 @@ class RunStore:
         self._lock = threading.Lock()
         self._namespace = namespace.strip()
         self._fts_enabled = False
+        self._runs_fts_enabled = False
         with self._lock:
             self._conn.execute(_CREATE_TABLE)
             self._conn.execute(_CREATE_RECOVERY_FACTS_TABLE)
@@ -141,6 +178,7 @@ class RunStore:
             self._conn.commit()
         self._migrate()
         self._ensure_semantic_fts()
+        self._ensure_runs_fts()
 
     def _migrate(self) -> None:
         run_columns = (
@@ -173,6 +211,18 @@ class RunStore:
         except sqlite3.OperationalError:
             pass
 
+    def _ensure_runs_fts(self) -> None:
+        try:
+            with self._lock:
+                self._conn.execute(_CREATE_RUNS_FTS)
+                self._conn.execute(_CREATE_RUNS_FTS_INSERT_TRIGGER)
+                self._conn.execute(_CREATE_RUNS_FTS_UPDATE_TRIGGER)
+                self._conn.execute(_CREATE_RUNS_FTS_DELETE_TRIGGER)
+                self._conn.commit()
+            self._runs_fts_enabled = True
+        except sqlite3.OperationalError:
+            self._runs_fts_enabled = False
+
     def _ensure_semantic_fts(self) -> None:
         try:
             with self._lock:
@@ -189,6 +239,45 @@ class RunStore:
         with self._lock:
             self._conn.execute("INSERT INTO semantic_memories_fts(semantic_memories_fts) VALUES('rebuild')")
             self._conn.commit()
+
+    def search_runs(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
+        """Search runs using FTS5 full-text search (BM25 ranking).
+
+        Falls back to a LIKE scan if FTS5 is unavailable.
+        Invalid FTS5 syntax is caught and an empty list is returned.
+        """
+        query_text = query.strip()
+        if not query_text:
+            return []
+        limit = max(1, limit)
+        if self._runs_fts_enabled:
+            try:
+                with self._lock:
+                    cursor = self._conn.execute(
+                        "SELECT r.* FROM runs_fts "
+                        "JOIN runs r ON r.rowid = runs_fts.rowid "
+                        "WHERE runs_fts MATCH ? AND r.namespace = ? "
+                        "ORDER BY rank LIMIT ?",
+                        (query_text, self._namespace, limit),
+                    )
+                    return [dict(row) for row in cursor.fetchall()]
+            except sqlite3.OperationalError as exc:
+                _log.warning(
+                    "search_runs_fts_error",
+                    extra={"query": query_text, "error": str(exc)},
+                )
+                return []
+
+        like = f"%{query_text}%"
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT * FROM runs WHERE namespace = ? "
+                "AND (run_id LIKE ? OR request LIKE ? OR status LIKE ? "
+                "OR pending_approval_summary LIKE ?) "
+                "ORDER BY created_at DESC LIMIT ?",
+                (self._namespace, like, like, like, like, limit),
+            )
+            return [dict(row) for row in cursor.fetchall()]
 
     def upsert(self, record: dict[str, Any]) -> None:
         data = {k: record[k] for k in _COLUMNS if k in record}

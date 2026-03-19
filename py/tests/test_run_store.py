@@ -292,3 +292,55 @@ def test_migration_adds_column_idempotent(tmp_path: Path) -> None:
     rows = store2.list_runs()
     assert any(r["run_id"] == "idem-1" for r in rows)
     store2.close()
+
+
+# ---------------------------------------------------------------------------
+# search_runs (FTS5 full-text search)
+# ---------------------------------------------------------------------------
+
+
+def test_search_runs_returns_matching_run(tmp_path: Path) -> None:
+    store = RunStore(db_path=tmp_path / "runs.sqlite")
+    try:
+        r = _make_record("search-run-1")
+        r["request"] = "deploy the kubernetes cluster"
+        store.upsert(r)
+        results = store.search_runs("kubernetes")
+        assert len(results) >= 1
+        assert any(row["run_id"] == "search-run-1" for row in results)
+    finally:
+        store.close()
+
+
+def test_search_runs_returns_empty_when_no_match(tmp_path: Path) -> None:
+    store = RunStore(db_path=tmp_path / "runs.sqlite")
+    try:
+        store.upsert(_make_record("no-match-run"))
+        results = store.search_runs("xyzzy_nonexistent_token_42")
+        assert results == []
+    finally:
+        store.close()
+
+
+def test_search_runs_handles_fts_syntax_error_gracefully(tmp_path: Path) -> None:
+    store = RunStore(db_path=tmp_path / "runs.sqlite")
+    try:
+        store.upsert(_make_record("syntax-run"))
+        # "AND" alone is an invalid FTS5 query; must not raise
+        results = store.search_runs("AND")
+        assert isinstance(results, list)
+    finally:
+        store.close()
+
+
+def test_search_runs_limit_respected(tmp_path: Path) -> None:
+    store = RunStore(db_path=tmp_path / "runs.sqlite")
+    try:
+        for i in range(5):
+            r = _make_record(f"limit-run-{i}")
+            r["request"] = "analyze the pipeline data"
+            store.upsert(r)
+        results = store.search_runs("pipeline", limit=2)
+        assert len(results) <= 2
+    finally:
+        store.close()

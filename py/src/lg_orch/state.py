@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from lg_orch.approval_policy import ApprovalPolicy, ApprovalVote
 
 Intent = Literal["code_change", "analysis", "research", "question", "refactor", "debug"]
 RouteLane = Literal["interactive", "deep_planning", "recovery"]
@@ -162,6 +164,7 @@ class OrchState(BaseModel):
     undo: dict[str, Any] = Field(default_factory=dict)
     resume: dict[str, Any] = Field(default_factory=dict)
     mcp_tools: list[dict[str, Any]] = Field(default_factory=list)
+    worktree_path: str | None = None
 
 
 class ModelRoutingDecision(BaseModel):
@@ -186,6 +189,14 @@ class ModelRoutingDecision(BaseModel):
 @dataclass(frozen=True)
 class NodeResult:
     update: dict[str, Any]
+
+
+@dataclass
+class ApprovalRecord:
+    run_id: str
+    status: Literal["pending", "approved", "rejected", "timed_out"] = "pending"
+    policy: ApprovalPolicy | None = None
+    votes: list[ApprovalVote] = field(default_factory=list)
 
 
 class SubAgentTask(BaseModel):

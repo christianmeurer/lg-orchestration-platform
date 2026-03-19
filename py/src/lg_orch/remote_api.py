@@ -16,8 +16,17 @@ from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
+from lg_orch.approval_policy import (
+    ApprovalDecision,
+    ApprovalEngine,
+    ApprovalPolicy,
+    ApprovalVote,
+    QuorumApprovalPolicy,
+    RoleApprovalPolicy,
+    TimedApprovalPolicy,
+)
 from lg_orch.config import load_config
 from lg_orch.logging import get_logger
 from lg_orch.procedure_cache import ProcedureCache, _canonical_procedure_name
@@ -589,6 +598,7 @@ class RemoteAPIService:
         self._repo_root = repo_root.resolve()
         self._lock = threading.Lock()
         self._runs: dict[str, RunRecord] = {}
+        self._approval_decisions: dict[str, ApprovalDecision] = {}
         self._log = get_logger()
         self._run_store = run_store
         self._rate_limiter = rate_limiter
@@ -708,6 +718,11 @@ class RemoteAPIService:
         if detail is None:
             raise RuntimeError("run_not_found")
         return detail
+
+    def search_runs(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
+        if self._run_store is None:
+            return []
+        return self._run_store.search_runs(query, limit=limit)
 
     def list_runs(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -941,6 +956,68 @@ class RemoteAPIService:
             self._run_store.upsert(payload_out)
         self._log.info("remote_api_run_rejected", run_id=normalized_run_id, actor=actor)
         return self.get_run(normalized_run_id)
+
+    def set_approval_policy(self, run_id: str, policy: ApprovalPolicy) -> dict[str, Any]:
+        with self._lock:
+            self._approval_decisions[run_id] = ApprovalDecision(
+                run_id=run_id,
+                status="pending",
+                policy=policy,
+                votes=[],
+                created_at=time.time(),
+                resolved_at=None,
+            )
+        return {"status": "policy_set", "run_id": run_id}
+
+    def cast_vote(
+        self,
+        run_id: str,
+        reviewer_id: str,
+        role: str | None,
+        action: str,
+        comment: str = "",
+    ) -> dict[str, Any]:
+        with self._lock:
+            decision = self._approval_decisions.get(run_id)
+            if decision is None:
+                raise KeyError(run_id)
+            vote = ApprovalVote(
+                reviewer_id=reviewer_id,
+                role=role,
+                action=action,  # type: ignore[arg-type]
+                timestamp=time.time(),
+                comment=comment,
+            )
+            decision.votes.append(vote)
+            elapsed = time.time() - decision.created_at
+            new_status = ApprovalEngine().evaluate(decision.policy, decision.votes, elapsed)
+            decision.status = new_status
+            if new_status != "pending":
+                decision.resolved_at = time.time()
+            votes_cast = len(decision.votes)
+
+        if new_status == "approved":
+            record = self._runs.get(run_id)
+            if record is not None and record.pending_approval:
+                try:
+                    self.approve_run(
+                        run_id,
+                        {"actor": reviewer_id, "rationale": comment},
+                    )
+                except (ValueError, RuntimeError):
+                    pass
+        elif new_status in {"rejected", "timed_out"}:
+            record = self._runs.get(run_id)
+            if record is not None and record.pending_approval:
+                try:
+                    self.reject_run(
+                        run_id,
+                        {"actor": reviewer_id, "rationale": comment},
+                    )
+                except (ValueError, RuntimeError):
+                    pass
+
+        return {"status": new_status, "votes_cast": votes_cast}
 
     def _capture_process_output(self, run_id: str) -> None:
         with self._lock:
@@ -1293,6 +1370,23 @@ def _api_http_response(
 
     # ── SPA convenience aliases (no /v1/ prefix) ────────────────────────────
 
+    # GET /runs/search — full-text search over run history
+    if route == "/runs/search":
+        if method != "GET":
+            return _json_response(405, {"error": "method_not_allowed"})
+        qs = parse_qs(urlsplit(request_path).query, keep_blank_values=False)
+        q_values = qs.get("q", [])
+        if not q_values or not q_values[0].strip():
+            return _json_response(422, {"error": "missing_required_param", "param": "q"})
+        q = q_values[0].strip()
+        limit_raw = qs.get("limit", ["50"])[0]
+        try:
+            limit = max(1, min(200, int(limit_raw)))
+        except ValueError:
+            limit = 50
+        results = service.search_runs(q, limit=limit)
+        return _json_response(200, {"results": results, "total": len(results)})
+
     # GET /runs — run history list used by the standalone SPA
     if route in {"/runs", "/runs/"}:
         if method != "GET":
@@ -1336,6 +1430,80 @@ def _api_http_response(
         if payload is None:
             return _json_response(404, {"error": "not_found", "run_id": run_id})
         return _json_response(202, payload)
+
+    # POST /runs/{run_id}/approval-policy — set a multi-path approval policy
+    if (
+        method == "POST"
+        and len(path_parts) == 3
+        and path_parts[0] == "runs"
+        and path_parts[2] == "approval-policy"
+    ):
+        try:
+            payload_raw = json.loads((request_body or b"{}").decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return _json_response(400, {"error": "invalid_json"})
+        if not isinstance(payload_raw, dict):
+            return _json_response(400, {"error": "invalid_json"})
+        policy_raw = payload_raw.get("policy")
+        if not isinstance(policy_raw, dict):
+            return _json_response(400, {"error": "missing_policy"})
+        kind = policy_raw.get("kind")
+        if kind == "timed":
+            policy: ApprovalPolicy = TimedApprovalPolicy(
+                timeout_seconds=float(policy_raw.get("timeout_seconds", 300.0)),
+                auto_action=policy_raw.get("auto_action", "reject"),  # type: ignore[arg-type]
+            )
+        elif kind == "quorum":
+            policy = QuorumApprovalPolicy(
+                required_approvals=int(policy_raw.get("required_approvals", 1)),
+                required_rejections=int(policy_raw.get("required_rejections", 1)),
+                allowed_reviewers=list(policy_raw.get("allowed_reviewers", [])),
+            )
+        elif kind == "role":
+            policy = RoleApprovalPolicy(
+                required_roles=list(policy_raw.get("required_roles", [])),
+                require_all_roles=bool(policy_raw.get("require_all_roles", False)),
+            )
+        else:
+            return _json_response(400, {"error": "unknown_policy_kind"})
+        run_id = path_parts[1]
+        result = service.set_approval_policy(run_id, policy)
+        return _json_response(200, result)
+
+    # POST /runs/{run_id}/vote — cast a vote on a run's approval policy
+    if (
+        method == "POST"
+        and len(path_parts) == 3
+        and path_parts[0] == "runs"
+        and path_parts[2] == "vote"
+    ):
+        try:
+            payload_raw = json.loads((request_body or b"{}").decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return _json_response(400, {"error": "invalid_json"})
+        if not isinstance(payload_raw, dict):
+            return _json_response(400, {"error": "invalid_json"})
+        run_id = path_parts[1]
+        reviewer_id = _non_empty_str(payload_raw.get("reviewer_id"))
+        if reviewer_id is None:
+            return _json_response(400, {"error": "missing_reviewer_id"})
+        action = _non_empty_str(payload_raw.get("action"))
+        if action not in {"approve", "reject"}:
+            return _json_response(400, {"error": "invalid_action"})
+        role_raw = payload_raw.get("role")
+        role = _non_empty_str(role_raw) if role_raw is not None else None
+        comment = str(payload_raw.get("comment", ""))
+        try:
+            result = service.cast_vote(
+                run_id,
+                reviewer_id=reviewer_id,
+                role=role,
+                action=action,
+                comment=comment,
+            )
+        except KeyError:
+            return _json_response(404, {"error": "policy_not_found", "run_id": run_id})
+        return _json_response(200, result)
 
     # GET /app or /app/<subpath> — standalone SPA static files
     if path_parts and path_parts[0] == "app":
