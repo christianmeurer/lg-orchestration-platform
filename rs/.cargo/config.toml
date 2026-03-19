@@ -1,0 +1,27 @@
+[build]
+# No default target set; cross-compile targets are specified per invocation.
+
+[profile.dev]
+opt-level = 0
+debug = true
+incremental = true
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+# Used in CI pipelines. Pairs with `RUSTFLAGS="-D warnings"` or the
+# clippy-ci alias below to enforce deny(warnings) on every build.
+[profile.ci]
+inherits = "release"
+debug = false
+
+[alias]
+clippy-ci = "clippy --all-targets --all-features -- -D warnings"
+test-all   = "test --all-features -- --test-threads=4"
+
+[env]
+# Set RUST_BACKTRACE only when the environment has not already defined it.
+RUST_BACKTRACE = { value = "1", force = false }

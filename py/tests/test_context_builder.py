@@ -344,3 +344,152 @@ def test_context_builder_loads_semantic_memories(tmp_path: Path) -> None:
     assert "semantic_memories" in repo_context
     assert len(repo_context["semantic_memories"]) >= 1
     assert "approved by chris" in repo_context["semantic_memories"][0]["summary"]
+
+
+# --- Gap 4: MCP tool discovery wired into context_builder → state["mcp_tools"] ---
+
+
+@patch("lg_orch.nodes.context_builder.MCPClient")
+def test_context_builder_discovers_mcp_tools_and_populates_state(
+    mock_mcp_cls: MagicMock,
+) -> None:
+    """discover_tools() result is written to state['mcp_tools'] and
+    a human-readable summary is stored in repo_context['mcp_tools_catalog']."""
+    fixture_tools = [
+        {
+            "name": "read_file",
+            "description": "Reads a file from the workspace.",
+            "server_name": "fs",
+            "_schema_hash": "abc123",
+        },
+        {
+            "name": "apply_patch",
+            "description": "Applies a unified diff patch.",
+            "server_name": "fs",
+            "_schema_hash": "abc123",
+        },
+    ]
+    with tempfile.TemporaryDirectory() as td:
+        mock_mcp = MagicMock()
+        mock_mcp.discover_tools.return_value = fixture_tools
+        mock_mcp.summarize_tools.return_value = {
+            "server_count": 1,
+            "tool_count": 2,
+            "servers": [
+                {
+                    "server_name": "fs",
+                    "tool_count": 2,
+                    "tools": [
+                        {"name": "read_file", "description": "Reads a file from the workspace.", "input_schema": None},
+                        {"name": "apply_patch", "description": "Applies a unified diff patch.", "input_schema": None},
+                    ],
+                }
+            ],
+            "summary": "fs: read_file, apply_patch",
+            "mismatch_servers": [],
+        }
+        mock_mcp_cls.return_value = mock_mcp
+
+        out = context_builder(
+            _base_state(
+                repo_root=td,
+                _mcp_enabled=True,
+                _mcp_servers={"fs": {"command": "fs-server", "args": []}},
+                _runner_base_url="http://127.0.0.1:8088",
+                request="read and patch files",
+            )
+        )
+
+        # Raw tool list in state
+        assert "mcp_tools" in out
+        assert len(out["mcp_tools"]) == 2
+        tool_names = [t["name"] for t in out["mcp_tools"]]
+        assert "read_file" in tool_names
+        assert "apply_patch" in tool_names
+
+        # Human-readable catalog in stable-prefix context layer
+        mcp_tools_catalog = out["repo_context"].get("mcp_tools_catalog", "")
+        assert "read_file" in mcp_tools_catalog
+        assert "apply_patch" in mcp_tools_catalog
+        assert mcp_tools_catalog.startswith("Available MCP tools:")
+
+
+@patch("lg_orch.nodes.context_builder.MCPClient")
+def test_context_builder_mcp_tools_empty_when_mcp_disabled(
+    mock_mcp_cls: MagicMock,
+) -> None:
+    """When _mcp_enabled is False, mcp_tools is [] and catalog is absent."""
+    with tempfile.TemporaryDirectory() as td:
+        out = context_builder(
+            _base_state(
+                repo_root=td,
+                _mcp_enabled=False,
+            )
+        )
+        assert out.get("mcp_tools", []) == []
+        assert "mcp_tools_catalog" not in out.get("repo_context", {})
+        mock_mcp_cls.assert_not_called()
+
+
+@patch("lg_orch.nodes.context_builder.MCPClient")
+def test_context_builder_mcp_discovery_failure_yields_empty_tools(
+    mock_mcp_cls: MagicMock,
+) -> None:
+    """A RuntimeError from discover_tools() must not propagate; mcp_tools stays []."""
+    with tempfile.TemporaryDirectory() as td:
+        mock_mcp = MagicMock()
+        mock_mcp.discover_tools.side_effect = RuntimeError("runner unavailable")
+        mock_mcp_cls.return_value = mock_mcp
+
+        out = context_builder(
+            _base_state(
+                repo_root=td,
+                _mcp_enabled=True,
+                _mcp_servers={"fs": {"command": "fs-server", "args": []}},
+                _runner_base_url="http://127.0.0.1:8088",
+            )
+        )
+        # Pipeline must continue — mcp_tools is empty, not an error
+        assert "repo_context" in out
+        assert out.get("mcp_tools", []) == []
+
+
+@patch("lg_orch.nodes.context_builder.MCPClient")
+def test_context_builder_mcp_hash_mismatch_tools_excluded_from_mcp_tools(
+    mock_mcp_cls: MagicMock,
+) -> None:
+    """Tools with _schema_hash_mismatch=True must be excluded from state['mcp_tools']."""
+    fixture_tools = [
+        {"name": "good_tool", "description": "Works fine.", "server_name": "fs", "_schema_hash": "ok"},
+        {"_schema_hash_mismatch": True, "server_name": "fs", "_expected_hash": "aaa", "_actual_hash": "bbb"},
+    ]
+    with tempfile.TemporaryDirectory() as td:
+        mock_mcp = MagicMock()
+        mock_mcp.discover_tools.return_value = fixture_tools
+        mock_mcp.summarize_tools.return_value = {
+            "server_count": 1,
+            "tool_count": 1,
+            "servers": [
+                {
+                    "server_name": "fs",
+                    "tool_count": 1,
+                    "tools": [{"name": "good_tool", "description": "Works fine.", "input_schema": None}],
+                }
+            ],
+            "summary": "fs: good_tool",
+            "mismatch_servers": ["fs"],
+        }
+        mock_mcp_cls.return_value = mock_mcp
+
+        out = context_builder(
+            _base_state(
+                repo_root=td,
+                _mcp_enabled=True,
+                _mcp_servers={"fs": {"command": "fs-server", "args": []}},
+                _runner_base_url="http://127.0.0.1:8088",
+            )
+        )
+        # Only the valid tool should be in state
+        mcp_tools = out.get("mcp_tools", [])
+        assert len(mcp_tools) == 1
+        assert mcp_tools[0]["name"] == "good_tool"

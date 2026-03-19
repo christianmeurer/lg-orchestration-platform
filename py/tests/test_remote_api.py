@@ -692,3 +692,180 @@ def test_spa_method_not_allowed(tmp_path: Path) -> None:
     )
     assert status == 405
     assert json.loads(body.decode("utf-8"))["error"] == "method_not_allowed"
+
+
+# ---------------------------------------------------------------------------
+# Wave-7 SSE streaming tests (/runs/{run_id}/stream)
+# ---------------------------------------------------------------------------
+
+
+def test_stream_completed_run_returns_events_and_done_sentinel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_stream_new_sse replays trace events then sends the done sentinel."""
+    import io as _io
+
+    import lg_orch.remote_api as _ra
+    from lg_orch.remote_api import _stream_new_sse
+
+    service = RemoteAPIService(repo_root=tmp_path)
+    monkeypatch.setattr(
+        _ra, "_spawn_run_subprocess",
+        lambda *, argv, cwd, env=None: DummyProcess(output="", returncode=0),
+    )
+    monkeypatch.setattr(_ra, "_start_daemon_thread", lambda *, target, name: target())
+
+    # Create a run and let the DummyProcess finish immediately (exit 0).
+    status, _, _body = _api_http_response(
+        service,
+        method="POST",
+        request_path="/v1/runs",
+        request_body=json.dumps(
+            {
+                "request": "sse completed test",
+                "run_id": "sse-done-001",
+                "trace_out_dir": "artifacts/sse-t",
+            }
+        ).encode(),
+    )
+    assert status == 201
+
+    # Write a trace file that contains two trace events.
+    trace_path = tmp_path / "artifacts" / "sse-t" / "run-sse-done-001.json"
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    trace_events = [
+        {"ts_ms": 1_000, "kind": "node_start", "data": {"name": "ingest"}},
+        {"ts_ms": 2_000, "kind": "node_end", "data": {"name": "ingest"}},
+    ]
+    trace_path.write_text(
+        json.dumps({"run_id": "sse-done-001", "events": trace_events}),
+        encoding="utf-8",
+    )
+
+    wfile = _io.BytesIO()
+    _stream_new_sse(service, "sse-done-001", wfile)
+    output = wfile.getvalue().decode("utf-8")
+
+    # All frames start with "data: "
+    frames = [
+        line[len("data: "):].strip()
+        for line in output.splitlines()
+        if line.startswith("data: ")
+    ]
+    parsed = [json.loads(f) for f in frames if f]
+
+    kinds = {ev.get("kind") for ev in parsed}
+    assert "node_start" in kinds
+    assert "node_end" in kinds
+    # Last frame must be the done sentinel
+    assert parsed[-1] == {"type": "done"}
+
+
+def test_stream_nonexistent_run_returns_404(tmp_path: Path) -> None:
+    """GET /runs/<unknown>/stream returns HTTP 404 before any stream is opened."""
+    service = RemoteAPIService(repo_root=tmp_path)
+
+    status, content_type, body = _api_http_response(
+        service,
+        method="GET",
+        request_path="/runs/not-a-real-run/stream",
+        request_body=None,
+    )
+    assert status == 404
+    assert content_type == "application/json; charset=utf-8"
+    payload = json.loads(body.decode("utf-8"))
+    assert payload["error"] == "not_found"
+    assert payload["run_id"] == "not-a-real-run"
+
+
+def test_push_run_event_sends_through_active_stream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """push_run_event forwards a live event through an active _stream_new_sse.
+
+    The sequence is:
+    1. Start a thread running _stream_new_sse for an active run.
+    2. Wait for _stream_new_sse to register its queue in _run_streams.
+    3. Push a live event via push_run_event and then a None sentinel.
+    4. The stream should drain the queue, emit the event, send the done
+       sentinel, and return — all within 5 seconds.
+    """
+    import io as _io
+    import time as _time_mod
+    import threading as _th
+
+    import lg_orch.remote_api as _ra
+    from lg_orch.remote_api import _stream_new_sse, push_run_event
+
+    service = RemoteAPIService(repo_root=tmp_path)
+    monkeypatch.setattr(
+        _ra, "_spawn_run_subprocess",
+        lambda *, argv, cwd, env=None: RunningDummyProcess(),
+    )
+    # Don't start the capture thread — keep the run alive (poll() returns None).
+    monkeypatch.setattr(_ra, "_start_daemon_thread", lambda *, target, name: None)
+
+    status, _, _body2 = _api_http_response(
+        service,
+        method="POST",
+        request_path="/v1/runs",
+        request_body=json.dumps(
+            {
+                "request": "live sse test",
+                "run_id": "sse-live-001",
+                "trace_out_dir": "artifacts/sse-live",
+            }
+        ).encode(),
+    )
+    assert status == 201
+
+    live_event: dict[str, object] = {
+        "ts_ms": 5_000,
+        "kind": "tool_call",
+        "data": {"tool": "exec"},
+    }
+
+    wfile = _io.BytesIO()
+    errors: list[Exception] = []
+
+    def _run() -> None:
+        try:
+            _stream_new_sse(service, "sse-live-001", wfile)
+        except Exception as exc:
+            errors.append(exc)
+
+    t = _th.Thread(target=_run, daemon=True)
+    t.start()
+
+    # Poll until _stream_new_sse registers its queue (up to 2 s).
+    for _ in range(200):
+        with _ra._run_streams_lock:
+            if "sse-live-001" in _ra._run_streams:
+                break
+        _time_mod.sleep(0.01)
+
+    # Push a live event and the None end-of-stream sentinel.
+    push_run_event("sse-live-001", live_event)  # type: ignore[arg-type]
+    with _ra._run_streams_lock:
+        registered_q = _ra._run_streams.get("sse-live-001")
+    if registered_q is not None:
+        registered_q.put_nowait(None)
+
+    t.join(timeout=5)
+    assert not t.is_alive(), "stream did not terminate within 5 s"
+    assert not errors
+
+    with _ra._run_streams_lock:
+        _ra._run_streams.pop("sse-live-001", None)
+
+    output = wfile.getvalue().decode("utf-8")
+    frames = [
+        line[len("data: "):].strip()
+        for line in output.splitlines()
+        if line.startswith("data: ")
+    ]
+    parsed = [json.loads(f) for f in frames if f]
+
+    kinds = {ev.get("kind") for ev in parsed}
+    assert "tool_call" in kinds
+    assert parsed[-1] == {"type": "done"}

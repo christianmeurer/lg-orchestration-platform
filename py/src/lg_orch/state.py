@@ -161,6 +161,7 @@ class OrchState(BaseModel):
     snapshots: list[dict[str, Any]] = Field(default_factory=list)
     undo: dict[str, Any] = Field(default_factory=dict)
     resume: dict[str, Any] = Field(default_factory=dict)
+    mcp_tools: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ModelRoutingDecision(BaseModel):

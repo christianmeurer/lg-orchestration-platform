@@ -3,6 +3,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import queue
 import re
 import subprocess
 import sys
@@ -27,6 +28,26 @@ _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _DEFAULT_TRACE_OUT_DIR = Path("artifacts/remote-api")
 _ALLOWED_VIEWS = {"classic", "console"}
 _REQUEST_ID_HEADER = "X-Request-ID"
+
+# ---------------------------------------------------------------------------
+# SSE stream registry — one Queue per active /runs/{run_id}/stream client
+# Push None to signal stream end.
+# ---------------------------------------------------------------------------
+_run_streams: dict[str, queue.Queue[dict[str, Any] | None]] = {}
+_run_streams_lock = threading.Lock()
+
+
+def push_run_event(run_id: str, event: dict[str, Any]) -> None:
+    """Push a trace event into the live SSE queue for *run_id*.
+
+    Call from any thread; safe with ThreadingHTTPServer.  No-op when no
+    browser is currently streaming *run_id*.  To signal stream end, put
+    ``None`` directly into ``_run_streams[run_id]``.
+    """
+    with _run_streams_lock:
+        q = _run_streams.get(run_id)
+    if q is not None:
+        q.put_nowait(event)
 
 
 def _utc_now() -> str:
@@ -452,6 +473,107 @@ class RunRecord:
     pending_approval_summary: str = ""
     pending_approval_details: dict[str, Any] = field(default_factory=dict)
     approval_history: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _stream_new_sse(service: RemoteAPIService, run_id: str, wfile: Any) -> None:
+    """New-format SSE stream for the standalone SPA at ``/runs/{run_id}/stream``.
+
+    Protocol (each frame is ``data: <json>\\n\\n``):
+
+    * Replays existing trace events from the trace file first.
+    * For completed runs: sends one *done* sentinel and returns.
+    * For active runs: drains ``_run_streams[run_id]`` with 1-second timeout;
+      falls back to polling ``service.get_run()`` to detect completion.
+    * Sends ``data: {"type":"done"}\\n\\n`` as the terminal frame.
+    * If *run_id* is unknown, sends ``data: {"error":"not_found"}\\n\\n`` and returns.
+    * On client disconnect (``OSError`` on ``wfile.write``), cleans up and returns.
+    """
+    log = get_logger()
+    run = service.get_run(run_id)
+    if run is None:
+        try:
+            data = json.dumps({"error": "not_found", "run_id": run_id}, ensure_ascii=False)
+            wfile.write(f"data: {data}\n\n".encode())
+            wfile.flush()
+        except OSError:
+            pass
+        return
+
+    # Replay existing trace events from the trace file
+    trace_path = Path(str(run.get("trace_path", "")))
+    trace_payload: dict[str, Any] | None = None
+    if trace_path.is_file():
+        try:
+            raw = json.loads(trace_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                trace_payload = raw
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    existing_events: list[dict[str, Any]] = []
+    if trace_payload is not None:
+        events_raw = trace_payload.get("events", [])
+        existing_events = [e for e in events_raw if isinstance(e, dict)]
+
+    for ev in existing_events:
+        try:
+            data = json.dumps(ev, ensure_ascii=False)
+            wfile.write(f"data: {data}\n\n".encode())
+        except OSError:
+            return
+    try:
+        wfile.flush()
+    except OSError:
+        return
+
+    # Completed run — send done sentinel and return
+    if run.get("finished_at") is not None:
+        try:
+            wfile.write(b'data: {"type":"done"}\n\n')
+            wfile.flush()
+        except OSError:
+            pass
+        return
+
+    # Active run — register a queue and forward live events
+    q: queue.Queue[dict[str, Any] | None] = queue.Queue()
+    with _run_streams_lock:
+        _run_streams[run_id] = q
+    try:
+        for _ in range(1200):  # up to ~20 minutes at 1 s each
+            try:
+                event = q.get(timeout=1.0)
+            except queue.Empty:
+                # Fallback: poll run status for completion
+                current = service.get_run(run_id)
+                if current is None or current.get("finished_at") is not None:
+                    try:
+                        wfile.write(b'data: {"type":"done"}\n\n')
+                        wfile.flush()
+                    except OSError:
+                        pass
+                    return
+                continue
+            if event is None:
+                # None is the sentinel meaning "stream is done"
+                try:
+                    wfile.write(b'data: {"type":"done"}\n\n')
+                    wfile.flush()
+                except OSError:
+                    pass
+                return
+            try:
+                data = json.dumps(event, ensure_ascii=False)
+                wfile.write(f"data: {data}\n\n".encode())
+                wfile.flush()
+            except OSError:
+                return
+    except OSError:
+        pass
+    finally:
+        with _run_streams_lock:
+            _run_streams.pop(run_id, None)
+        log.debug("spa_sse_stream_closed", run_id=run_id)
 
 
 class RemoteAPIService:
@@ -1169,6 +1291,63 @@ def _api_http_response(
             return _json_response(404, {"error": "not_found", "run_id": run_id})
         return _json_response(200, payload)
 
+    # ── SPA convenience aliases (no /v1/ prefix) ────────────────────────────
+
+    # GET /runs — run history list used by the standalone SPA
+    if route in {"/runs", "/runs/"}:
+        if method != "GET":
+            return _json_response(405, {"error": "method_not_allowed"})
+        return _json_response(200, {"runs": service.list_runs()})
+
+    # GET /runs/{run_id}/stream — new-format SSE for the standalone SPA
+    if (
+        method == "GET"
+        and len(path_parts) == 3
+        and path_parts[0] == "runs"
+        and path_parts[2] == "stream"
+    ):
+        # Check run exists BEFORE opening the stream; return 404 per spec.
+        _sse_run_id = path_parts[1]
+        if service.get_run(_sse_run_id) is None:
+            return _json_response(404, {"error": "not_found", "run_id": _sse_run_id})
+        return -2, "sse_new", _sse_run_id.encode("utf-8")
+
+    # POST /runs/{run_id}/approve and /runs/{run_id}/reject — SPA approval shortcuts
+    if (
+        method == "POST"
+        and len(path_parts) == 3
+        and path_parts[0] == "runs"
+        and path_parts[2] in {"approve", "reject"}
+    ):
+        try:
+            payload_raw = json.loads((request_body or b"{}").decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return _json_response(400, {"error": "invalid_json"})
+        if not isinstance(payload_raw, dict):
+            return _json_response(400, {"error": "invalid_json"})
+        run_id = path_parts[1]
+        try:
+            if path_parts[2] == "approve":
+                payload = service.approve_run(run_id, payload_raw, auth_subject=auth_subject)
+            else:
+                payload = service.reject_run(run_id, payload_raw, auth_subject=auth_subject)
+        except ValueError as exc:
+            return _json_response(409, {"error": str(exc), "run_id": run_id})
+        if payload is None:
+            return _json_response(404, {"error": "not_found", "run_id": run_id})
+        return _json_response(202, payload)
+
+    # GET /app or /app/<subpath> — standalone SPA static files
+    if path_parts and path_parts[0] == "app":
+        if method != "GET":
+            return _json_response(405, {"error": "method_not_allowed"})
+        spa_dir = Path(__file__).parent / "spa"
+        if not spa_dir.exists():
+            return _json_response(503, {"error": "spa_not_available"})
+        from lg_orch.spa.router import create_spa_router
+        subpath = "/".join(path_parts[1:]) if len(path_parts) > 1 else ""
+        return create_spa_router(spa_dir)(subpath)
+
     return _json_response(404, {"error": "not_found"})
 
 
@@ -1259,6 +1438,19 @@ def serve_remote_api(*, repo_root: Path, host: str, port: int) -> int:
                 self.send_header(_REQUEST_ID_HEADER, request_id)
                 self.end_headers()
                 service.stream_run_sse(sse_run_id, self.wfile)
+                return
+
+            # New-format SSE sentinel for the standalone SPA (/runs/{id}/stream).
+            if status == -2 and content_type == "sse_new":
+                sse_run_id = body.decode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Accel-Buffering", "no")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header(_REQUEST_ID_HEADER, request_id)
+                self.end_headers()
+                _stream_new_sse(service, sse_run_id, self.wfile)
                 return
 
             self.send_response(status)

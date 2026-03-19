@@ -36,7 +36,7 @@ def decide_model_route(
     if normalized_primary_provider == normalized_local_provider:
         return ModelRoutingDecision(
             task_class=normalized_task,
-            lane=normalized_lane or "interactive",
+            lane=normalized_lane or "interactive",  # type: ignore[arg-type]
             provider_used="local",
             provider=normalized_local_provider,
             model=normalized_primary_model,
@@ -72,7 +72,7 @@ def decide_model_route(
     if normalized_task in fallback_set and normalized_compression_pressure <= 0 and normalized_fact_count <= 0:
         return ModelRoutingDecision(
             task_class=normalized_task,
-            lane=normalized_lane or "interactive",
+            lane=normalized_lane or "interactive",  # type: ignore[arg-type]
             provider_used="local",
             provider=normalized_local_provider,
             model=f"{normalized_local_provider}:fallback",
@@ -119,7 +119,7 @@ def decide_model_route(
     ):
         return ModelRoutingDecision(
             task_class=normalized_task,
-            lane=normalized_lane or "deep_planning",
+            lane=normalized_lane or "deep_planning",  # type: ignore[arg-type]
             provider_used="remote",
             provider=normalized_primary_provider,
             model=normalized_primary_model,
@@ -140,7 +140,7 @@ def decide_model_route(
 
     return ModelRoutingDecision(
         task_class=normalized_task,
-        lane=normalized_lane or "interactive",
+        lane=normalized_lane or "interactive",  # type: ignore[arg-type]
         provider_used="remote",
         provider=normalized_primary_provider,
         model=normalized_primary_model,

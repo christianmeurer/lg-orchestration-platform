@@ -226,7 +226,7 @@ class RunStore:
         rows: list[tuple[Any, ...]] = []
         for fact in facts:
             if not isinstance(fact, dict):
-                continue
+                continue  # type: ignore[unreachable]
             fingerprint = str(fact.get("failure_fingerprint", "")).strip()
             if not fingerprint:
                 continue
@@ -325,7 +325,7 @@ class RunStore:
         rows: list[tuple[Any, ...]] = []
         for memory in memories:
             if not isinstance(memory, dict):
-                continue
+                continue  # type: ignore[unreachable]
             summary = str(memory.get("summary", "")).strip()
             if not summary:
                 continue

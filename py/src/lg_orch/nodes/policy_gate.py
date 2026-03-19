@@ -59,7 +59,9 @@ def policy_gate(state: dict[str, Any]) -> dict[str, Any]:
         configured_max_patch_bytes = 0
     plan_max_iterations_raw = plan.get("max_iterations")
     try:
-        plan_max_iterations = int(plan_max_iterations_raw)
+        plan_max_iterations = (
+            int(plan_max_iterations_raw) if plan_max_iterations_raw is not None else 0
+        )
     except (TypeError, ValueError):
         plan_max_iterations = 0
     loop_decision = enforce_loop_budget(

@@ -418,9 +418,9 @@ def _recovery_action_payload(recovery: dict[str, Any]) -> dict[str, Any]:
         failure_class=str(recovery.get("failure_class", "")).strip(),
         failure_fingerprint=str(recovery.get("failure_fingerprint", "")).strip(),
         rationale=str(recovery.get("rationale", "")).strip(),
-        retry_target=str(recovery.get("retry_target", "planner")).strip() or "planner",
-        context_scope=str(recovery.get("context_scope", "working_set")).strip() or "working_set",
-        plan_action=str(recovery.get("plan_action", "keep")).strip() or "keep",
+        retry_target=str(recovery.get("retry_target", "planner")).strip() or "planner",  # type: ignore[arg-type]
+        context_scope=str(recovery.get("context_scope", "working_set")).strip() or "working_set",  # type: ignore[arg-type]
+        plan_action=str(recovery.get("plan_action", "keep")).strip() or "keep",  # type: ignore[arg-type]
     ).model_dump()
 
 
@@ -515,7 +515,7 @@ def _next_handoff_payload(
         consumer=consumer,
         objective=objective,
         file_scope=deduped_scope,
-        evidence=evidence,
+        evidence=evidence,  # type: ignore[arg-type]
         constraints=constraints,
         acceptance_checks=acceptance_checks,
         retry_budget=1,
@@ -879,9 +879,9 @@ def verifier(state: dict[str, Any]) -> dict[str, Any]:
                 plan_action=recovery_action["plan_action"],
                 failure_class=recovery_action["failure_class"],
                 failure_fingerprint=recovery_action["failure_fingerprint"],
-                recovery=recovery_action,
-                recovery_packet=recovery_packet,
-                next_handoff=next_handoff,
+                recovery=recovery_action,  # type: ignore[arg-type]
+                recovery_packet=recovery_packet,  # type: ignore[arg-type]
+                next_handoff=next_handoff,  # type: ignore[arg-type]
                 loop_summary=loop_summary,
             ).model_dump()
         elif not acceptance_ok:
@@ -914,9 +914,9 @@ def verifier(state: dict[str, Any]) -> dict[str, Any]:
                 plan_action=recovery_action["plan_action"],
                 failure_class=recovery_action["failure_class"],
                 failure_fingerprint=recovery_action["failure_fingerprint"],
-                recovery=recovery_action,
-                recovery_packet=recovery_packet,
-                next_handoff=next_handoff,
+                recovery=recovery_action,  # type: ignore[arg-type]
+                recovery_packet=recovery_packet,  # type: ignore[arg-type]
+                next_handoff=next_handoff,  # type: ignore[arg-type]
                 loop_summary=loop_summary,
             ).model_dump()
         else:
@@ -954,7 +954,7 @@ def verifier(state: dict[str, Any]) -> dict[str, Any]:
     loop_summaries_raw = state.get("loop_summaries", [])
     loop_summaries = list(loop_summaries_raw) if isinstance(loop_summaries_raw, list) else []
     recovery_packet_raw = report.get("recovery_packet", {})
-    recovery_packet = dict(recovery_packet_raw) if isinstance(recovery_packet_raw, dict) else None
+    recovery_packet = dict(recovery_packet_raw) if isinstance(recovery_packet_raw, dict) else None  # type: ignore[assignment]
     plan_raw = state.get("plan", {})
     plan = dict(plan_raw) if isinstance(plan_raw, dict) else {}
     acceptance_criteria_raw = plan.get("acceptance_criteria", [])

@@ -1,0 +1,10 @@
+{
+  "task": "canary",
+  "expected_lane": "interactive",
+  "expected_exit": "reporter",
+  "assertions": [
+    {"field": "lane", "op": "eq", "value": "interactive"},
+    {"field": "loop_count", "op": "lte", "value": 2},
+    {"field": "verifier_status", "op": "eq", "value": "pass"}
+  ]
+}

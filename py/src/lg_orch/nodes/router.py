@@ -111,13 +111,13 @@ def _default_route(state: dict[str, Any]) -> RouterDecision:
         context_scope = str(recovery.get("context_scope", "working_set")) or "working_set"
         prefix_segment = "recovery_working_set" if context_scope != "stable_prefix" else "stable_prefix"
         return RouterDecision(
-            intent=intent,
+            intent=intent,  # type: ignore[arg-type]
             task_class=failure_class or "recovery",
             lane="recovery",
             rationale="verification requested a recovery route"
             if compression_score <= 0
             else "verification requested recovery and compression pressure favors a stronger lane",
-            context_scope=context_scope,
+            context_scope=context_scope,  # type: ignore[arg-type]
             latency_sensitive=False,
             cache_affinity=f"{default_cache_affinity}:recovery:{failure_fingerprint or current_loop}",
             prefix_segment=prefix_segment,
@@ -142,7 +142,7 @@ def _default_route(state: dict[str, Any]) -> RouterDecision:
         elif semantic_memory_count >= 2:
             rationale = "semantic memory recall indicates deeper planning is needed"
         return RouterDecision(
-            intent=intent,
+            intent=intent,  # type: ignore[arg-type]
             task_class="deep_planning",
             lane="deep_planning",
             rationale=rationale,
@@ -159,7 +159,7 @@ def _default_route(state: dict[str, Any]) -> RouterDecision:
     if failure_fingerprint:
         rationale = "interactive lane retained because failure signal did not require recovery"
     return RouterDecision(
-        intent=intent,
+        intent=intent,  # type: ignore[arg-type]
         task_class=intent,
         lane="interactive",
         rationale=rationale,

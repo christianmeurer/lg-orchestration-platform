@@ -127,7 +127,7 @@ def dedupe_semantic_hits(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
     best_by_key: dict[str, dict[str, Any]] = {}
     for hit in hits:
         if not isinstance(hit, dict):
-            continue
+            continue  # type: ignore[unreachable]
         path = str(hit.get("path", "")).strip()
         snippet = _first_nonempty_line(str(hit.get("snippet", "")))
         key = path or snippet
@@ -243,7 +243,7 @@ def _compression_pressure(decisions: list[dict[str, Any]]) -> dict[str, Any]:
     kept = 0
     for decision in decisions:
         if not isinstance(decision, dict):
-            continue
+            continue  # type: ignore[unreachable]
         action = str(decision.get("action", "")).strip()
         if action == "compressed":
             compressed += 1
@@ -263,7 +263,7 @@ def _fact_pack(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for fact in facts:
         if not isinstance(fact, dict):
-            continue
+            continue  # type: ignore[unreachable]
         entry = dict(fact)
         fingerprint = str(entry.get("failure_fingerprint", "")).strip()
         summary = str(entry.get("summary", entry.get("loop_summary", ""))).strip()

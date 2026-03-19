@@ -178,7 +178,7 @@ def _canonical_procedure_name(steps: list[dict[str, Any]]) -> str:
     tool_names: list[str] = []
     for step in steps:
         if not isinstance(step, dict):
-            continue
+            continue  # type: ignore[unreachable]
         for tool_call in step.get("tools", []):
             if isinstance(tool_call, dict):
                 name = str(tool_call.get("tool", "")).strip()

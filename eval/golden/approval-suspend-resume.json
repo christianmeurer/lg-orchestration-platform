@@ -1,0 +1,11 @@
+{
+  "task": "approval-suspend-resume",
+  "expected_lane": "interactive",
+  "expected_exit": "reporter",
+  "assertions": [
+    {"field": "approval_requested", "op": "eq", "value": true},
+    {"field": "approval_outcome", "op": "in", "value": ["approved", "rejected"]},
+    {"field": "run_state_after_suspend", "op": "eq", "value": "suspended"},
+    {"field": "verifier_status", "op": "eq", "value": "pass"}
+  ]
+}

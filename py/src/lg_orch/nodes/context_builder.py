@@ -95,25 +95,42 @@ def _runner_context_snapshot(
     return ast_map, semantic_hits, query
 
 
-def _mcp_catalog_snapshot(state: dict[str, Any]) -> tuple[dict[str, Any], str]:
+def _mcp_catalog_snapshot(
+    state: dict[str, Any],
+) -> tuple[dict[str, Any], str, list[dict[str, Any]]]:
+    """Discover MCP tools and build a summary for context layers.
+
+    Returns:
+        (summary_dict, catalog_string, raw_tool_list)
+
+    On any failure returns ({}, "", []) so callers never need to guard.
+    """
     if bool(state.get("_mcp_enabled", False)) is not True:
-        return {}, ""
+        return {}, "", []
 
     client = _runner_client_from_state(state)
     if client is None:
-        return {}, ""
+        return {}, "", []
     servers_raw = state.get("_mcp_servers", {})
     servers = dict(servers_raw) if isinstance(servers_raw, dict) else {}
     if not servers:
         client.close()
-        return {}, ""
+        return {}, "", []
 
     try:
         mcp = MCPClient(runner_client=client, server_configs=servers)
-        summary = mcp.summarize_tools()
+        raw_tools = mcp.discover_tools()
+        summary = mcp.summarize_tools(tools=raw_tools)
     finally:
         client.close()
-    return summary, str(summary.get("summary", "")).strip()
+
+    # Exclude hash-mismatch sentinel entries from the raw list surfaced to state.
+    clean_tools: list[dict[str, Any]] = (
+        [t for t in raw_tools if isinstance(t, dict) and not bool(t.get("_schema_hash_mismatch", False))]
+        if isinstance(raw_tools, list)
+        else []
+    )
+    return summary, str(summary.get("summary", "")).strip(), clean_tools
 
 
 def _mcp_recovery_hints(state: dict[str, Any], mcp_summary: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
@@ -320,12 +337,21 @@ def context_builder(state: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         log.warning("context_builder_runner_context_failed", error=str(exc))
 
+    mcp_tools: list[dict[str, Any]] = []
     try:
-        mcp_summary, mcp_catalog = _mcp_catalog_snapshot(state)
+        mcp_summary, mcp_catalog, mcp_tools = _mcp_catalog_snapshot(state)
         if mcp_summary:
             repo_context["mcp_capabilities"] = mcp_summary
         if mcp_catalog:
             repo_context["mcp_catalog"] = mcp_catalog
+        if mcp_tools:
+            tool_names = [
+                str(t.get("name", "")).strip()
+                for t in mcp_tools
+                if isinstance(t, dict) and t.get("name")
+            ]
+            if tool_names:
+                repo_context["mcp_tools_catalog"] = "Available MCP tools: " + ", ".join(tool_names)
         mismatch_servers = mcp_summary.get("mismatch_servers", [])
         if mismatch_servers:
             log.warning(
@@ -340,6 +366,7 @@ def context_builder(state: dict[str, Any]) -> dict[str, Any]:
             repo_context["mcp_relevant_tools"] = mcp_relevant_tools
     except Exception as exc:
         log.warning("context_builder_mcp_catalog_failed", error=str(exc))
+        mcp_tools = []
 
     # Episodic memory: cross-session recovery facts
     episodic_facts = _load_episodic_context(state)
@@ -391,7 +418,7 @@ def context_builder(state: dict[str, Any]) -> dict[str, Any]:
     }
     telemetry["compression_summary"] = get_compression_summary(out)
    
-    out = {**out, "repo_context": repo_context, "provenance": provenance[-20:], "telemetry": telemetry}
+    out = {**out, "repo_context": repo_context, "provenance": provenance[-20:], "telemetry": telemetry, "mcp_tools": mcp_tools}
     out = append_event(
         out,
         kind="node",

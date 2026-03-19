@@ -165,7 +165,7 @@ class MCPClient:
         grouped: dict[str, list[dict[str, Any]]] = {}
         for tool in valid_tools:
             if not isinstance(tool, dict):
-                continue
+                continue  # type: ignore[unreachable]
             server_name = str(tool.get("server_name", "")).strip() or "unknown"
             grouped.setdefault(server_name, []).append(tool)
 

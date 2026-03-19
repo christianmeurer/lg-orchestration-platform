@@ -88,6 +88,34 @@ def _planner_mcp_prompt(repo_context: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def _format_mcp_tool_catalog(mcp_tools: list[dict[str, Any]]) -> str:
+    """Format a runtime-discovered MCP tool list as a ## Available MCP Tools block.
+
+    Returns an empty string when *mcp_tools* is empty so callers can guard with
+    ``if catalog:`` without producing empty section headers.
+    """
+    lines: list[str] = []
+    for tool in mcp_tools:
+        name = str(tool.get("name", "")).strip()
+        description = str(tool.get("description", "")).strip()
+        if not name:
+            continue
+        lines.append(f"- `{name}`: {description}" if description else f"- `{name}`")
+        input_schema = tool.get("inputSchema") or tool.get("input_schema")
+        if isinstance(input_schema, dict):
+            props = input_schema.get("properties", {})
+            if isinstance(props, dict) and props:
+                schema_summary = {
+                    k: str(v.get("type", "any"))
+                    for k, v in props.items()
+                    if isinstance(v, dict)
+                }
+                lines.append(f"  Input schema: {schema_summary}")
+    if not lines:
+        return ""
+    return "## Available MCP Tools\n" + "\n".join(lines)
+
+
 def _rank_semantic_memories(request: str, repo_context: dict[str, Any], *, limit: int = 4) -> list[dict[str, Any]]:
     semantic_memories_raw = repo_context.get("semantic_memories", [])
     semantic_memories = (
@@ -584,6 +612,13 @@ def _planner_model_output(
         "max_loops": int(state.get("_budget_max_loops", 1) or 1),
     }
     mcp_prompt = _planner_mcp_prompt(repo_context)
+    mcp_tools_raw = state.get("mcp_tools", [])
+    mcp_tools: list[dict[str, Any]] = (
+        [t for t in mcp_tools_raw if isinstance(t, dict)]
+        if isinstance(mcp_tools_raw, list)
+        else []
+    )
+    mcp_tool_catalog = _format_mcp_tool_catalog(mcp_tools)
     semantic_memory_prompt = _planner_semantic_memory_prompt(repo_context, request=request)
     procedural_memory_prompt = _planner_procedural_memory_prompt(repo_context, request=request)
     user_prompt = (
@@ -599,6 +634,8 @@ def _planner_model_output(
     )
     if mcp_prompt:
         user_prompt = f"{user_prompt}{mcp_prompt}\n"
+    if mcp_tool_catalog:
+        user_prompt = f"{user_prompt}{mcp_tool_catalog}\n"
     if semantic_memory_prompt:
         user_prompt = f"{user_prompt}{semantic_memory_prompt}\n"
     if procedural_memory_prompt:

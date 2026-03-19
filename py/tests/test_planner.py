@@ -6,7 +6,12 @@ from typing import Any
 
 import pytest
 
-from lg_orch.nodes.planner import _classify_intent, _planner_model_output, planner
+from lg_orch.nodes.planner import (
+    _classify_intent,
+    _format_mcp_tool_catalog,
+    _planner_model_output,
+    planner,
+)
 
 planner_module = importlib.import_module("lg_orch.nodes.planner")
 
@@ -772,3 +777,300 @@ def test_planner_model_output_rejects_non_http_base_url() -> None:
     route_decision: dict[str, Any] = {"provider_used": "openai_compatible"}
     result = _planner_model_output(state, route_decision=route_decision)
     assert result == (None, None)
+
+
+# --- Gap 4: _format_mcp_tool_catalog unit tests ---
+
+
+def test_format_mcp_tool_catalog_empty_returns_empty_string() -> None:
+    assert _format_mcp_tool_catalog([]) == ""
+
+
+def test_format_mcp_tool_catalog_skips_entries_without_name() -> None:
+    result = _format_mcp_tool_catalog([{"description": "no name here"}])
+    assert result == ""
+
+
+def test_format_mcp_tool_catalog_basic_tools() -> None:
+    tools: list[dict[str, Any]] = [
+        {"name": "read_file", "description": "Reads a file.", "server_name": "fs"},
+        {"name": "run_tests", "description": "Runs the test suite.", "server_name": "fs"},
+    ]
+    result = _format_mcp_tool_catalog(tools)
+    assert result.startswith("## Available MCP Tools")
+    assert "`read_file`" in result
+    assert "Reads a file." in result
+    assert "`run_tests`" in result
+    assert "Runs the test suite." in result
+
+
+def test_format_mcp_tool_catalog_includes_input_schema_properties() -> None:
+    tools: list[dict[str, Any]] = [
+        {
+            "name": "read_file",
+            "description": "Reads a file.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "encoding": {"type": "string"},
+                },
+            },
+        }
+    ]
+    result = _format_mcp_tool_catalog(tools)
+    assert "Input schema:" in result
+    assert "path" in result
+    assert "string" in result
+
+
+def test_format_mcp_tool_catalog_omits_schema_when_no_properties() -> None:
+    tools: list[dict[str, Any]] = [
+        {"name": "ping", "description": "Pings the server.", "inputSchema": {"type": "object", "properties": {}}},
+    ]
+    result = _format_mcp_tool_catalog(tools)
+    assert "## Available MCP Tools" in result
+    assert "Input schema:" not in result
+
+
+def test_format_mcp_tool_catalog_ignores_non_dict_entries() -> None:
+    tools: list[dict[str, Any]] = [
+        {"name": "valid", "description": "Valid tool."},
+    ]
+    # Cast to appease mypy — runtime handles non-dict gracefully
+    mixed: list[dict[str, Any]] = tools  # type: ignore[assignment]
+    result = _format_mcp_tool_catalog(mixed)
+    assert "`valid`" in result
+
+
+# --- Gap 4: planner injects ## Available MCP Tools from state["mcp_tools"] ---
+
+
+def test_planner_injects_mcp_tool_catalog_from_mcp_tools_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When state['mcp_tools'] is non-empty, the planner injects the
+    ## Available MCP Tools block into the user prompt sent to the model."""
+    captured: dict[str, str] = {}
+
+    class _FakeInferenceClient:
+        def __init__(self, *, base_url: str, api_key: str, timeout_s: int = 60) -> None:
+            self.base_url = base_url
+            self.api_key = api_key
+            self.timeout_s = timeout_s
+
+        def close(self) -> None:
+            return None
+
+        def chat_completion(
+            self,
+            *,
+            model: str,
+            system_prompt: str,
+            user_prompt: str,
+            temperature: float,
+            max_tokens: int = 1200,
+        ) -> str:
+            captured["user_prompt"] = user_prompt
+            return json.dumps(
+                {
+                    "steps": [
+                        {
+                            "id": "mcp-step-1",
+                            "description": "Use discovered MCP tools.",
+                            "tools": [],
+                            "expected_outcome": "MCP tools referenced in plan.",
+                            "files_touched": [],
+                        }
+                    ],
+                    "verification": [],
+                    "rollback": "No rollback needed.",
+                }
+            )
+
+    monkeypatch.setattr(planner_module, "InferenceClient", _FakeInferenceClient)
+    out = planner(
+        _base_state(
+            request="apply a patch using available tools",
+            _repo_root=".",
+            mcp_tools=[
+                {
+                    "name": "read_file",
+                    "description": "Reads a file from the workspace.",
+                    "server_name": "fs",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                    },
+                },
+                {
+                    "name": "run_tests",
+                    "description": "Runs the test suite.",
+                    "server_name": "fs",
+                    "inputSchema": None,
+                },
+            ],
+            _models={
+                "planner": {
+                    "provider": "remote_digitalocean",
+                    "model": "anthropic-claude-3.5-haiku",
+                    "temperature": 0.1,
+                }
+            },
+            _model_provider_runtime={
+                "digitalocean": {
+                    "base_url": "https://inference.do-ai.run/v1",
+                    "api_key": "test-key",
+                    "timeout_s": 30,
+                }
+            },
+        )
+    )
+
+    assert out["plan"]["steps"][0]["id"] == "mcp-step-1"
+    user_prompt = captured["user_prompt"]
+    assert "## Available MCP Tools" in user_prompt
+    assert "`read_file`" in user_prompt
+    assert "Reads a file from the workspace." in user_prompt
+    assert "`run_tests`" in user_prompt
+    # Schema properties are emitted for tools that have them
+    assert "path" in user_prompt
+
+
+def test_planner_omits_mcp_tool_catalog_block_when_mcp_tools_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When state['mcp_tools'] is [] the ## Available MCP Tools block must NOT appear."""
+    captured: dict[str, str] = {}
+
+    class _FakeInferenceClient:
+        def __init__(self, *, base_url: str, api_key: str, timeout_s: int = 60) -> None:
+            self.base_url = base_url
+            self.api_key = api_key
+            self.timeout_s = timeout_s
+
+        def close(self) -> None:
+            return None
+
+        def chat_completion(
+            self,
+            *,
+            model: str,
+            system_prompt: str,
+            user_prompt: str,
+            temperature: float,
+            max_tokens: int = 1200,
+        ) -> str:
+            captured["user_prompt"] = user_prompt
+            return json.dumps(
+                {
+                    "steps": [
+                        {
+                            "id": "empty-mcp-step-1",
+                            "description": "No MCP tools in context.",
+                            "tools": [],
+                            "expected_outcome": "Plan generated without MCP catalog.",
+                            "files_touched": [],
+                        }
+                    ],
+                    "verification": [],
+                    "rollback": "No rollback needed.",
+                }
+            )
+
+    monkeypatch.setattr(planner_module, "InferenceClient", _FakeInferenceClient)
+    planner(
+        _base_state(
+            request="inspect repository",
+            _repo_root=".",
+            mcp_tools=[],
+            _models={
+                "planner": {
+                    "provider": "remote_digitalocean",
+                    "model": "anthropic-claude-3.5-haiku",
+                    "temperature": 0.1,
+                }
+            },
+            _model_provider_runtime={
+                "digitalocean": {
+                    "base_url": "https://inference.do-ai.run/v1",
+                    "api_key": "test-key",
+                    "timeout_s": 30,
+                }
+            },
+        )
+    )
+
+    assert "## Available MCP Tools" not in captured["user_prompt"]
+
+
+def test_planner_mcp_tool_catalog_uses_runtime_tools_not_hardcoded_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tool names in the catalog are derived from state['mcp_tools'], never hard-coded."""
+    captured: dict[str, str] = {}
+
+    class _FakeInferenceClient:
+        def __init__(self, *, base_url: str, api_key: str, timeout_s: int = 60) -> None:
+            self.base_url = base_url
+            self.api_key = api_key
+            self.timeout_s = timeout_s
+
+        def close(self) -> None:
+            return None
+
+        def chat_completion(
+            self,
+            *,
+            model: str,
+            system_prompt: str,
+            user_prompt: str,
+            temperature: float,
+            max_tokens: int = 1200,
+        ) -> str:
+            captured["user_prompt"] = user_prompt
+            return json.dumps(
+                {
+                    "steps": [
+                        {
+                            "id": "dynamic-step-1",
+                            "description": "Dynamic tools referenced.",
+                            "tools": [],
+                            "expected_outcome": "Catalog block contains only runtime tools.",
+                            "files_touched": [],
+                        }
+                    ],
+                    "verification": [],
+                    "rollback": "No rollback needed.",
+                }
+            )
+
+    monkeypatch.setattr(planner_module, "InferenceClient", _FakeInferenceClient)
+    # Provide unusual tool names that could not be hard-coded
+    custom_tool_name = "xYz_custom_runtime_tool_99"
+    planner(
+        _base_state(
+            request="use custom tool",
+            _repo_root=".",
+            mcp_tools=[
+                {"name": custom_tool_name, "description": "A custom runtime tool.", "server_name": "custom"},
+            ],
+            _models={
+                "planner": {
+                    "provider": "remote_digitalocean",
+                    "model": "anthropic-claude-3.5-haiku",
+                    "temperature": 0.0,
+                }
+            },
+            _model_provider_runtime={
+                "digitalocean": {
+                    "base_url": "https://inference.do-ai.run/v1",
+                    "api_key": "test-key",
+                    "timeout_s": 30,
+                }
+            },
+        )
+    )
+
+    assert f"`{custom_tool_name}`" in captured["user_prompt"]
+    assert "## Available MCP Tools" in captured["user_prompt"]
