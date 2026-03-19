@@ -53,7 +53,7 @@ The previous version of this document said the graph was still `planner -> execu
 
 - `py/src/lg_orch/nodes/context_builder.py` is a good baseline: repo map, AST summary, and semantic hits are useful building blocks.
 - `py/src/lg_orch/memory.py` prunes by count and character length, not by token budget, salience, or recoverability value.
-- There is no explicit “stable prefix” layer containing durable repo facts versus an “ephemeral working set” layer containing loop-local evidence.
+- There is no explicit "stable prefix" layer containing durable repo facts versus an "ephemeral working set" layer containing loop-local evidence.
 
 ### 3.4 MCP readiness
 
@@ -70,7 +70,7 @@ The previous version of this document said the graph was still `planner -> execu
 
 ## 4. Pragmatic target design
 
-The right target is not “full SOTA everywhere.” It is a narrow set of changes that make the current architecture materially more autonomous and observable without turning the repository into an experimental multi-agent platform.
+The right target is not "full SOTA everywhere." It is a narrow set of changes that make the current architecture materially more autonomous and observable without turning the repository into an experimental multi-agent platform.
 
 ### 4.1 Implement now
 
@@ -87,7 +87,7 @@ Implement these changes now:
 4. **Enforce the budgets that already exist in config.**
    - `max_tool_calls_per_loop` and `max_patch_bytes` are configured but not yet enforced in the main loop.
 5. **Persist loop summaries.**
-   - After each failed loop, store a compressed “what changed / what failed / what to try next” fact pack for the next planner pass.
+   - After each failed loop, store a compressed "what changed / what failed / what to try next" fact pack for the next planner pass.
 
 #### B. Add real heterogeneous routing
 
@@ -146,6 +146,30 @@ Those are real 2026 patterns, but they are not the next correct move for this re
 ## 5. Short execution roadmap before coding
 
 This section replaces the older implementation order below it. The older version assumed missing routing and loop structure that now already exist in the codebase.
+
+---
+
+## Wave 0 — Security Hardening (Priority 0 — Prerequisite for any multi-tenant deployment)
+
+**Goal:** Eliminate the approval token forgery vulnerability before any production or multi-tenant deployment. This wave has no dependencies and must be completed before Wave 10 RBAC work is meaningful.
+
+**Status:** PLANNED
+
+### Security gap: unsigned approval tokens
+
+[`rs/runner/src/approval.rs`](../rs/runner/src/approval.rs:58) currently produces tokens using `format!("approve:{challenge_id}")` — a plain string with no cryptographic signature, no server secret, no expiry, and no nonce. Any party that can observe a token in transit can forge one for a different `challenge_id`.
+
+**Required changes:**
+
+- **HMAC-SHA256 signed tokens** — replace `format!("approve:{challenge_id}")` in [`rs/runner/src/approval.rs`](../rs/runner/src/approval.rs) with `hmac_sha256(secret, challenge_id + ":" + iat + ":" + exp)` where `secret` is loaded from `LG_RUNNER_APPROVAL_SECRET` env var at startup; abort if env var is absent in non-dev mode.
+- **`iat`/`exp` claims** — embed issued-at and expiry timestamps (ISO 8601 or Unix epoch) in the token payload before signing. Default expiry: 15 minutes. Tokens presented after expiry must be rejected with `401 Expired`.
+- **Nonce** — add a random 128-bit nonce to the signed payload to prevent replay attacks.
+- **Token verification in approval handler** — update the `POST /approve` handler to re-derive the HMAC, compare in constant time, and check expiry before accepting the approval action.
+- **Secret rotation support** — support a `LG_RUNNER_APPROVAL_SECRET_PREVIOUS` env var for zero-downtime key rotation; accept tokens signed by either current or previous secret during the rotation window.
+- **Config guard** — [`rs/runner/src/config.rs`](../rs/runner/src/config.rs) must expose an `approval_secret_required: bool` flag defaulting to `true`; setting it `false` must emit a `WARN` log and is only valid in `dev` profile.
+- **Tests** — add property-based tests (`proptest`) verifying that a token generated for `challenge_id=A` is rejected for `challenge_id=B`, and that expired tokens are rejected.
+
+---
 
 ### Wave 1: documentation sync and shipping baseline
 
@@ -521,13 +545,250 @@ Status: **COMPLETE**
   - [`rs/runner/src/config.rs`](../rs/runner/src/config.rs): `SandboxConfig` struct with `workspace_path` (default `/workspace`) and `enforce_read_only_root`; [`rs/runner/src/sandbox.rs`](../rs/runner/src/sandbox.rs): `validate_write_path()` enforcing workspace confinement.
   - [`py/src/lg_orch/k8s_sandbox.py`](../py/src/lg_orch/k8s_sandbox.py): `validate_deployment_manifest()` + `generate_sandbox_config_toml()`.
 
+---
+
 ## Wave 10 — Production Hardening and Enterprise Features
 
-Status: PLANNED
+**Goal:** Make the platform viable for production multi-tenant deployment: distributed tracing, horizontal scaling, RBAC, audit exports, and SLA-aware routing.
 
-- [ ] Distributed tracing (OpenTelemetry) across Python orchestrator and Rust runner
-- [ ] Horizontal scaling: stateless orchestrator with Redis-backed checkpoint store
-- [ ] RBAC and multi-tenant isolation for the run API
-- [ ] Audit log export (structured JSONL, S3/GCS sink)
-- [ ] SLA-aware model routing: latency budget per lane with automatic degradation
-- [ ] GitOps deployment pipeline (ArgoCD/Flux integration for infra/k8s/)
+**Status:** PLANNED
+
+### 10.1 Distributed tracing — OpenTelemetry span propagation Python↔Rust
+
+Current state: [`py/src/lg_orch/trace.py`](../py/src/lg_orch/trace.py) emits structured JSON events; [`rs/runner/src/auth.rs`](../rs/runner/src/auth.rs) has no trace context extraction. Spans are not correlated across the HTTP boundary.
+
+- **Python side** — add `opentelemetry-sdk` and `opentelemetry-otlp` to [`py/pyproject.toml`](../py/pyproject.toml); instrument [`py/src/lg_orch/tools/runner_client.py`](../py/src/lg_orch/tools/runner_client.py) to inject `traceparent` / `tracestate` W3C headers on every outbound HTTP request to the runner; instrument all node entry/exit points as child spans; configure OTLP exporter pointing at `OTEL_EXPORTER_OTLP_ENDPOINT` env var.
+- **Rust side** — add `tracing-opentelemetry` and `opentelemetry-otlp` to [`rs/runner/Cargo.toml`](../rs/runner/Cargo.toml); extract `traceparent` from inbound request headers in [`rs/runner/src/auth.rs`](../rs/runner/src/auth.rs); attach extracted span context to the `tracing` subscriber so all child spans appear under the orchestrator trace.
+- **Config** — expose `[telemetry] otlp_endpoint` in [`configs/runtime.prod.toml`](../configs/runtime.prod.toml); default to disabled in `runtime.dev.toml`.
+- **Tests** — add integration test asserting that a single orchestration run produces a root span with child spans from both Python and Rust with matching `trace_id`.
+
+### 10.2 Prometheus `/metrics` endpoint
+
+- **Python orchestrator** — expose `GET /metrics` via `prometheus-client` on the same FastAPI app; instrument: active runs gauge, run duration histogram (by lane), LLM call counter (by provider/model), tool call counter (by tool name), approval pending gauge.
+- **Rust runner** — expose `GET /metrics` via `metrics` + `metrics-exporter-prometheus` crates; instrument: tool execution duration histogram (by tool name), sandbox type counter, tool error counter (by error class), approval token verifications counter.
+- **Kubernetes** — add `prometheus.io/scrape: "true"` annotations to [`infra/k8s/deployment.yaml`](../infra/k8s/deployment.yaml) and [`infra/k8s/runner-deployment.yaml`](../infra/k8s/runner-deployment.yaml).
+
+### 10.3 Stateless orchestrator with distributed checkpoint store
+
+Current state: [`py/src/lg_orch/checkpointing.py`](../py/src/lg_orch/checkpointing.py) uses `SqliteCheckpointSaver` which writes to a local file. This prevents horizontal scaling — all replicas must share the same SQLite file or checkpoints are lost on pod restart.
+
+- **Redis backend** — implement `RedisCheckpointSaver(CheckpointSaver)` in [`py/src/lg_orch/checkpointing.py`](../py/src/lg_orch/checkpointing.py) using `redis.asyncio`; key schema: `checkpoint:{run_id}:{thread_ts}`; TTL: configurable via `[checkpointing] ttl_seconds` in runtime config.
+- **Postgres backend** — implement `PostgresCheckpointSaver(CheckpointSaver)` as an alternative; table: `checkpoints(run_id TEXT, thread_ts TEXT, data JSONB, created_at TIMESTAMPTZ)`; use `asyncpg`.
+- **Backend selector** — `checkpointing.py` `build_saver(config)` factory reads `[checkpointing] backend = "sqlite" | "redis" | "postgres"` from runtime config; `sqlite` remains default for dev.
+- **`RunStore` namespace enforcement** — [`py/src/lg_orch/run_store.py`](../py/src/lg_orch/run_store.py) `namespace` column exists but is not enforced in queries; add `WHERE namespace = :namespace` to all `list_runs`, `get_run`, `update_run`, `delete_run` queries; `namespace` sourced from JWT `sub` claim (see section 10.5).
+
+### 10.4 HorizontalPodAutoscaler for orchestrator pods
+
+- Add [`infra/k8s/hpa.yaml`](../infra/k8s/hpa.yaml): `HorizontalPodAutoscaler` targeting the orchestrator `Deployment`; scale on CPU utilization (target 60%) and custom metric `orchestrator_active_runs` (target 5 per replica); min replicas: 2, max replicas: 10.
+- Requires stateless checkpoint store (section 10.3) as a prerequisite.
+
+### 10.5 RBAC and multi-tenant JWT isolation
+
+Current state: [`py/src/lg_orch/remote_api.py`](../py/src/lg_orch/remote_api.py) has `auth_mode = "bearer"` in prod config but no JWT claims parsing. The `namespace` field in `RunStore` is populated but not enforced.
+
+- **JWT middleware** — add FastAPI middleware in [`py/src/lg_orch/remote_api.py`](../py/src/lg_orch/remote_api.py) that: verifies RS256/HS256 JWT signature using `python-jose`; extracts `sub` claim as namespace; extracts `roles` claim for role-based checks; rejects requests with `401` if token is missing, expired, or has invalid signature.
+- **Namespace injection** — pass extracted `sub` as `namespace` to all `RunStore` and `CheckpointSaver` operations so tenants cannot access each other's runs.
+- **Role checks** — enforce that `POST /runs` requires `role: operator`; `DELETE /runs/{id}` requires `role: admin`; approval endpoints require `role: approver`.
+- **Config** — expose `[auth] jwt_secret` (HS256) or `[auth] jwks_url` (RS256) in runtime config; `dev` profile may set `auth_mode = "none"` to bypass JWT for local development.
+
+### 10.6 Audit log export
+
+- **Structured JSONL** — [`py/src/lg_orch/trace.py`](../py/src/lg_orch/trace.py) already writes trace events; add `AuditLogger` that filters trace events matching approval decisions, run starts, run cancellations, and policy gate blocks, and writes them to a rolling JSONL file under `logs/audit/`.
+- **S3/GCS sink** — add optional `[audit] sink = "s3" | "gcs"` config; use `aioboto3` / `google-cloud-storage` to upload completed JSONL segments.
+- **Retention** — implement local rotation with configurable `[audit] retention_days`.
+
+### 10.7 SLA-aware model routing with automatic degradation
+
+- Extend [`py/src/lg_orch/model_routing.py`](../py/src/lg_orch/model_routing.py) with `SlaRoutingPolicy`: each lane carries a `latency_budget_ms` from runtime config; if the current provider's rolling p95 latency exceeds the budget, automatically demote to the next configured provider for that lane.
+- Record p95 latency per provider using a sliding window of the last 50 calls; expose as `model_routing_p95_latency_ms` Prometheus gauge (by provider/lane).
+
+### 10.8 GitOps deployment pipeline
+
+- Add [`infra/k8s/argocd-app.yaml`](../infra/k8s/argocd-app.yaml): ArgoCD `Application` resource targeting `infra/k8s/` in the repository; sync policy: automated with self-heal; health checks: custom health check for `HealingLoop` CRD if present.
+- Document Flux alternative in [`docs/deployment_digitalocean.md`](../docs/deployment_digitalocean.md).
+
+---
+
+## Wave 11 — Evaluation Correctness and Benchmarking
+
+**Goal:** Move the eval suite from structural/routing correctness to outcome correctness. The current suite confirms that the graph routes properly; it does not confirm that the agent produces working code. This wave makes eval the primary quality gate.
+
+**Status:** PLANNED
+
+### Current eval gap
+
+All existing eval fixtures (`test-repair`, `real-world-repair`) set `_runner_enabled: False` in their task definitions. This means no actual code is executed, no diff is applied, and no pytest run is performed. The golden file assertions test graph shape and routing metadata — not correctness.
+
+### 11.1 Enable runner execution for existing fixtures
+
+- Set `_runner_enabled: True` in [`eval/tasks/test-repair.json`](../eval/tasks/test-repair.json) and [`eval/tasks/real_world_repair.json`](../eval/tasks/real_world_repair.json).
+- Update [`eval/run.py`](../eval/run.py) to: (1) apply the produced diff to the fixture `src/` directory; (2) run `pytest` on the fixture `tests/` directory inside the runner sandbox; (3) assert that pytest exits 0 after patch application. Use the `benchmark_class`, `target_file`, and `target_function` fields already present in `EvalTask` to scope the pytest invocation.
+- Add a `post_apply_pytest_pass: bool` field to the golden file assertion schema; update [`eval/golden/test-repair.json`](../eval/golden/test-repair.json) and [`eval/golden/real-world-repair.json`](../eval/golden/real-world-repair.json).
+
+### 11.2 pass@k scoring
+
+- Add `--pass-at-k K` argument to [`eval/run.py`](../eval/run.py); when `K > 1`, run each task `K` times independently and compute `pass@k = 1 - C(n-c, k) / C(n, k)` where `n=K` and `c` is the number of passing runs.
+- Emit `pass_at_k` field in `eval/run.py` JSON output alongside existing `pass_rate`.
+- Default `K=1` to preserve backward compatibility with CI pipeline.
+
+### 11.3 SWE-bench lite adapter
+
+- Add [`eval/tasks/swe_bench_lite/`](../eval/tasks/swe_bench_lite/) directory containing 10–20 curated SWE-bench lite task definitions converted to the platform's `EvalTask` schema.
+- Fields required per task: `instance_id`, `repo`, `base_commit`, `problem_statement`, `patch` (ground truth for reference), `test_cmd`, `fail_to_pass` test list, `pass_to_pass` test list.
+- Add [`eval/run.py`](../eval/run.py) `--dataset swe-bench-lite` flag that: (1) clones/fetches the target repo at `base_commit` into an isolated worktree; (2) submits the `problem_statement` as the run objective; (3) collects the produced diff; (4) applies the diff; (5) runs `test_cmd`; (6) asserts all `fail_to_pass` tests now pass and all `pass_to_pass` tests still pass.
+- Report resolved rate (SWE-bench standard metric) in addition to `pass@k`.
+
+### 11.4 Correctness eval CI job
+
+- Add `eval-correctness` job to [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) that runs `python eval/run.py --dataset test-repair --pass-at-k 3`; fails if `pass@3 < 0.67`.
+- Run nightly (not on every commit) to avoid LLM API cost at CI time; schedule: `cron: "0 2 * * *"`.
+
+---
+
+## Wave 12 — Streaming Completeness and UX Parity
+
+**Goal:** Token-level streaming must flow end-to-end from every LLM call site through the SSE endpoint to both the SPA and the VS Code extension. The current implementation streams only `interactive` lane nodes; `coder`, `reporter`, and all non-interactive nodes block until the full completion arrives.
+
+**Status:** PLANNED
+
+### 12.1 Current streaming coverage gap
+
+- [`py/src/lg_orch/nodes/router.py`](../py/src/lg_orch/nodes/router.py) and [`py/src/lg_orch/nodes/planner.py`](../py/src/lg_orch/nodes/planner.py): stream path wired for `interactive` lane only.
+- [`py/src/lg_orch/nodes/coder.py`](../py/src/lg_orch/nodes/coder.py): no streaming path; blocks on full completion.
+- [`py/src/lg_orch/nodes/reporter.py`](../py/src/lg_orch/nodes/reporter.py): no streaming path; blocks on full completion.
+- `GET /runs/{id}/stream` SSE endpoint in [`py/src/lg_orch/remote_api.py`](../py/src/lg_orch/remote_api.py): carries `node_start`, `node_end`, `tool_result` lifecycle events only; no `llm_chunk` events.
+- [`py/src/lg_orch/spa/main.js`](../py/src/lg_orch/spa/main.js) and the VS Code extension: consume only lifecycle events; token chunks are not rendered incrementally.
+
+### 12.2 `llm_chunk` event emission from all nodes
+
+- Add `push_run_event(run_id, {"type": "llm_chunk", "node": node_name, "text": chunk})` calls inside the async generator loops in every node that calls `InferenceClient.chat_completion_stream()`. The `push_run_event` helper already exists in [`py/src/lg_orch/remote_api.py`](../py/src/lg_orch/remote_api.py).
+- Wire streaming path in [`py/src/lg_orch/nodes/coder.py`](../py/src/lg_orch/nodes/coder.py): replace the blocking `chat_completion()` call with `chat_completion_stream()` and accumulate chunks; emit one `llm_chunk` event per token batch (or per chunk as received).
+- Wire streaming path in [`py/src/lg_orch/nodes/reporter.py`](../py/src/lg_orch/nodes/reporter.py): same pattern as coder.
+- Extend the `interactive` lane path in [`py/src/lg_orch/nodes/router.py`](../py/src/lg_orch/nodes/router.py) to emit `llm_chunk` events (currently only the stream result is accumulated, not forwarded to SSE).
+
+### 12.3 Router LLM call — demote keyword classifier to fast-path only
+
+Current state: [`py/src/lg_orch/nodes/router.py`](../py/src/lg_orch/nodes/router.py:30) uses `_classify_intent()` keyword matching as the primary classifier. An LLM call is only made when `provider != "local"`. The "router as topology selector" vision in [`docs/agent_collaboration_2026.md`](agent_collaboration_2026.md) is half-implemented.
+
+- Invert the priority: always use LLM inference for routing decisions; use `_classify_intent()` only as a fast-path cache hit for trivially classifiable inputs (e.g. single-word commands).
+- The LLM call must use the `interactive` lane (lowest latency model tier) with a token budget of ≤ 200 tokens.
+- Emit the routing decision as a `llm_chunk`-compatible stream so the SPA can show the router "thinking."
+- Add `router_used_llm: bool` and `router_confidence: float` fields to `OrchState` for telemetry.
+
+### 12.4 SPA token chunk rendering
+
+- Update [`py/src/lg_orch/spa/main.js`](../py/src/lg_orch/spa/main.js) to handle `{"type": "llm_chunk", "node": ..., "text": ...}` SSE events: append `text` to the activity stream entry for the named node; render progressively without waiting for `node_end`.
+- Add a typing-cursor animation (`|` blinking) to the active node panel while chunks are arriving.
+- Cap the visible rolling buffer to the last 2000 characters per node to prevent DOM growth.
+
+### 12.5 VS Code extension token chunk rendering
+
+- Update [`vscode-extension/src/RunPanelProvider.ts`](../vscode-extension/src/RunPanelProvider.ts) to forward `llm_chunk` events from the SSE stream to the webview panel; render token chunks in the active node's output area incrementally.
+
+---
+
+## Wave 13 — Production Hardening: Sandbox, Tooling, and Schema Correctness
+
+**Goal:** Close the remaining correctness and security gaps in the runner sandbox, SCIP toolchain integration, inference client, schema enforcement, and multi-tenant isolation. These are pre-production correctness items that do not require new features, only correct implementations of already-designed components.
+
+**Status:** PLANNED
+
+### 13.1 cgroup v2 resource limits for LinuxNamespace sandbox
+
+Current state: [`rs/runner/src/sandbox.rs`](../rs/runner/src/sandbox.rs) `LinuxNamespace` path calls `unshare(CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWNS)` but applies no cgroup v2 resource limits. A sandboxed process can exhaust CPU, memory, or pids on the host.
+
+- Before calling `unshare`, write the process to a new cgroup v2 hierarchy: `echo $PID > /sys/fs/cgroup/lg-runner/{run_id}/cgroup.procs`.
+- Apply limits from `SandboxConfig`: `cpu.max` (e.g. `100000 100000` = 100% of one core), `memory.max` (e.g. `512M`), `pids.max` (e.g. `64`).
+- Read limit values from [`rs/runner/src/config.rs`](../rs/runner/src/config.rs) `SandboxConfig` fields `cpu_quota_us`, `memory_limit_bytes`, `pids_max`; expose in [`configs/runtime.prod.toml`](../configs/runtime.prod.toml).
+- On cleanup, remove the cgroup: `rmdir /sys/fs/cgroup/lg-runner/{run_id}`.
+- Gate behind `cfg!(target_os = "linux")` compile flag; no-op on macOS/Windows dev builds.
+- Add integration test asserting that a process exceeding `memory.max` is killed with `SIGKILL`.
+
+### 13.2 Firecracker REST API correctness
+
+Current state: [`rs/runner/src/tools/exec.rs`](../rs/runner/src/tools/exec.rs:135) `MicroVmEphemeral` path passes `--kernel` and `--rootfs` as CLI args to a `firecracker` binary. This is a stub architecture — real Firecracker does not accept those arguments; it exposes a Unix socket REST API.
+
+**Decision required (choose one):**
+
+**Option A — Implement real Firecracker REST client:**
+- Replace the CLI invocation in [`rs/runner/src/tools/exec.rs`](../rs/runner/src/tools/exec.rs) with a `FirecrackerClient` struct that: (1) spawns `firecracker --api-sock /tmp/firecracker-{id}.sock`; (2) issues `PUT /machine-config` with `vcpu_count`, `mem_size_mib`; (3) issues `PUT /boot-source` with `kernel_image_path`, `boot_args`; (4) issues `PUT /drives/rootfs` with `path_on_host`, `is_root_device: true`, `is_read_only: false`; (5) issues `PUT /actions {"action_type": "InstanceStart"}`; (6) polls `GET /` until VM is ready; (7) runs the tool command via the guest agent; (8) issues `PUT /actions {"action_type": "SendCtrlAltDel"}` to shut down.
+- Add `firecracker_socket_path` to `SandboxConfig`.
+
+**Option B — Demote MicroVmEphemeral to tech debt and use LinuxNamespace as production tier:**
+- Remove or `#[cfg(feature = "firecracker")]` gate the `MicroVmEphemeral` arm in [`rs/runner/src/tools/exec.rs`](../rs/runner/src/tools/exec.rs).
+- Document in [`docs/architecture.md`](../docs/architecture.md) that `LinuxNamespace` + cgroup v2 + gVisor Kubernetes runtime is the supported production sandbox tier.
+- Add `WARN` log if `sandbox_mode = "MicroVmEphemeral"` is configured in non-dev builds.
+
+Recommended: implement Option B immediately and track Option A as a future milestone.
+
+### 13.3 SCIP toolchain integration — `scripts/index_repo.sh`
+
+Current state: [`py/src/lg_orch/scip_index.py`](../py/src/lg_orch/scip_index.py) reads `scip_index.json` sidecar files that must be pre-generated externally. There is no toolchain that produces them. Without this, all cross-repo dependency analysis in [`py/src/lg_orch/multi_repo.py`](../py/src/lg_orch/multi_repo.py) operates on empty indexes.
+
+- Add [`scripts/index_repo.sh`](../scripts/index_repo.sh): shell script that: (1) detects repo language (Python: run `scip-python index --project-root . --output scip_index.json`; Rust: run `rust-analyzer scip .` to emit SCIP); (2) converts SCIP binary format to the `scip_index.json` sidecar schema expected by [`py/src/lg_orch/scip_index.py`](../py/src/lg_orch/scip_index.py) using `scip convert --from scip.bin --to json`; (3) writes the sidecar to `{repo_root}/scip_index.json`.
+- Add `scripts/index_repo.sh` invocation to the `bootstrap_local.cmd` / `bootstrap_local.sh` scripts.
+- Document the sidecar schema and toolchain requirements in [`docs/architecture.md`](../docs/architecture.md).
+- Add a CI step that generates and validates the sidecar for the platform's own Python codebase.
+
+### 13.4 InferenceClient function calling / tool calling support
+
+Current state: [`py/src/lg_orch/tools/inference_client.py`](../py/src/lg_orch/tools/inference_client.py) sends freeform chat completions only. It does not support the `tools` parameter for OpenAI-format structured tool calls.
+
+- Add `tools: list[dict] | None = None` and `tool_choice: str | dict | None = None` parameters to `InferenceClient.chat_completion()` and `chat_completion_stream()`.
+- When `tools` is provided, include `"tools": tools` and `"tool_choice": tool_choice` in the request body.
+- Parse `tool_calls` from the response `message` and return them as a typed `ToolCallResult` alongside the text content.
+- Add `FunctionCallingClient` thin wrapper in [`py/src/lg_orch/tools/inference_client.py`](../py/src/lg_orch/tools/inference_client.py) that accepts a `Callable` registry and auto-dispatches tool calls.
+- Update [`py/tests/test_inference_client.py`](../py/tests/test_inference_client.py) with mock-based tests for function call request construction and response parsing.
+
+### 13.5 Verifier report JSON schema enforcement
+
+Current state: [`schemas/verifier_report.schema.json`](../schemas/verifier_report.schema.json) exists but [`py/src/lg_orch/nodes/verifier.py`](../py/src/lg_orch/nodes/verifier.py) builds its output from Python dataclasses without validating the emitted JSON against the schema at runtime.
+
+- Add `jsonschema.validate(report_dict, VERIFIER_REPORT_SCHEMA)` call in [`py/src/lg_orch/nodes/verifier.py`](../py/src/lg_orch/nodes/verifier.py) before returning the verifier report; raise `VerifierSchemaError` (subclass of `ValueError`) on validation failure.
+- Load `schemas/verifier_report.schema.json` at module import time using `importlib.resources`; cache as a module-level constant.
+- Add schema validation to the CI pipeline's `lint-python` job: `python -c "import jsonschema; jsonschema.validate(json.load(open('eval/golden/test-repair.json')), ...)"`.
+- Apply the same pattern to `schemas/planner_output.schema.json` in [`py/src/lg_orch/nodes/planner.py`](../py/src/lg_orch/nodes/planner.py) and `schemas/tool_envelope.schema.json` in [`rs/runner/src/envelope.rs`](../rs/runner/src/envelope.rs) (Rust: `serde` + `jsonschema` crate).
+
+---
+
+## 10. Market Parity Status
+
+This section tracks the platform's competitive position against the three primary reference points: LangGraph Cloud, AutoGen, and CrewAI.
+
+| Feature | LangGraph Cloud | AutoGen | CrewAI | This Platform | Gap Status |
+|---|---|---|---|---|---|
+| Stateful graph orchestration | ✅ Native | Partial | Partial | ✅ Complete (Wave 3) | CLOSED |
+| Streaming token output | ✅ Full end-to-end | ✅ Full | Partial | ⚠️ Interactive lane only | OPEN — Wave 12 |
+| Approval / human-in-the-loop | ✅ Interrupt API | Partial | No | ✅ Complete (Wave 8) | CLOSED |
+| Multi-agent fan-out | ✅ Subgraph | ✅ GroupChat | ✅ Crew | ✅ Complete (Wave 8) | CLOSED |
+| Persistent checkpoint store | ✅ Redis/Postgres | No | No | ⚠️ SQLite only | OPEN — Wave 10.3 |
+| Horizontal scaling | ✅ Managed | No | No | ⚠️ Single replica | OPEN — Wave 10.3/10.4 |
+| RBAC / multi-tenant | ✅ Managed | No | No | ⚠️ Bearer token, no JWT claims | OPEN — Wave 10.5 |
+| Distributed tracing (OTEL) | ✅ Native | No | No | ⚠️ Custom JSON events only | OPEN — Wave 10.1 |
+| Prometheus metrics | ✅ Native | No | No | ⚠️ Not present | OPEN — Wave 10.2 |
+| Formal correctness eval (pass@k) | No | No | No | ⚠️ Structural only | OPEN — Wave 11 |
+| SWE-bench adapter | No | No | No | ⚠️ Not present | OPEN — Wave 11 |
+| Token-level streaming SPA | Partial | No | No | ⚠️ Lifecycle events only | OPEN — Wave 12 |
+| Function calling in inference client | ✅ Native | ✅ Native | ✅ Native | ⚠️ Freeform only | OPEN — Wave 13.4 |
+| Sandboxed execution | Limited | No | No | ✅ gVisor/LinuxNamespace (Wave 9) | CLOSED |
+| cgroup v2 resource limits | N/A | No | No | ⚠️ No resource limits | OPEN — Wave 13.1 |
+| SCIP cross-repo indexing | No | No | No | ⚠️ Sidecar reads only, no toolchain | OPEN — Wave 13.3 |
+| Signed approval tokens | N/A | N/A | N/A | ⚠️ Plain string, no HMAC | OPEN — Wave 0 |
+| Self-healing test loop | No | No | No | ✅ Complete (Wave 9) | CLOSED |
+| Neurosymbolic verification | No | No | No | ✅ Invariant checker (Wave 9) | CLOSED |
+| Long-term memory (tripartite) | No | Partial | No | ✅ Complete (Wave 9) | CLOSED |
+| Git worktree branch isolation | No | No | No | ✅ Complete (Wave 8) | CLOSED |
+| VS Code extension | No | No | No | ✅ Complete (Wave 7) | CLOSED |
+
+### Priority order for remaining open gaps
+
+1. **Wave 0** — Approval token HMAC: security prerequisite, no deployment without it.
+2. **Wave 10.5** — JWT/RBAC: blocks multi-tenant deployment.
+3. **Wave 10.3** — Distributed checkpoint store: blocks horizontal scaling.
+4. **Wave 13.4** — InferenceClient function calling: required for structured tool orchestration.
+5. **Wave 12** — Full streaming: highest perceived-latency gap vs. competitors.
+6. **Wave 11** — Correctness eval: required before claiming benchmark parity.
+7. **Wave 13.1** — cgroup v2: sandbox hardening.
+8. **Wave 13.3** — SCIP toolchain: unlocks cross-repo analysis.
+9. **Wave 13.5** — Schema enforcement: correctness gate.
+10. **Wave 10.1/10.2** — OTEL + Prometheus: observability for production ops.
