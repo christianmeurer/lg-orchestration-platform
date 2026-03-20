@@ -35,3 +35,82 @@ spec:
       ports:
         - protocol: TCP
           port: 8765
+---
+# NetworkPolicy for the lula-orch orchestrator.
+#
+# Egress design decisions:
+#   - DNS (53/udp+tcp) to kube-system is always required for service discovery.
+#   - LLM provider egress is allowed to 0.0.0.0/0 on TCP 443 because model
+#     endpoints (OpenAI, Anthropic, Azure OpenAI, etc.) use dynamic IPs and CDNs.
+#     In hardened deployments this CIDR should be narrowed to known provider
+#     IP ranges once they are stable (e.g. via an egress firewall or FQDN policy).
+#   - Internal Redis (6379) and Postgres (5432) are scoped to the same namespace.
+#   - Communication to lula-runner is scoped by pod label on TCP 8088.
+#   - OTLP telemetry (4317 gRPC / 4318 HTTP) is scoped to the same namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: orch-network-policy
+  namespace: lula-orch
+spec:
+  podSelector:
+    matchLabels:
+      app: lula-orch
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8765
+  egress:
+    # DNS resolution via kube-dns
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # LLM provider APIs (external HTTPS).
+    # TODO: restrict to known provider CIDRs in hardened deployments.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+    # Internal Redis
+    - to:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 6379
+    # Internal Postgres
+    - to:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 5432
+    # lula-runner service
+    - to:
+        - podSelector:
+            matchLabels:
+              app: lula-runner
+      ports:
+        - protocol: TCP
+          port: 8088
+    # OTLP telemetry collector (gRPC + HTTP)
+    - to:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
