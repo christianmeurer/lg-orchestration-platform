@@ -153,11 +153,15 @@ pub struct ToolEnvelope {
 }
 
 impl ToolEnvelope {
+    /// Construct a successful [`ToolEnvelope`].
+    ///
+    /// `timing_ms` defaults to `0`; callers at the dispatch boundary
+    /// (i.e. [`crate::tools::dispatch_tool`]) overwrite it once after the
+    /// tool completes so there is a single source of truth for wall-clock time.
     pub fn ok(
         tool: impl Into<String>,
         stdout: impl Into<String>,
         artifacts: Value,
-        timing_ms: u128,
     ) -> Self {
         Self {
             tool: tool.into(),
@@ -172,17 +176,19 @@ impl ToolEnvelope {
             undo: None,
             mcp: None,
             route: None,
-            timing_ms,
+            timing_ms: 0,
             artifacts,
         }
     }
 
+    /// Construct a failed [`ToolEnvelope`].
+    ///
+    /// `timing_ms` defaults to `0` for the same reason as [`Self::ok`].
     pub fn err(
         tool: impl Into<String>,
         exit_code: i32,
         stderr: impl Into<String>,
         artifacts: Value,
-        timing_ms: u128,
     ) -> Self {
         Self {
             tool: tool.into(),
@@ -197,7 +203,7 @@ impl ToolEnvelope {
             undo: None,
             mcp: None,
             route: None,
-            timing_ms,
+            timing_ms: 0,
             artifacts,
         }
     }
@@ -245,7 +251,7 @@ mod tests {
 
     #[test]
     fn test_envelope_ok_fields() {
-        let env = ToolEnvelope::ok("read_file", "content", json!({"path": "a.txt"}), 42);
+        let env = ToolEnvelope::ok("read_file", "content", json!({"path": "a.txt"}));
         assert_eq!(env.tool, "read_file");
         assert!(env.ok);
         assert_eq!(env.exit_code, 0);
@@ -257,13 +263,14 @@ mod tests {
         assert!(env.snapshot.is_none());
         assert!(env.undo.is_none());
         assert!(env.mcp.is_none());
-        assert_eq!(env.timing_ms, 42);
+        // timing_ms defaults to 0; dispatch_tool overwrites it
+        assert_eq!(env.timing_ms, 0);
         assert_eq!(env.artifacts, json!({"path": "a.txt"}));
     }
 
     #[test]
     fn test_envelope_err_fields() {
-        let env = ToolEnvelope::err("exec", 1, "failed", json!(null), 100);
+        let env = ToolEnvelope::err("exec", 1, "failed", json!(null));
         assert_eq!(env.tool, "exec");
         assert!(!env.ok);
         assert_eq!(env.exit_code, 1);
@@ -275,12 +282,12 @@ mod tests {
         assert!(env.snapshot.is_none());
         assert!(env.undo.is_none());
         assert!(env.mcp.is_none());
-        assert_eq!(env.timing_ms, 100);
+        assert_eq!(env.timing_ms, 0);
     }
 
     #[test]
     fn test_envelope_ok_serializes() {
-        let env = ToolEnvelope::ok("health", "ok", json!({}), 0);
+        let env = ToolEnvelope::ok("health", "ok", json!({}));
         let json_str = serde_json::to_string(&env).unwrap();
         let val: Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(val["tool"], "health");
@@ -294,7 +301,7 @@ mod tests {
 
     #[test]
     fn test_envelope_with_diagnostics() {
-        let env = ToolEnvelope::err("exec", 1, "fail", json!({}), 10).with_diagnostics(vec![
+        let env = ToolEnvelope::err("exec", 1, "fail", json!({})).with_diagnostics(vec![
             Diagnostic {
                 file: "src/main.rs".to_string(),
                 line: Some(10),
@@ -310,7 +317,7 @@ mod tests {
 
     #[test]
     fn test_envelope_with_isolation_and_approval() {
-        let env = ToolEnvelope::ok("exec", "ok", json!({}), 1)
+        let env = ToolEnvelope::ok("exec", "ok", json!({}))
             .with_isolation(IsolationMetadata {
                 backend: "safe_fallback".to_string(),
                 degraded: true,
@@ -409,8 +416,8 @@ mod tests {
     fn test_batch_response_serializes() {
         let resp = ToolBatchExecuteResponse {
             results: vec![
-                ToolEnvelope::ok("a", "ok", json!({}), 1),
-                ToolEnvelope::err("b", 1, "fail", json!(null), 2),
+                ToolEnvelope::ok("a", "ok", json!({})),
+                ToolEnvelope::err("b", 1, "fail", json!(null)),
             ],
         };
         let json_str = serde_json::to_string(&resp).unwrap();

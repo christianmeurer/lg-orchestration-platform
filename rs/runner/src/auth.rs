@@ -104,7 +104,7 @@ pub async fn rate_limit(
     axum::extract::State(cfg): axum::extract::State<RunnerConfig>,
     req: Request,
     next: Next,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, crate::errors::ApiError> {
     let request_id = req
         .headers()
         .get("x-request-id")
@@ -117,7 +117,7 @@ pub async fn rate_limit(
         Ok(next.run(req).await)
     } else {
         tracing::warn!(request_id = %request_id, "rate_limit_exceeded");
-        Err(StatusCode::TOO_MANY_REQUESTS)
+        Err(crate::errors::ApiError::RateLimitExceeded)
     }
 }
 

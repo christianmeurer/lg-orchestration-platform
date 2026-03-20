@@ -14,7 +14,7 @@ use crate::errors::ApiError;
 use crate::sandbox::{
     apply_cgroup_v2_limits, cleanup_cgroup, pre_validate_exec, CgroupLimits, SandboxBackend,
 };
-use crate::tools::snapshot_for_operation;
+use crate::tools::{snapshot_for_operation, ToolContext};
 
 const STDERR_ARTIFACT_MAX_CHARS: usize = 8_000;
 
@@ -31,11 +31,10 @@ struct ExecIn {
     approval: Option<ApprovalTokenInput>,
 }
 
+/// Returns `true` if `cmd` is in the canonical allowlist defined in
+/// [`crate::config::ALLOWED_EXEC_COMMANDS`].  Single source of truth.
 fn allowed_cmd(cmd: &str) -> bool {
-    matches!(
-        cmd,
-        "uv" | "python" | "pytest" | "ruff" | "mypy" | "cargo" | "git"
-    )
+    ALLOWED_EXEC_COMMANDS.contains(&cmd)
 }
 
 fn truncate_chars(input: &str, max_chars: usize) -> (String, bool) {
@@ -60,7 +59,7 @@ fn diagnostics_to_artifact_value(diagnostics: &[Diagnostic]) -> Value {
     skip_all,
     fields(tool = "exec", challenge_id = tracing::field::Empty)
 )]
-pub async fn exec(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiError> {
+pub async fn exec(cfg: &RunnerConfig, ctx: &mut ToolContext, input: Value) -> Result<ToolEnvelope, ApiError> {
     let inp: ExecIn =
         serde_json::from_value(input).map_err(|e| ApiError::BadRequest(e.to_string()))?;
     let cmd = inp.cmd.trim();
@@ -114,7 +113,7 @@ pub async fn exec(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiE
     };
 
     let snapshot_metadata = if operation_class == "state_modifying_exec" {
-        Some(snapshot_for_operation(cfg, operation_class).await?)
+        Some(snapshot_for_operation(cfg, ctx, operation_class).await?)
     } else {
         None
     };
@@ -272,7 +271,6 @@ pub async fn exec(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiE
                 "isolation_reason": isolation.reason,
                 "isolation_policy_constraints": isolation.policy_constraints,
             }),
-            0,
         )
         .with_isolation(isolation);
         if let Some(approval) = approval_metadata {
@@ -308,7 +306,6 @@ pub async fn exec(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiE
                 "stderr_chars": stderr_chars,
                 "diagnostics": diagnostics_artifact,
             }),
-            0,
         )
         .with_diagnostics(diagnostics)
         .with_isolation(isolation);
@@ -354,6 +351,7 @@ fn is_state_modifying_command(cmd: &str, args: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::ToolContext;
 
     #[test]
     fn test_allowed_cmd_valid() {
@@ -401,7 +399,8 @@ mod tests {
     async fn test_exec_forbidden_command() {
         let td = tempfile::tempdir().unwrap();
         let cfg = RunnerConfig::new(td.path(), Some("dev"), None).unwrap();
-        let result = exec(&cfg, json!({"cmd": "rm", "args": ["-rf", "/"]})).await;
+        let mut ctx = ToolContext::default();
+        let result = exec(&cfg, &mut ctx, json!({"cmd": "rm", "args": ["-rf", "/"]})).await;
         assert!(result.is_err());
     }
 
@@ -409,7 +408,8 @@ mod tests {
     async fn test_exec_bad_input() {
         let td = tempfile::tempdir().unwrap();
         let cfg = RunnerConfig::new(td.path(), Some("dev"), None).unwrap();
-        let result = exec(&cfg, json!({"wrong": "fields"})).await;
+        let mut ctx = ToolContext::default();
+        let result = exec(&cfg, &mut ctx, json!({"wrong": "fields"})).await;
         assert!(result.is_err());
     }
 
@@ -417,7 +417,8 @@ mod tests {
     async fn test_exec_state_modifying_requires_approval() {
         let td = tempfile::tempdir().unwrap();
         let cfg = RunnerConfig::new(td.path(), Some("dev"), None).unwrap();
-        let result = exec(&cfg, json!({"cmd": "git", "args": ["commit"]})).await;
+        let mut ctx = ToolContext::default();
+        let result = exec(&cfg, &mut ctx, json!({"cmd": "git", "args": ["commit"]})).await;
         assert!(matches!(result, Err(ApiError::ApprovalRequired(_))));
     }
 
@@ -444,9 +445,11 @@ mod tests {
     async fn test_exec_prompt_injection_blocked() {
         let td = tempfile::tempdir().unwrap();
         let cfg = RunnerConfig::new(td.path(), Some("dev"), None).unwrap();
+        let mut ctx = ToolContext::default();
         // U+202E right-to-left override triggers detect_prompt_injection
         let result = exec(
             &cfg,
+            &mut ctx,
             json!({"cmd": "git", "args": ["log", "safe\u{202E}evil"]}),
         )
         .await;
@@ -467,7 +470,8 @@ mod tests {
     async fn test_exec_sandbox_resolution_recorded_in_artifacts() {
         let td = tempfile::tempdir().unwrap();
         let cfg = RunnerConfig::new(td.path(), Some("dev"), None).unwrap();
-        let result = exec(&cfg, json!({"cmd": "git", "args": ["--version"]})).await;
+        let mut ctx = ToolContext::default();
+        let result = exec(&cfg, &mut ctx, json!({"cmd": "git", "args": ["--version"]})).await;
         // git --version should succeed; if not available in CI, it may fail with Other
         match result {
             Ok(env) => {
@@ -486,11 +490,11 @@ mod tests {
         if cfg!(target_os = "windows") {
             return;
         }
-        
+
         // Need to set env vars to force MicroVmEphemeral resolution
         std::env::set_var("LG_RUNNER_SANDBOX_BACKEND", "microvm");
         std::env::set_var("LG_RUNNER_MICROVM_ENABLED", "1");
-        
+
         // Create dummy files so the path checks pass
         let td = tempfile::tempdir().unwrap();
         let fc_bin = td.path().join("firecracker");
@@ -499,17 +503,18 @@ mod tests {
         std::fs::write(&fc_bin, "").unwrap();
         std::fs::write(&kernel, "").unwrap();
         std::fs::write(&rootfs, "").unwrap();
-        
+
         std::env::set_var("LG_RUNNER_FIRECRACKER_BIN", fc_bin.to_str().unwrap());
         std::env::set_var("LG_RUNNER_MICROVM_KERNEL_IMAGE", kernel.to_str().unwrap());
         std::env::set_var("LG_RUNNER_MICROVM_ROOTFS_IMAGE", rootfs.to_str().unwrap());
 
         let cfg = RunnerConfig::new(td.path(), Some("dev"), None).unwrap();
-        
-        // We expect it to fail execution because the dummy files aren't real executables, 
+        let mut ctx = ToolContext::default();
+
+        // We expect it to fail execution because the dummy files aren't real executables,
         // but we can check the returned envelope's metadata to verify it attempted MicroVM.
-        let result = exec(&cfg, json!({"cmd": "python", "args": ["--version"]})).await;
-        
+        let result = exec(&cfg, &mut ctx, json!({"cmd": "python", "args": ["--version"]})).await;
+
         // Clean up env vars
         std::env::remove_var("LG_RUNNER_SANDBOX_BACKEND");
         std::env::remove_var("LG_RUNNER_MICROVM_ENABLED");

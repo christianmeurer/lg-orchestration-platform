@@ -128,8 +128,11 @@ impl RateLimiter {
     }
 }
 
-/// Commands permitted by the exec tool's allowlist.
-/// Kept in sync with `tools/exec.rs::allowed_cmd`.
+/// Canonical allowlist of commands permitted by the exec tool.
+///
+/// This is the **single source of truth** for allowed commands.
+/// [`crate::tools::exec`] and [`crate::invariants`] both reference this
+/// constant so there is no risk of the two lists diverging.
 pub const ALLOWED_EXEC_COMMANDS: &[&str] = &[
     "uv", "python", "pytest", "ruff", "mypy", "cargo", "git",
 ];
