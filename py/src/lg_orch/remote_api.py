@@ -29,6 +29,7 @@ from urllib.parse import parse_qs, urlsplit
 # ---------------------------------------------------------------------------
 # Public re-exports from submodules (backward-compatible names)
 # ---------------------------------------------------------------------------
+from lg_orch.api.admin import register_admin_routes  # noqa: F401
 from lg_orch.api.approvals import approval_token_for_challenge as _approval_token_for_challenge  # noqa: F401
 from lg_orch.api.metrics import LULA_RUNS_TOTAL, handle_metrics as _handle_metrics  # noqa: F401
 from lg_orch.api.service import (  # noqa: F401
@@ -388,33 +389,16 @@ def _api_http_dispatch(
         subpath = "/".join(path_parts[1:]) if len(path_parts) > 1 else ""
         return create_spa_router(spa_dir)(subpath)
 
-    if route == "/healing/start":
-        if method != "POST":
-            return _json_response(405, {"error": "method_not_allowed"})
-        try:
-            payload_raw = json.loads((request_body or b"{}").decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return _json_response(400, {"error": "invalid_json"})
-        if not isinstance(payload_raw, dict):
-            return _json_response(400, {"error": "invalid_json"})
-        repo_path_raw = payload_raw.get("repo_path")
-        if not isinstance(repo_path_raw, str) or not repo_path_raw.strip():
-            return _json_response(400, {"error": "missing_repo_path"})
-        try:
-            poll_interval = float(payload_raw.get("poll_interval_seconds", 60.0))
-        except (TypeError, ValueError):
-            poll_interval = 60.0
-        return _json_response(201, service.start_healing_loop(repo_path_raw.strip(), poll_interval_seconds=poll_interval))
-
-    if method == "POST" and len(path_parts) == 3 and path_parts[0] == "healing" and path_parts[2] == "stop":
-        loop_id = path_parts[1]
-        result_stop = service.stop_healing_loop(loop_id)
-        return _json_response(200, result_stop) if result_stop is not None else _json_response(404, {"error": "not_found", "loop_id": loop_id})
-
-    if method == "GET" and len(path_parts) == 3 and path_parts[0] == "healing" and path_parts[2] == "jobs":
-        loop_id = path_parts[1]
-        jobs_payload = service.get_healing_jobs(loop_id)
-        return _json_response(200, jobs_payload) if jobs_payload is not None else _json_response(404, {"error": "not_found", "loop_id": loop_id})
+    # Admin routes (healing loop control) — delegated to lg_orch.api.admin
+    _admin_response = register_admin_routes(
+        service,
+        method=method,
+        route=route,
+        path_parts=path_parts,
+        request_body=request_body,
+    )
+    if _admin_response is not None:
+        return _admin_response
 
     return _json_response(404, {"error": "not_found"})
 

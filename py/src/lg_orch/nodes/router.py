@@ -1,3 +1,20 @@
+"""Router node — intent classification and orchestration lane selection.
+
+dict[str, Any] constraint
+-------------------------
+LangGraph passes a *partial* graph state dict to each node; it does not
+guarantee that every field defined in the schema will be present.  For this
+reason, the public node function signature uses ``dict[str, Any]`` rather than
+the typed :class:`~lg_orch.state.OrchState` model.
+
+Typed boundary validation
+--------------------------
+At the top of :func:`router`, we attempt a best-effort
+``OrchState.model_validate()`` over the non-None keys that arrived.  If it
+succeeds we get a validated snapshot for documentation purposes; any
+``ValidationError`` is logged as a warning and execution continues using plain
+dict access (no behavior change to the running graph).
+"""
 from __future__ import annotations
 
 import json
@@ -5,12 +22,14 @@ import re
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from lg_orch.logging import get_logger
 from lg_orch.memory import approx_token_count
 from lg_orch.model_routing import latest_model_route, record_inference_telemetry, record_model_route
 from lg_orch.nodes._utils import extract_json_block as _extract_json_block_fn
 from lg_orch.nodes._utils import resolve_inference_client
-from lg_orch.state import RouterDecision
+from lg_orch.state import OrchState, RouterDecision
 from lg_orch.tools import InferenceClient
 from lg_orch.trace import append_event
 
@@ -258,6 +277,16 @@ def _router_model_output(
 
 def router(state: dict[str, Any]) -> dict[str, Any]:
     log = get_logger()
+    # Typed boundary validation — best-effort; does not change behaviour.
+    try:
+        _validated = OrchState.model_validate(
+            {k: v for k, v in state.items() if v is not None}
+        )
+    except ValidationError as exc:
+        log.warning("router_node received invalid state", validation_errors=str(exc))
+        _validated = None
+    _ = _validated  # referenced only for documentation; dict access used below
+
     default_route = _default_route(state)
     state_with_default = {**state, "route": default_route.model_dump()}
     state_with_default = record_model_route(

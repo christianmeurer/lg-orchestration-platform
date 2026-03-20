@@ -549,3 +549,81 @@ def test_default_namespace_invalid_chars_raises(monkeypatch: pytest.MonkeyPatch)
         root = _write_config(td, content=toml)
         with pytest.raises(ConfigError, match="default_namespace"):
             load_config(repo_root=root)
+
+
+# ---------------------------------------------------------------------------
+# pydantic-settings env-var override tests (Item 1)
+# ---------------------------------------------------------------------------
+
+
+def test_runner_base_url_env_overrides_toml(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LG_RUNNER_BASE_URL env var must override the TOML runner.base_url."""
+    monkeypatch.setenv("LG_PROFILE", "dev")
+    monkeypatch.setenv("LG_RUNNER_BASE_URL", "http://k8s-runner:9999")
+    with tempfile.TemporaryDirectory() as td:
+        root = _write_config(td)
+        cfg = load_config(repo_root=root)
+        assert cfg.runner.base_url == "http://k8s-runner:9999"
+
+
+def test_auth_mode_env_overrides_toml(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LG_AUTH_MODE env var must override TOML remote_api.auth_mode."""
+    monkeypatch.setenv("LG_PROFILE", "dev")
+    # _VALID_TOML sets auth_mode = "bearer", but env should win with "off"
+    monkeypatch.setenv("LG_AUTH_MODE", "off")
+    with tempfile.TemporaryDirectory() as td:
+        root = _write_config(td)
+        cfg = load_config(repo_root=root)
+        assert cfg.remote_api.auth_mode == "off"
+
+
+def test_auth_mode_env_invalid_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LG_AUTH_MODE must reject unknown values."""
+    from lg_orch.config import ConfigError
+
+    monkeypatch.setenv("LG_PROFILE", "dev")
+    monkeypatch.setenv("LG_AUTH_MODE", "invalid-mode")
+    with tempfile.TemporaryDirectory() as td:
+        root = _write_config(td)
+        with pytest.raises(ConfigError, match="LG_AUTH_MODE"):
+            load_config(repo_root=root)
+
+
+def test_runner_api_key_env_overrides_via_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LG_RUNNER_API_KEY env var (via RunnerSettings) must override config api_key."""
+    monkeypatch.setenv("LG_PROFILE", "dev")
+    monkeypatch.setenv("LG_RUNNER_API_KEY", "settings-key-xyz")
+    with tempfile.TemporaryDirectory() as td:
+        root = _write_config(td)
+        cfg = load_config(repo_root=root)
+        assert cfg.runner.api_key == "settings-key-xyz"
+
+
+def test_auth_jwks_url_env_overrides_toml(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LG_AUTH_JWKS_URL env var must override TOML jwks_url."""
+    monkeypatch.setenv("LG_PROFILE", "dev")
+    monkeypatch.setenv("LG_AUTH_JWKS_URL", "https://my-issuer.example.com/.well-known/jwks.json")
+    with tempfile.TemporaryDirectory() as td:
+        root = _write_config(td)
+        cfg = load_config(repo_root=root)
+        assert cfg.remote_api.jwks_url == "https://my-issuer.example.com/.well-known/jwks.json"
+
+
+def test_checkpoint_backend_env_overrides_toml(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LG_CHECKPOINT_BACKEND env var must override TOML checkpoint.backend."""
+    monkeypatch.setenv("LG_PROFILE", "dev")
+    monkeypatch.setenv("LG_CHECKPOINT_BACKEND", "redis")
+    with tempfile.TemporaryDirectory() as td:
+        root = _write_config(td)
+        cfg = load_config(repo_root=root)
+        assert cfg.checkpoint.backend == "redis"
+
+
+def test_checkpoint_namespace_env_overrides_toml(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LG_CHECKPOINT_NAMESPACE env var must override TOML checkpoint.namespace."""
+    monkeypatch.setenv("LG_PROFILE", "dev")
+    monkeypatch.setenv("LG_CHECKPOINT_NAMESPACE", "tenant-prod")
+    with tempfile.TemporaryDirectory() as td:
+        root = _write_config(td)
+        cfg = load_config(repo_root=root)
+        assert cfg.checkpoint.namespace == "tenant-prod"

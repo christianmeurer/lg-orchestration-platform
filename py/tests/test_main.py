@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from lg_orch.main import _build_parser, _trace_http_response, cli
 
@@ -203,4 +204,119 @@ def test_trace_view_rejects_invalid_json(tmp_path: Path) -> None:
 
     rc = cli(["trace-view", str(trace_path)])
     assert rc == 2
+
+
+# ---------------------------------------------------------------------------
+# Command dispatch structure tests (Item 2)
+# ---------------------------------------------------------------------------
+
+
+def test_cli_trace_view_dispatches_to_trace_command(tmp_path: Path) -> None:
+    """cli() must delegate trace-view to commands.trace.trace_view_command."""
+    trace_path = tmp_path / "trace.json"
+    payload = {"run_id": "x", "request": "r", "final": "done"}
+    trace_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with patch("lg_orch.commands.trace.trace_view_command", return_value=0) as mock_cmd:
+        rc = cli(["trace-view", str(trace_path)])
+    assert rc == 0
+    mock_cmd.assert_called_once()
+
+
+def test_cli_trace_site_dispatches_to_trace_command(tmp_path: Path) -> None:
+    """cli() must delegate trace-site to commands.trace.trace_site_command."""
+    trace_dir = tmp_path / "runs"
+    trace_dir.mkdir()
+
+    with patch("lg_orch.commands.trace.trace_site_command", return_value=0) as mock_cmd:
+        rc = cli(["trace-site", str(trace_dir)])
+    assert rc == 0
+    mock_cmd.assert_called_once()
+
+
+def test_cli_serve_api_dispatches_to_serve_command(tmp_path: Path) -> None:
+    """cli() must delegate serve-api to commands.serve.serve_command."""
+    with patch("lg_orch.commands.serve.serve_command", return_value=0) as mock_cmd:
+        rc = cli(["serve-api", "--host", "127.0.0.1", "--port", "9999"])
+    assert rc == 0
+    mock_cmd.assert_called_once()
+
+
+def test_cli_run_dispatches_to_run_command(tmp_path: Path) -> None:
+    """cli() must delegate run to commands.run.run_command."""
+    # Provide a minimal config so load_config does not fail.
+    cfg_dir = tmp_path / "configs"
+    cfg_dir.mkdir()
+    (cfg_dir / "runtime.dev.toml").write_text(
+        """\
+[models.router]
+provider = "local"
+model = "deterministic"
+temperature = 0.0
+
+[models.planner]
+provider = "local"
+model = "deterministic"
+temperature = 0.0
+
+[budgets]
+max_loops = 1
+max_tool_calls_per_loop = 1
+max_patch_bytes = 1
+tool_timeout_s = 1
+
+[policy]
+network_default = "deny"
+require_approval_for_mutations = false
+
+[runner]
+base_url = "http://localhost:8088"
+root_dir = "."
+
+[mcp]
+enabled = false
+""",
+        encoding="utf-8",
+    )
+
+    with patch("lg_orch.commands.run.run_command", return_value=0) as mock_cmd:
+        rc = cli(
+            ["run", "hello world", "--repo-root", str(tmp_path)]
+        )
+    assert rc == 0
+    mock_cmd.assert_called_once()
+
+
+def test_run_command_callable_directly(tmp_path: Path) -> None:
+    """run_command() must be importable and callable as a standalone function."""
+    from lg_orch.commands.run import run_command
+
+    assert callable(run_command)
+
+
+def test_serve_command_callable_directly() -> None:
+    """serve_command() must be importable and callable as a standalone function."""
+    from lg_orch.commands.serve import serve_command
+
+    assert callable(serve_command)
+
+
+def test_trace_commands_callable_directly() -> None:
+    """trace_view_command / trace_site_command / trace_serve_command importable."""
+    from lg_orch.commands.trace import (
+        trace_serve_command,
+        trace_site_command,
+        trace_view_command,
+    )
+
+    assert callable(trace_view_command)
+    assert callable(trace_site_command)
+    assert callable(trace_serve_command)
+
+
+def test_heal_command_callable_directly() -> None:
+    """heal_command() must be importable and callable as a standalone function."""
+    from lg_orch.commands.heal import heal_command
+
+    assert callable(heal_command)
 

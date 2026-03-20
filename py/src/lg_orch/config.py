@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
 from lg_orch.audit import AuditConfig
 
 _SHA256_RE = _re.compile(r'^[0-9a-f]{64}$')
@@ -169,6 +172,48 @@ def _env_bool(name: str, *, default: bool) -> bool:
     if value in {"0", "false", "no", "off"}:
         return False
     raise ConfigError(f"missing/invalid env {name}")
+
+
+# ---------------------------------------------------------------------------
+# pydantic-settings: typed env-var overlay for the most repetitive sections
+# ---------------------------------------------------------------------------
+
+
+class RunnerSettings(BaseSettings):
+    """Env-var overrides for the [runner] section.
+
+    These values shadow TOML values when the corresponding env var is set.
+    Important for K8s deployments where secrets arrive as env vars, not TOML.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="LG_RUNNER_", extra="ignore")
+
+    base_url: str = Field(default="")
+    timeout: float = Field(default=0.0, ge=0)
+    api_key: str = Field(default="")
+
+
+class AuthSettings(BaseSettings):
+    """Env-var overrides for the [remote_api] auth sub-section."""
+
+    model_config = SettingsConfigDict(env_prefix="LG_AUTH_", extra="ignore")
+
+    mode: str = Field(default="")
+    jwks_url: str = Field(default="")
+    secret: str = Field(default="")
+
+
+class CheckpointSettings(BaseSettings):
+    """Env-var overrides for the [checkpoint] section."""
+
+    model_config = SettingsConfigDict(env_prefix="LG_CHECKPOINT_", extra="ignore")
+
+    backend: str = Field(default="")
+    db_path: str = Field(default="")
+    namespace: str = Field(default="")
+    thread_prefix: str = Field(default="")
+    redis_url: str = Field(default="")
+    redis_ttl_seconds: int = Field(default=0, ge=0)
 
 
 def _optional_str_tuple(tbl: dict[str, object], key: str) -> tuple[str, ...]:
@@ -854,6 +899,85 @@ def load_config(*, repo_root: Path) -> AppConfig:
                 )
             )
     sla = SlaConfig(entries=sla_entries)
+
+    # ------------------------------------------------------------------
+    # pydantic-settings overlay: env vars win over TOML values
+    # ------------------------------------------------------------------
+    _runner_s = RunnerSettings()
+    if _runner_s.base_url:
+        runner = Runner(
+            base_url=_runner_s.base_url,
+            root_dir=runner.root_dir,
+            api_key=runner.api_key,
+        )
+    if _runner_s.api_key:
+        runner = Runner(
+            base_url=runner.base_url,
+            root_dir=runner.root_dir,
+            api_key=_runner_s.api_key or None,
+        )
+
+    _auth_s = AuthSettings()
+    _new_auth_mode = remote_api.auth_mode
+    _new_jwks_url = remote_api.jwks_url
+    _new_jwt_secret = remote_api.jwt_secret
+    if _auth_s.mode:
+        if _auth_s.mode not in {"off", "bearer"}:
+            raise ConfigError("LG_AUTH_MODE must be one of: off, bearer")
+        _new_auth_mode = _auth_s.mode
+    if _auth_s.jwks_url:
+        _new_jwks_url = _auth_s.jwks_url
+    if _auth_s.secret:
+        _new_jwt_secret = _auth_s.secret
+    if _new_auth_mode != remote_api.auth_mode or _new_jwks_url != remote_api.jwks_url or _new_jwt_secret != remote_api.jwt_secret:
+        remote_api = RemoteAPIConfig(
+            auth_mode=_new_auth_mode,
+            bearer_token=remote_api.bearer_token,
+            allow_unauthenticated_healthz=remote_api.allow_unauthenticated_healthz,
+            trust_forwarded_headers=remote_api.trust_forwarded_headers,
+            access_log_enabled=remote_api.access_log_enabled,
+            run_store_path=remote_api.run_store_path,
+            rate_limit_rps=remote_api.rate_limit_rps,
+            procedure_cache_path=remote_api.procedure_cache_path,
+            default_namespace=remote_api.default_namespace,
+            jwt_secret=_new_jwt_secret,
+            jwks_url=_new_jwks_url,
+        )
+
+    _cp_s = CheckpointSettings()
+    _cp_kwargs: dict[str, object] = {
+        "enabled": checkpoint.enabled,
+        "db_path": checkpoint.db_path,
+        "namespace": checkpoint.namespace,
+        "thread_prefix": checkpoint.thread_prefix,
+        "backend": checkpoint.backend,
+        "redis_url": checkpoint.redis_url,
+        "postgres_dsn": checkpoint.postgres_dsn,
+        "redis_ttl_seconds": checkpoint.redis_ttl_seconds,
+    }
+    _cp_changed = False
+    if _cp_s.backend:
+        if _cp_s.backend not in {"sqlite", "redis", "postgres"}:
+            raise ConfigError("LG_CHECKPOINT_BACKEND must be one of: sqlite, redis, postgres")
+        _cp_kwargs["backend"] = _cp_s.backend
+        _cp_changed = True
+    if _cp_s.db_path:
+        _cp_kwargs["db_path"] = _cp_s.db_path
+        _cp_changed = True
+    if _cp_s.namespace:
+        _cp_kwargs["namespace"] = _cp_s.namespace
+        _cp_changed = True
+    if _cp_s.thread_prefix:
+        _cp_kwargs["thread_prefix"] = _cp_s.thread_prefix
+        _cp_changed = True
+    if _cp_s.redis_url:
+        _cp_kwargs["redis_url"] = _cp_s.redis_url
+        _cp_changed = True
+    if _cp_s.redis_ttl_seconds > 0:
+        _cp_kwargs["redis_ttl_seconds"] = _cp_s.redis_ttl_seconds
+        _cp_changed = True
+    if _cp_changed:
+        checkpoint = Checkpoint(**_cp_kwargs)  # type: ignore[arg-type]
 
     return AppConfig(
         profile=profile,

@@ -1,4 +1,20 @@
-"""Intent classification and main planner_node orchestrator."""
+"""Intent classification and main planner_node orchestrator.
+
+dict[str, Any] constraint
+-------------------------
+LangGraph passes a *partial* graph state dict to each node; it does not
+guarantee that every field defined in the schema will be present.  For this
+reason, the public node function signature uses ``dict[str, Any]`` rather than
+the typed :class:`~lg_orch.state.OrchState` model.
+
+Typed boundary validation
+--------------------------
+At the top of :func:`planner`, we attempt a best-effort
+``OrchState.model_validate()`` over the non-None keys that arrived.  If it
+succeeds we get a validated snapshot for documentation purposes; any
+``ValidationError`` is logged as a warning and execution continues using plain
+dict access (no behavior change to the running graph).
+"""
 from __future__ import annotations
 
 import json
@@ -6,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import jsonschema
+from pydantic import ValidationError
 
 from lg_orch.logging import get_logger
 from lg_orch.memory import (
@@ -31,7 +48,7 @@ from lg_orch.nodes._planner_prompt import (
     _recovery_action_from_packet,
 )
 from lg_orch.nodes._utils import resolve_inference_client
-from lg_orch.state import PlannerOutput
+from lg_orch.state import OrchState, PlannerOutput
 from lg_orch.tools import InferenceClient
 from lg_orch.trace import append_event
 
@@ -130,6 +147,16 @@ def _planner_model_output(
 
 def planner(state: dict[str, Any]) -> dict[str, Any]:
     log = get_logger()
+    # Typed boundary validation — best-effort; does not change behaviour.
+    try:
+        _validated = OrchState.model_validate(
+            {k: v for k, v in state.items() if v is not None}
+        )
+    except ValidationError as exc:
+        log.warning("planner_node received invalid state", validation_errors=str(exc))
+        _validated = None
+    _ = _validated  # referenced only for documentation; dict access used below
+
     state = ensure_history_policy(state)
     state = record_model_route(
         state,
