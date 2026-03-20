@@ -8,8 +8,9 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from jose import ExpiredSignatureError, JWTError, jwt
-from jose.exceptions import JWKError
+import jwt as pyjwt
+from jwt.exceptions import ExpiredSignatureError as _JWTExpiredSignatureError
+from jwt.exceptions import InvalidTokenError as _JWTInvalidTokenError
 
 # ---------------------------------------------------------------------------
 # Background JWKS refresh
@@ -174,23 +175,33 @@ def verify_token(token: str, settings: JWTSettings) -> TokenClaims:
 
     try:
         if settings.jwt_secret:
-            payload: dict[str, Any] = jwt.decode(
+            payload: dict[str, Any] = pyjwt.decode(
                 token,
                 settings.jwt_secret,
                 algorithms=["HS256"],
             )
         elif settings.jwks_url:
-            jwks = _fetch_jwks(settings.jwks_url)
-            payload = jwt.decode(
+            jwks_data = _fetch_jwks(settings.jwks_url)
+            jwks_obj = pyjwt.PyJWKS(jwks_data)
+            unverified_header = pyjwt.get_unverified_header(token)
+            kid = unverified_header.get("kid")
+            signing_key: pyjwt.PyJWK | None = None
+            for jwk in jwks_obj.keys:
+                if kid is None or jwk.key_id == kid:
+                    signing_key = jwk
+                    break
+            if signing_key is None:
+                raise AuthError(401, "jwks_key_not_found")
+            payload = pyjwt.decode(
                 token,
-                jwks,
+                signing_key.key,
                 algorithms=["RS256"],
             )
         else:
             raise AuthError(401, "auth_not_configured")
-    except ExpiredSignatureError:
+    except _JWTExpiredSignatureError:
         raise AuthError(401, "token_expired") from None
-    except (JWTError, JWKError) as exc:
+    except _JWTInvalidTokenError as exc:
         raise AuthError(401, f"invalid_token: {exc}") from exc
 
     sub = str(payload.get("sub", "")).strip()

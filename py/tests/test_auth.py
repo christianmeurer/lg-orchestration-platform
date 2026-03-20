@@ -8,7 +8,7 @@ import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
-from jose import jwt
+import jwt as pyjwt
 
 from lg_orch.auth import (
     AuthError,
@@ -48,7 +48,7 @@ def _make_token(
         "iat": now,
         "exp": now + exp_offset,
     }
-    return jwt.encode(payload, secret, algorithm=algorithm)
+    return pyjwt.encode(payload, secret, algorithm=algorithm)
 
 
 def _expired_token(*, sub: str = "user-expired", roles: list[str] | None = None) -> str:
@@ -128,7 +128,7 @@ class TestVerifyToken:
     def test_missing_sub_raises_401(self) -> None:
         now = int(time.time())
         payload: dict[str, Any] = {"iat": now, "exp": now + 3600, "roles": []}
-        token = jwt.encode(payload, _SECRET, algorithm="HS256")
+        token = pyjwt.encode(payload, _SECRET, algorithm="HS256")
         with pytest.raises(AuthError) as exc_info:
             verify_token(token, _ENABLED)
         assert exc_info.value.status_code == 401
@@ -137,7 +137,7 @@ class TestVerifyToken:
     def test_roles_defaults_to_empty_list(self) -> None:
         now = int(time.time())
         payload: dict[str, Any] = {"sub": "noone", "iat": now, "exp": now + 3600}
-        token = jwt.encode(payload, _SECRET, algorithm="HS256")
+        token = pyjwt.encode(payload, _SECRET, algorithm="HS256")
         claims = verify_token(token, _ENABLED)
         assert claims.roles == []
 
