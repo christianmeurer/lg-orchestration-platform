@@ -53,7 +53,9 @@ graph TD
     end
 ```
 
-The orchestrator implements three routing lanes: **interactive** (low-complexity tasks resolved in a single plan/execute/verify cycle), **deep_planning** (multi-step tasks requiring planner decomposition into typed `AgentHandoff` envelopes), and **recovery** (failed verifications re-enter at `policy_gate` with a failure classification and revised handoff). The Rust runner's sandbox stack degrades gracefully: Firecracker MicroVM (full VM isolation via vsock guest agent, Linux-only) → Linux namespaces (user/PID/net/mount isolation, Linux-only) → SafeFallback (process isolation with env stripping and command allowlist, all platforms).
+The orchestrator implements three routing lanes: **interactive** (low-complexity tasks resolved in a single plan/execute/verify cycle), **deep_planning** (multi-step tasks requiring planner decomposition into typed `AgentHandoff` envelopes), and **recovery** (failed verifications re-enter at `policy_gate` with a failure classification and revised handoff). The Rust runner's sandbox stack degrades gracefully: Firecracker MicroVM (full VM isolation via vsock guest agent, Linux-only) → Linux namespaces (user/PID/net/mount isolation, Linux-only) → SafeFallback (process isolation with env stripping and command allowlist, all platforms). The `SandboxPreference::Auto` default selects `LinuxNamespace` on any host where `unshare` is available; `SafeFallback` is only used when neither Firecracker nor `unshare` is present.
+
+The checkpointing subsystem is implemented as a `backends/` subpackage (`py/src/lg_orch/backends/`) with separate modules for SQLite (WAL mode), Redis, and Postgres. Select the backend with `LG_CHECKPOINT_BACKEND=sqlite|redis|postgres`.
 
 ---
 
@@ -163,9 +165,9 @@ All code execution is delegated to the Rust runner (`rs/runner/`), which selects
 
 **Firecracker prerequisites:** `rootfs.ext4` (built via `scripts/build_guest_rootfs.sh`) and `vmlinux` (download from [firecracker-microvm/firecracker](https://github.com/firecracker-microvm/firecracker/releases)) must be present at the paths configured by `LG_RUNNER_ROOTFS_IMAGE` (default `artifacts/rootfs.ext4`) and `LG_RUNNER_KERNEL_IMAGE` (default `artifacts/vmlinux`). In Kubernetes, these are mounted from the node at `/opt/lula/` via a `HostPath` volume; see `infra/k8s/runner-deployment.yaml`.
 
-**Linux namespaces** (`LinuxNamespace`) — User/PID/net/mount namespace isolation via `unshare`. No external dependencies beyond a Linux kernel. Medium security tier; suitable for trusted multi-tenant deployments.
+**Linux namespaces** (`LinuxNamespace`) — User/PID/net/mount namespace isolation via `unshare`. No external dependencies beyond a Linux kernel. Medium security tier; suitable for trusted multi-tenant deployments. **This is the default tier on any Linux host where `unshare` is on `PATH`.**
 
-**Safe fallback** (`SafeFallback`) — Process isolation with `env_clear()`, a command allowlist (`uv`, `python`, `pytest`, `ruff`, `mypy`, `cargo`, `git`), and path confinement. Available on all platforms. Default for local development.
+**Safe fallback** (`SafeFallback`) — Process isolation with `env_clear()`, a command allowlist (`uv`, `python`, `pytest`, `ruff`, `mypy`, `cargo`, `git`), and path confinement. Available on all platforms. Used only when neither Firecracker nor `unshare` is available (e.g. macOS or minimal container images).
 
 In Kubernetes, the runner pod additionally runs under `runtimeClassName: gvisor` with `readOnlyRootFilesystem: true`, `allowPrivilegeEscalation: false`, and `capabilities.drop: [ALL]`.
 
@@ -290,6 +292,17 @@ New features must include a `pytest` unit test in [`py/tests/`](py/tests/). Logi
 - [`docs/platform_console.md`](docs/platform_console.md) — REST API reference and console commands
 - [`eval/fixtures/README.md`](eval/fixtures/README.md) — eval fixture schema; how to add new benchmarks
 - [`eval/golden/README.md`](eval/golden/README.md) — golden assertion schema and pass-rate scoring
+
+---
+
+## Recent Changes (2026-03-20)
+
+- All 12 critical security and correctness defects from the quality audit resolved.
+- Sandbox defaults to `LinuxNamespace` isolation when `unshare` is available.
+- Checkpointing backends split into `py/src/lg_orch/backends/` subpackage.
+- Dependency: `python-jose` → `PyJWT[crypto]`.
+- CI: 80% coverage gate; `trivy-action` pinned to SHA.
+- See [`ROADMAP.md`](ROADMAP.md) and [`docs/quality_report.md`](docs/quality_report.md) for details.
 
 ---
 

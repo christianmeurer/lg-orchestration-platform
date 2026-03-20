@@ -50,7 +50,7 @@ The `remote_api.py` monolith (previously ~2,045 lines) was decomposed in Wave 2 
 | `service.py` | Top-level `RemoteAPIService` wiring: mounts the sub-routers, initialises rate-limit middleware, and owns the server lifecycle |
 | `admin.py` | Healing loop admin routes — force-trigger, status query, and loop-budget override endpoints added in Wave B |
 
-The `remote_api.py` facade in `py/src/lg_orch/remote_api.py` re-exports from these submodules for backward-compatibility.
+The `remote_api.py` facade in `py/src/lg_orch/remote_api.py` re-exports from these submodules for backward-compatibility. The internal request-dispatch logic was refactored from a 234-line `if/elif` chain to a dispatch table of 12 dedicated handler functions, eliminating the linear scan and making handler registration explicit.
 
 ## CLI Commands Subpackage (`py/src/lg_orch/commands/`)
 
@@ -77,6 +77,19 @@ Three `pydantic-settings` classes layer on top of the TOML config files, giving 
 
 This makes Kubernetes Secret injection work without patching TOML files at deploy time — inject `LG_RUNNER_BASE_URL`, `LG_AUTH_MODE`, `LG_CHECKPOINT_BACKEND`, etc. as pod environment variables and the overlay picks them up automatically.
 
+## Checkpointing Backends (`py/src/lg_orch/backends/`)
+
+The checkpointing subsystem was previously implemented as a 1,507-line monolith (`checkpointing.py`) with three backends sharing duplicated `_parse_config()` logic. It has been split into a `backends/` subpackage:
+
+| Module | Backend | Notes |
+|---|---|---|
+| `backends/_base.py` | Abstract base | `CheckpointBackend` ABC; shared `_parse_config()` helper |
+| `backends/sqlite.py` | SQLite (WAL mode) | Default for local/dev; file path via `LG_CHECKPOINT_SQLITE_PATH` |
+| `backends/redis.py` | Redis (async) | TTL-based expiry; `LG_CHECKPOINT_REDIS_URL` |
+| `backends/postgres.py` | PostgreSQL | `LG_CHECKPOINT_POSTGRES_DSN`; advisory locks for concurrent access |
+
+`py/src/lg_orch/checkpointing.py` is retained as a backward-compatibility shim that re-exports the public API from the `backends/` subpackage. New code should import directly from `lg_orch.backends`.
+
 ## Shared Node Utilities (`py/src/lg_orch/nodes/_utils.py`)
 
 A `_utils.py` module under `py/src/lg_orch/nodes/` centralises utilities previously duplicated across executor, verifier, context_builder, router, and planner:
@@ -99,10 +112,20 @@ The runner uses `RunnerConfig` (`rs/runner/src/config.rs`) to enforce path bound
 Each request constructs a `ToolContext` struct that carries the undo pointer for that request's scope. The previous `LAST_UNDO_POINTER` global has been removed; there is no shared mutable state across concurrent batch requests in the tool dispatch path.
 
 ### HMAC Approval Protocol
-The Rust runner validates approval tokens in `rs/runner/src/auth.rs` using HMAC-SHA256 with constant-time comparison (`subtle::ConstantTimeEq`) and TTL enforcement. The Python orchestrator (`py/src/lg_orch/auth.py`, `py/src/lg_orch/api/approvals.py`) now issues and verifies tokens using the same HMAC-SHA256 scheme, bringing both layers to parity.
+The Rust runner validates approval tokens in `rs/runner/src/auth.rs` using HMAC-SHA256 with constant-time comparison (`subtle::ConstantTimeEq`) and TTL enforcement. The Python orchestrator (`py/src/lg_orch/auth.py`, `py/src/lg_orch/api/approvals.py`) now issues and verifies tokens using the same HMAC-SHA256 scheme, bringing both layers to parity. JWT verification uses `PyJWT[crypto]>=2.8,<3` (replacing the unmaintained `python-jose` library).
 
 ### Supply-Chain Scanning
 `rs/deny.toml` configures `cargo-deny` for the Rust workspace. It enforces license allowlists and advisory database checks. The CI workflow runs `cargo deny check` on every pull request.
+
+### Sandbox Tier Selection
+
+`SandboxPreference::Auto` selects the highest available tier at startup:
+
+1. If a Firecracker rootfs and kernel image are configured → `MicroVmEphemeral`
+2. Else if `unshare` is found on `PATH` → **`LinuxNamespace`** (default on standard Linux installs)
+3. Else → `SafeFallback` (process isolation only; not the default when `unshare` is available)
+
+Prior to the fix sprint the `Auto` path fell through to `SafeFallback` on any host where `microvm_enabled = false` and `ns_enabled = false`, meaning most deployments ran with no kernel-level containment. Auto-detection of `unshare` now ensures `LinuxNamespace` is used by default on capable hosts.
 
 ### Available Tools
 The logic for tools is located in `rs/runner/src/tools/`.
@@ -126,7 +149,7 @@ The `rs/guest-agent/` workspace member provides the `lula-guest-agent` binary th
 | Request shape | `{"cmd":"cargo","args":[...],"cwd":"/workspace","env":{...},"timeout_ms":30000}` |
 | Response shape | `{"ok":true,"exit_code":0,"stdout":"...","stderr":"...","timing_ms":1234}` |
 
-The host-side vsock client lives in `rs/runner/src/vsock.rs`. On Linux it creates an `AF_VSOCK` socket via `libc::socket(AF_VSOCK, SOCK_STREAM, 0)`, connects to the guest CID and port, and performs a single request/response exchange wrapped in a tokio timeout. The `FirecrackerVmm` struct in `sandbox.rs` now carries a `cid: u32` field (default 3) populated after `configure_and_start` configures the vsock device via `PUT /vsock`.
+The host-side vsock client lives in `rs/runner/src/vsock.rs`. On Linux it opens the AF_VSOCK device and communicates with the guest over a `UnixStream`-based I/O wrapper (the previous implementation incorrectly wrapped the raw AF_VSOCK file descriptor in `std::net::TcpStream`, which is undefined behavior per the type system). Requests are performed as a single exchange per connection, wrapped in a tokio timeout. The `FirecrackerVmm` struct in `sandbox.rs` carries a `cid: u32` field (default 3) populated after `configure_and_start` configures the vsock device via `PUT /vsock`.
 
 **Linux-only constraint:** All `AF_VSOCK` socket code is guarded by `#[cfg(target_os = "linux")]`. The runner and guest-agent compile and test cleanly on Windows/macOS for development purposes; the `MicroVmEphemeral` execution path returns a graceful `BadRequest` error on those platforms.
 
