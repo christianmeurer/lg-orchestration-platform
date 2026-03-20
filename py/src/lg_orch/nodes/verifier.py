@@ -23,9 +23,20 @@ def _load_verifier_schema() -> dict[str, Any]:
 VERIFIER_SCHEMA: dict[str, Any] = _load_verifier_schema()
 
 from lg_orch.logging import get_logger
-from lg_orch.memory import ensure_history_policy, get_compression_summary, prune_post_verification_history
+from lg_orch.memory import (
+    ensure_history_policy,
+    get_compression_summary,
+    prune_post_verification_history,
+)
 from lg_orch.model_routing import record_model_route, tool_routing_metadata
-from lg_orch.state import AgentHandoff, HandoffEvidence, RecoveryAction, RecoveryPacket, VerificationCheck, VerifierReport
+from lg_orch.state import (
+    AgentHandoff,
+    HandoffEvidence,
+    RecoveryAction,
+    RecoveryPacket,
+    VerificationCheck,
+    VerifierReport,
+)
 from lg_orch.tools import RunnerClient
 from lg_orch.trace import append_event
 
@@ -285,7 +296,7 @@ def _run_formal_verification(
              "ok": False,
              "exit_code": 1,
              "stdout": "",
-             "stderr": f"Failed to execute formal verification: {str(e)}",
+             "stderr": f"Failed to execute formal verification: {e!s}",
              "diagnostics": [],
              "artifacts": {"error": "formal_verification_execution_error"},
              "route": route_metadata

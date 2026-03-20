@@ -5,12 +5,9 @@ import json
 import pathlib
 import threading
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Literal
-
-if TYPE_CHECKING:
-    pass
+from typing import Literal
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +55,7 @@ class AuditSink:
         raise NotImplementedError
 
 
-class S3AuditSink:
+class S3AuditSink(AuditSink):
     """Batches events and uploads them to S3 as JSONL blobs.
 
     *aioboto3* is imported lazily; if not installed the sink is a no-op.
@@ -76,7 +73,7 @@ class S3AuditSink:
 
     async def export(self, event: AuditEvent) -> None:
         try:
-            import aioboto3  # type: ignore[import-untyped]
+            import aioboto3
         except ImportError:
             return
 
@@ -106,11 +103,11 @@ class S3AuditSink:
             session = aioboto3.Session()
             async with session.client("s3", region_name=self._region) as s3:
                 await s3.put_object(Bucket=self._bucket, Key=key, Body=body)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
 
-class GCSAuditSink:
+class GCSAuditSink(AuditSink):
     """Batches events and uploads them to GCS as JSONL blobs.
 
     *google-cloud-storage* is imported lazily; if not installed the sink is a no-op.
@@ -127,7 +124,7 @@ class GCSAuditSink:
 
     async def export(self, event: AuditEvent) -> None:
         try:
-            from google.cloud import storage as gcs  # type: ignore[import-untyped]
+            from google.cloud import storage as gcs
         except ImportError:
             return
 
@@ -158,7 +155,7 @@ class GCSAuditSink:
             bucket = client.bucket(self._bucket)
             blob = bucket.blob(blob_name)
             blob.upload_from_string(body, content_type="application/x-ndjson")
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
 
@@ -234,7 +231,8 @@ class AuditLogger:
             return
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(sink.export(event))
+            _task = loop.create_task(sink.export(event))
+            del _task  # stored to silence RUF006; task runs in background
         except RuntimeError:
             # No running event loop — fire in background thread
             def _run() -> None:

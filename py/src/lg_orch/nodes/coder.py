@@ -4,7 +4,7 @@ import asyncio
 import concurrent.futures
 import os
 import time
-from typing import Any
+from typing import Any, cast
 
 from lg_orch.logging import get_logger
 from lg_orch.remote_api import push_run_event
@@ -329,7 +329,8 @@ def coder(state: dict[str, Any]) -> dict[str, Any]:
         log.warning("coder_llm_synthesis_failed", error=str(exc))
 
     if llm_guidance:
-        next_handoff["evidence"] = list(next_handoff["evidence"]) + [
+        _evidence: list[Any] = list(cast(list[Any], next_handoff["evidence"]))
+        next_handoff["evidence"] = _evidence + [
             {"kind": "llm_guidance", "ref": step_id, "detail": llm_guidance[:600]}
         ]
 

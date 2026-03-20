@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hmac
 import json
 import os
@@ -16,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 from urllib.parse import parse_qs, urlsplit
 
 import prometheus_client
@@ -67,7 +68,6 @@ from lg_orch.audit import AuditEvent, AuditLogger, build_sink, utc_now_iso
 from lg_orch.auth import (
     AuthError,
     JWTSettings,
-    _OPEN,
     _route_policy,
     authorize_stdlib,
     jwt_settings_from_config,
@@ -212,7 +212,7 @@ def _approval_state_from_trace(trace_payload: dict[str, Any] | None) -> dict[str
     }
 
 
-def _apply_approval_state_to_record(record: "RunRecord", approval_state: dict[str, Any]) -> None:
+def _apply_approval_state_to_record(record: RunRecord, approval_state: dict[str, Any]) -> None:
     thread_id = str(approval_state.get("thread_id", "")).strip()
     checkpoint_id = str(approval_state.get("checkpoint_id", "")).strip()
     if thread_id:
@@ -299,7 +299,7 @@ def _write_trace_approval_state(
         return
 
 
-def _resume_argv(record: "RunRecord") -> list[str]:
+def _resume_argv(record: RunRecord) -> list[str]:
     argv: list[str] = []
     idx = 0
     while idx < len(record.argv):
@@ -701,8 +701,8 @@ class RemoteAPIService:
         self._procedure_cache = procedure_cache
         self._namespace = namespace.strip()
         # healing loop background tasks: loop_id -> asyncio.Task
-        self._healing_tasks: dict[str, "asyncio.Task[None]"] = {}
-        self._healing_loops: dict[str, "Any"] = {}  # loop_id -> HealingLoop instance
+        self._healing_tasks: dict[str, asyncio.Task[None]] = {}
+        self._healing_loops: dict[str, Any] = {}  # loop_id -> HealingLoop instance
         # Monotonic start times for run duration tracking
         self._run_start_times: dict[str, float] = {}
 
@@ -1103,23 +1103,19 @@ class RemoteAPIService:
         if new_status == "approved":
             record = self._runs.get(run_id)
             if record is not None and record.pending_approval:
-                try:
+                with contextlib.suppress(ValueError, RuntimeError):
                     self.approve_run(
                         run_id,
                         {"actor": reviewer_id, "rationale": comment},
                     )
-                except (ValueError, RuntimeError):
-                    pass
         elif new_status in {"rejected", "timed_out"}:
             record = self._runs.get(run_id)
             if record is not None and record.pending_approval:
-                try:
+                with contextlib.suppress(ValueError, RuntimeError):
                     self.reject_run(
                         run_id,
                         {"actor": reviewer_id, "rationale": comment},
                     )
-                except (ValueError, RuntimeError):
-                    pass
 
         return {"status": new_status, "votes_cast": votes_cast}
 
@@ -1215,13 +1211,11 @@ class RemoteAPIService:
                 last_decision=approval_history[-1] if approval_history else None,
             )
         if self._run_store is not None and trace_raw is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._run_store.upsert_semantic_memories(
                     run_id,
                     _semantic_memories_from_trace(trace_raw, request=record.request),
                 )
-            except Exception:
-                pass
 
         # Procedural memory: cache verified tool sequences on success
         if exit_code == 0 and self._procedure_cache is not None:
@@ -1319,14 +1313,14 @@ class RemoteAPIService:
             if payload is None:
                 data = json.dumps({"error": "not_found", "run_id": run_id})
                 try:
-                    wfile.write(f"data: {data}\n\n".encode("utf-8"))
+                    wfile.write(f"data: {data}\n\n".encode())
                     wfile.flush()
                 except OSError:
                     return
                 return
             data = json.dumps(payload, ensure_ascii=False)
             try:
-                wfile.write(f"data: {data}\n\n".encode("utf-8"))
+                wfile.write(f"data: {data}\n\n".encode())
                 wfile.flush()
             except OSError:
                 return
@@ -1375,7 +1369,7 @@ class RemoteAPIService:
             try:
                 task = loop.create_task(healing.run_until_cancelled())
                 with self._lock:
-                    self._healing_tasks[loop_id] = task  # type: ignore[assignment]
+                    self._healing_tasks[loop_id] = task
                 loop.run_forever()
             finally:
                 loop.close()
@@ -1536,8 +1530,8 @@ def _api_http_dispatch(
     if route in {"/", "/ui"}:
         if method != "GET":
             return _json_response(405, {"error": "method_not_allowed"})
-        from lg_orch.visualize import render_run_viewer_spa
         from lg_orch.graph import export_mermaid
+        from lg_orch.visualize import render_run_viewer_spa
         html = render_run_viewer_spa(api_base_url="", mermaid_graph=export_mermaid())
         body = html.encode("utf-8")
         return 200, "text/html; charset=utf-8", body
@@ -1712,7 +1706,7 @@ def _api_http_dispatch(
         if kind == "timed":
             policy: ApprovalPolicy = TimedApprovalPolicy(
                 timeout_seconds=float(policy_raw.get("timeout_seconds", 300.0)),
-                auto_action=policy_raw.get("auto_action", "reject"),  # type: ignore[arg-type]
+                auto_action=cast("Literal['approve', 'reject']", policy_raw.get("auto_action", "reject")),
             )
         elif kind == "quorum":
             policy = QuorumApprovalPolicy(
@@ -1866,7 +1860,7 @@ def _api_http_response(
             path_parts=_pp,
             status=status,
         )
-        _outcome: str = "error" if status >= 500 else "ok"
+        _outcome: Literal["ok", "denied", "error"] = "error" if status >= 500 else "ok"
         _audit_logger.log(
             AuditEvent(
                 ts=utc_now_iso(),

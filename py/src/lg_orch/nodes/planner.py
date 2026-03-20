@@ -1,15 +1,19 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import jsonschema
 
 from lg_orch.logging import get_logger
-from lg_orch.memory import ensure_history_policy, get_compression_summary, prune_pre_verification_history
+from lg_orch.memory import (
+    ensure_history_policy,
+    get_compression_summary,
+    prune_pre_verification_history,
+)
 from lg_orch.model_routing import latest_model_route, record_inference_telemetry, record_model_route
 from lg_orch.state import AgentHandoff, HandoffEvidence, PlannerOutput, PlanStep, ToolCall
 from lg_orch.tools import InferenceClient

@@ -90,7 +90,7 @@ fn compute_hmac(challenge_id: &str, iat: u64, nonce: &str, secret: &[u8]) -> Str
 /// - `iat`      — Unix timestamp (seconds) at generation time.
 /// - `nonce`    — 16 random bytes encoded as a 32-character lowercase hex string.
 /// - `hmac_hex` — HMAC-SHA256 over `"{challenge_id}|{iat}|{nonce}"` with the
-///                server secret, hex-encoded.
+///   server secret, hex-encoded.
 ///
 /// Called by the orchestration layer or test helpers to mint a token that is
 /// then submitted to the runner.  The Rust binary crate itself only *verifies*

@@ -453,18 +453,18 @@ pub fn pre_validate_path(
     checker.check_all(&req)
 }
 
-/// # Specification (Verus)
-/// ```spec
-/// spec fn spec_parse_bool(s: &str) -> bool {
-///     matches!(
-///         s.trim().to_ascii_lowercase().as_str(),
-///         "1" | "true" | "yes" | "on"
-///     )
-/// }
-/// ```
-/// # Correctness invariant
-/// `parse_bool(s)` returns `true` iff the normalized string is one of the
-/// accepted truthy literals. No other input produces `true`.
+// # Specification (Verus)
+// ```spec
+// spec fn spec_parse_bool(s: &str) -> bool {
+//     matches!(
+//         s.trim().to_ascii_lowercase().as_str(),
+//         "1" | "true" | "yes" | "on"
+//     )
+// }
+// ```
+// # Correctness invariant
+// `parse_bool(s)` returns `true` iff the normalized string is one of the
+// accepted truthy literals. No other input produces `true`.
 
 // Static regex patterns for prompt-injection detection.
 // Compiled once at first use via LazyLock; no per-call allocation.
@@ -537,6 +537,7 @@ pub fn detect_prompt_injection(input: &str) -> Option<String> {
 ///
 /// Call this before any file-write or patch-apply operation.
 /// Returns `Err(ApiError::Forbidden)` if the path escapes the workspace.
+#[allow(dead_code)]
 pub fn validate_write_path(target_path: &Path, config: &SandboxConfig) -> Result<(), ApiError> {
     if !config.enforce_read_only_root {
         return Ok(());

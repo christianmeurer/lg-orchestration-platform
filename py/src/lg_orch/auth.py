@@ -7,7 +7,6 @@ from typing import Any
 from jose import ExpiredSignatureError, JWTError, jwt
 from jose.exceptions import JWKError
 
-
 # ---------------------------------------------------------------------------
 # Internal exception
 # ---------------------------------------------------------------------------
@@ -39,7 +38,7 @@ class JWTSettings:
         return bool(self.jwt_secret or self.jwks_url)
 
     @classmethod
-    def from_env(cls) -> "JWTSettings":
+    def from_env(cls) -> JWTSettings:
         secret = os.environ.get("JWT_SECRET") or None
         jwks = os.environ.get("JWKS_URL") or None
         return cls(jwt_secret=secret, jwks_url=jwks)
@@ -72,8 +71,8 @@ def _fetch_jwks(url: str) -> dict[str, Any]:
     import urllib.request
 
     if url in _jwks_cache:
-        return _jwks_cache[url]
-    with urllib.request.urlopen(url, timeout=10) as resp:  # noqa: S310
+        return _jwks_cache[url]  # type: ignore[no-any-return]
+    with urllib.request.urlopen(url, timeout=10) as resp:
         data: dict[str, Any] = json.loads(resp.read().decode("utf-8"))
     _jwks_cache[url] = data
     return data
@@ -114,7 +113,7 @@ def verify_token(token: str, settings: JWTSettings) -> TokenClaims:
         else:
             raise AuthError(401, "auth_not_configured")
     except ExpiredSignatureError:
-        raise AuthError(401, "token_expired")
+        raise AuthError(401, "token_expired") from None
     except (JWTError, JWKError) as exc:
         raise AuthError(401, f"invalid_token: {exc}") from exc
 
@@ -370,18 +369,18 @@ def jwt_settings_from_config(
 
 
 __all__ = [
+    "_ADMINS",
+    "_OPEN",
+    "_OPERATORS",
+    "_READERS",
     "AuthError",
     "JWTSettings",
     "TokenClaims",
-    "verify_token",
-    "get_current_user",
-    "require_roles",
-    "authorize_stdlib",
-    "jwt_settings_from_config",
-    "_route_policy",
     "_clear_jwks_cache",
-    "_OPEN",
-    "_READERS",
-    "_OPERATORS",
-    "_ADMINS",
+    "_route_policy",
+    "authorize_stdlib",
+    "get_current_user",
+    "jwt_settings_from_config",
+    "require_roles",
+    "verify_token",
 ]
