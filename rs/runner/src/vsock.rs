@@ -110,7 +110,7 @@ pub async fn send_guest_command(
     req: &GuestCommandRequest,
     timeout: Duration,
 ) -> Result<GuestCommandResponse, ApiError> {
-    use std::os::unix::io::{FromRawFd, IntoRawFd};
+    use std::os::unix::io::{AsRawFd, FromRawFd};
 
     // Create an AF_VSOCK stream socket.
     let fd = unsafe {
@@ -166,10 +166,13 @@ pub async fn send_guest_command(
         }
     }
 
-    // Wrap the raw fd into a std TcpStream (same layout for raw fd ops),
-    // then into a tokio stream.
-    let std_stream = unsafe { std::net::TcpStream::from_raw_fd(fd) };
-    let stream = tokio::net::TcpStream::from_std(std_stream)
+    // SAFETY: fd is a valid AF_VSOCK SOCK_STREAM socket in non-blocking mode.
+    // We use std::os::unix::net::UnixStream (not std::net::TcpStream) so that
+    // the wrapper type contract is honoured — both are SOCK_STREAM fds and
+    // tokio drives them identically via epoll.  Wrapping an AF_VSOCK fd in
+    // TcpStream is UB per TcpStream's documented type contract (AF_INET/6 only).
+    let std_stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
+    let stream = tokio::net::UnixStream::from_std(std_stream)
         .map_err(|e| ApiError::Other(anyhow::anyhow!("vsock tokio wrap: {e}")))?;
 
     // Wait for the non-blocking connect to complete.
@@ -178,12 +181,30 @@ pub async fn send_guest_command(
         .await
         .map_err(|e| ApiError::Other(anyhow::anyhow!("vsock writable await: {e}")))?;
 
-    // Check for connect error via SO_ERROR.
-    let so_error = stream
-        .take_error()
-        .map_err(|e| ApiError::Other(anyhow::anyhow!("vsock take_error: {e}")))?;
-    if let Some(e) = so_error {
-        return Err(ApiError::Other(anyhow::anyhow!("vsock connect error: {e}")));
+    // Check for connect error via SO_ERROR.  tokio::net::UnixStream does not
+    // expose take_error(), so we call getsockopt(SO_ERROR) directly.
+    let mut so_err: libc::c_int = 0;
+    let mut so_err_len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    let gso_ret = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_ERROR,
+            &mut so_err as *mut libc::c_int as *mut libc::c_void,
+            &mut so_err_len,
+        )
+    };
+    if gso_ret < 0 {
+        return Err(ApiError::Other(anyhow::anyhow!(
+            "vsock getsockopt(SO_ERROR) failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    if so_err != 0 {
+        return Err(ApiError::Other(anyhow::anyhow!(
+            "vsock connect error: {}",
+            std::io::Error::from_raw_os_error(so_err)
+        )));
     }
 
     let (r, w) = stream.into_split();
