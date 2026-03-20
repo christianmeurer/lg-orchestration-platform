@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::approval::DEFAULT_TOKEN_TTL_SECS;
@@ -113,6 +114,19 @@ pub const ALLOWED_EXEC_COMMANDS: &[&str] = &[
     "uv", "python", "pytest", "ruff", "mypy", "cargo", "git",
 ];
 
+/// Opaque per-process pool of live MCP subprocess clients.
+///
+/// Values are type-erased (`Box<dyn Any + Send>`) so that `config.rs`
+/// does not need to import the `McpStdioClient` type from `tools/mcp.rs`,
+/// which would create a circular module dependency.  `tools/mcp.rs`
+/// downcasts the boxes to its own `PoolEntry` type.
+pub type McpPool = Arc<Mutex<HashMap<String, Box<dyn std::any::Any + Send + 'static>>>>;
+
+/// Construct an empty [`McpPool`].
+pub fn new_mcp_pool() -> McpPool {
+    Arc::new(Mutex::new(HashMap::new()))
+}
+
 #[derive(Clone)]
 pub struct RunnerConfig {
     pub root_dir: PathBuf,
@@ -130,6 +144,11 @@ pub struct RunnerConfig {
     /// Override via `LG_RUNNER_APPROVAL_TOKEN_TTL_SECS` or pass explicitly
     /// through [`RunnerConfig::with_rate_limit`].
     pub approval_token_ttl_secs: u64,
+    /// Per-process pool of live MCP subprocess clients.
+    ///
+    /// Shared across all Axum handler invocations via [`Arc`] cloning.
+    /// Populated lazily by `tools/mcp.rs::get_or_connect`.
+    pub mcp_pool: McpPool,
 }
 
 impl std::fmt::Debug for RunnerConfig {
@@ -199,6 +218,7 @@ impl RunnerConfig {
             sandbox,
             invariant_checker,
             approval_token_ttl_secs,
+            mcp_pool: new_mcp_pool(),
         })
     }
 

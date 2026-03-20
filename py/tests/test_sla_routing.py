@@ -191,7 +191,7 @@ def test_latency_window_thread_safety() -> None:
 
 def test_inference_client_model_substitution() -> None:
     from lg_orch.model_routing import SlaRoutingPolicy
-    from lg_orch.tools import inference_client as ic_module
+    from lg_orch.tools.inference_client import InferenceClient, InferenceResponse
 
     # Build a policy that always routes "gpt-4o" → "gpt-3.5-turbo"
     policy = SlaRoutingPolicy(
@@ -202,36 +202,31 @@ def test_inference_client_model_substitution() -> None:
     for _ in range(10):
         policy.record_latency("gpt-4o", 9.0)
 
-    ic_module.set_sla_policy(policy)
-    try:
-        from lg_orch.tools.inference_client import InferenceClient, InferenceResponse
+    fake_response = InferenceResponse(
+        text="hello",
+        latency_ms=100,
+        provider="openai",
+        model="gpt-3.5-turbo",
+    )
 
-        fake_response = InferenceResponse(
-            text="hello",
-            latency_ms=100,
-            provider="openai",
-            model="gpt-3.5-turbo",
+    with patch.object(
+        InferenceClient,
+        "_execute_request",
+        return_value=fake_response,
+    ) as mock_exec:
+        client = InferenceClient(
+            base_url="http://localhost:9999",
+            api_key="test-key",
+            sla_policy=policy,
+        )
+        result = client.chat_completion(
+            model="gpt-4o",
+            system_prompt="sys",
+            user_prompt="hi",
+            temperature=0.0,
         )
 
-        with patch.object(
-            InferenceClient,
-            "_execute_request",
-            return_value=fake_response,
-        ) as mock_exec:
-            client = InferenceClient(
-                base_url="http://localhost:9999",
-                api_key="test-key",
-            )
-            result = client.chat_completion(
-                model="gpt-4o",
-                system_prompt="sys",
-                user_prompt="hi",
-                temperature=0.0,
-            )
-
-        # The actual HTTP call must have used the fallback model
-        called_model = mock_exec.call_args.kwargs["model"]
-        assert called_model == "gpt-3.5-turbo"
-        assert result.text == "hello"
-    finally:
-        ic_module.set_sla_policy(None)
+    # The actual HTTP call must have used the fallback model
+    called_model = mock_exec.call_args.kwargs["model"]
+    assert called_model == "gpt-3.5-turbo"
+    assert result.text == "hello"

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from lg_orch.healing_loop import HealingJob, HealingLoop, TestSuiteResult
+from lg_orch.healing_loop import HealingJob, HealingLoop, TestSuiteResult, detect_test_runner
 
 
 # ---------------------------------------------------------------------------
@@ -179,3 +181,34 @@ def test_healing_loop_stops_on_cancellation(tmp_path: Any) -> None:
 
     # Should return cleanly without raising
     asyncio.run(healing.run_until_cancelled())
+
+
+# ---------------------------------------------------------------------------
+# detect_test_runner tests
+# ---------------------------------------------------------------------------
+
+
+def test_detect_test_runner_cargo(tmp_path: Path) -> None:
+    (tmp_path / "Cargo.toml").write_text('[package]\nname = "mylib"\nversion = "0.1.0"\n')
+    assert detect_test_runner(tmp_path) == "cargo test --all"
+
+
+def test_detect_test_runner_nodejs(tmp_path: Path) -> None:
+    pkg = {"name": "myapp", "scripts": {"test": "jest"}}
+    (tmp_path / "package.json").write_text(json.dumps(pkg))
+    assert detect_test_runner(tmp_path) == "npm test"
+
+
+def test_detect_test_runner_golang(tmp_path: Path) -> None:
+    (tmp_path / "go.mod").write_text("module example.com/mymod\n\ngo 1.21\n")
+    assert detect_test_runner(tmp_path) == "go test ./..."
+
+
+def test_detect_test_runner_python_default(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\n")
+    assert detect_test_runner(tmp_path) == "python -m pytest"
+
+
+def test_detect_test_runner_fallback(tmp_path: Path) -> None:
+    # Empty directory — no marker files present
+    assert detect_test_runner(tmp_path) == "python -m pytest"

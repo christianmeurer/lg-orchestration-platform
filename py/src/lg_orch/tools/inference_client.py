@@ -7,24 +7,28 @@ import threading
 import time
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
-if TYPE_CHECKING:
-    from lg_orch.model_routing import SlaRoutingPolicy
+from lg_orch.model_routing import SlaRoutingPolicy
 
-# ---------------------------------------------------------------------------
-# Module-level SLA policy (injected at startup)
-# ---------------------------------------------------------------------------
-
-_sla_policy: SlaRoutingPolicy | None = None
+# Process-level default SLA policy. Inject via InferenceClient(sla_policy=...) for test isolation.
+_DEFAULT_SLA_POLICY: SlaRoutingPolicy | None = None
 
 
-def set_sla_policy(policy: SlaRoutingPolicy | None) -> None:
-    global _sla_policy
-    _sla_policy = policy
+def _get_default_sla_policy() -> SlaRoutingPolicy:
+    global _DEFAULT_SLA_POLICY
+    if _DEFAULT_SLA_POLICY is None:
+        _DEFAULT_SLA_POLICY = SlaRoutingPolicy(thresholds={}, fallbacks={})
+    return _DEFAULT_SLA_POLICY
+
+
+def reset_default_sla_policy() -> None:
+    """Reset the process-level default SLA policy. Use in tests only."""
+    global _DEFAULT_SLA_POLICY
+    _DEFAULT_SLA_POLICY = None
 
 # ---------------------------------------------------------------------------
 # Circuit-breaker
@@ -161,9 +165,15 @@ class InferenceClient:
     base_url: str
     api_key: str
     timeout_s: int = 60
+    sla_policy: SlaRoutingPolicy | None = field(default=None, compare=False, hash=False, repr=False)
     _client: httpx.Client | None = field(default=None, compare=False, hash=False, repr=False)
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "sla_policy",
+            self.sla_policy if self.sla_policy is not None else _get_default_sla_policy(),
+        )
         if self._client is None:
             object.__setattr__(
                 self,
@@ -186,7 +196,7 @@ class InferenceClient:
         tools: list[ToolDefinition] | None = None,
         tool_choice: str | None = None,
     ) -> InferenceResponse:
-        policy = _sla_policy
+        policy = self.sla_policy
         effective_model = policy.select_model(model) if policy is not None else model
 
         breaker = _get_breaker(self.base_url)
@@ -373,7 +383,7 @@ class InferenceClient:
         have a running event loop (e.g. LangGraph internal thread).  Falls back to
         chat_completion if streaming fails.
         """
-        policy = _sla_policy
+        policy = self.sla_policy
         effective_model = policy.select_model(model) if policy is not None else model
 
         started = time.perf_counter()
@@ -426,7 +436,7 @@ class InferenceClient:
         temperature: float,
         max_tokens: int = 1200,
     ) -> AsyncGenerator[str, None]:
-        policy = _sla_policy
+        policy = self.sla_policy
         effective_model = policy.select_model(model) if policy is not None else model
 
         breaker = _get_breaker(self.base_url)

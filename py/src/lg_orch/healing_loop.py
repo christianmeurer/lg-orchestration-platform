@@ -1,12 +1,42 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
+import shlex
 import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal
+
+def detect_test_runner(root_dir: str | Path) -> str:
+    """Detect the appropriate test runner based on project files present in root_dir."""
+    root = Path(root_dir)
+    if (root / "Cargo.toml").exists():
+        return "cargo test --all"
+    if (root / "package.json").exists():
+        try:
+            pkg = json.loads((root / "package.json").read_text())
+            scripts = pkg.get("scripts", {})
+            if "test" in scripts:
+                return "npm test"
+        except (json.JSONDecodeError, OSError):
+            pass
+        return "npm test"
+    if (root / "go.mod").exists():
+        return "go test ./..."
+    if (
+        (root / "pyproject.toml").exists()
+        or (root / "pytest.ini").exists()
+        or (root / "setup.cfg").exists()
+    ):
+        return "python -m pytest"
+    if (root / "Makefile").exists():
+        return "make test"
+    return "python -m pytest"
+
 
 _PASSED_RE = re.compile(r"(\d+)\s+passed")
 _FAILED_RE = re.compile(r"(\d+)\s+failed")
@@ -54,11 +84,15 @@ class HealingLoop:
         poll_interval_seconds: float = 60.0,
         max_concurrent_jobs: int = 2,
         graph_runner: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
+        test_runner: str | None = None,
     ) -> None:
         self._repo_path = repo_path
         self._poll_interval = poll_interval_seconds
         self._max_concurrent_jobs = max_concurrent_jobs
         self._graph_runner = graph_runner
+        self.test_runner_cmd: str = (
+            test_runner if test_runner is not None else detect_test_runner(repo_path)
+        )
         self._job_history: list[HealingJob] = []
         self._pending_jobs: list[HealingJob] = []
         self._lock = asyncio.Lock()
@@ -69,12 +103,9 @@ class HealingLoop:
         timestamp = time.time()
 
         try:
+            cmd_parts = shlex.split(self.test_runner_cmd)
             proc = await asyncio.create_subprocess_exec(
-                "python",
-                "-m",
-                "pytest",
-                "--tb=no",
-                "-q",
+                *cmd_parts,
                 cwd=self._repo_path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,

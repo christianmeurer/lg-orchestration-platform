@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -10,13 +10,14 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time::timeout;
 
-use crate::config::RunnerConfig;
+use crate::config::{McpPool, RunnerConfig};
 use crate::envelope::{McpMetadata, RedactionMetadata, ToolEnvelope};
 use crate::errors::ApiError;
 use crate::tools::fs::resolve_under_root;
 
 const JSONRPC_VERSION: &str = "2.0";
 const DEFAULT_MCP_TIMEOUT_S: u64 = 20;
+const MCP_POOL_TTL_SECS: u64 = 300; // 5 minutes
 
 #[derive(Debug, Deserialize, Clone)]
 struct McpServerConfigIn {
@@ -109,6 +110,11 @@ impl RedactionStats {
             ip_addresses: self.ip_addresses,
         }
     }
+}
+
+struct PoolEntry {
+    client: McpStdioClient,
+    last_used: Instant,
 }
 
 struct McpStdioClient {
@@ -305,6 +311,86 @@ impl McpStdioClient {
     }
 }
 
+/// Build the pool key from a server config — command + all args, joined by
+/// the NUL character so that different argv cannot collide.
+fn pool_key(server: &McpServerConfigIn) -> String {
+    let mut parts = Vec::with_capacity(1 + server.args.len());
+    parts.push(server.command.clone());
+    parts.extend(server.args.iter().cloned());
+    parts.join("\0")
+}
+
+/// Acquire an already-initialized [`McpStdioClient`] from the pool, or
+/// spawn and initialize a fresh one if no live entry exists.
+///
+/// The caller takes ownership.  After use, call [`return_to_pool`] on
+/// success or on jsonrpc-level errors; on I/O errors, simply drop the
+/// client so the subprocess is killed.
+async fn get_or_connect(
+    pool: &McpPool,
+    server: &McpServerConfigIn,
+    cfg: &RunnerConfig,
+) -> Result<McpStdioClient, ApiError> {
+    let key = pool_key(server);
+    let mut guard = pool.lock().await;
+
+    // Evict stale entries on every acquisition to bound memory growth.
+    guard.retain(|_, v| {
+        v.downcast_ref::<PoolEntry>()
+            .map(|e| e.last_used.elapsed().as_secs() < MCP_POOL_TTL_SECS)
+            .unwrap_or(false)
+    });
+
+    if let Some(boxed) = guard.remove(&key) {
+        if let Ok(entry) = boxed.downcast::<PoolEntry>() {
+            return Ok(entry.client);
+        }
+    }
+    drop(guard); // release the lock before the blocking spawn
+
+    let mut client = McpStdioClient::connect(cfg, server).await?;
+    initialize(&mut client).await?;
+    Ok(client)
+}
+
+/// Return a client to the pool after a successful or jsonrpc-level-error
+/// call so it can be reused by a subsequent request for the same server.
+async fn return_to_pool(pool: &McpPool, server: &McpServerConfigIn, client: McpStdioClient) {
+    let key = pool_key(server);
+    let mut guard = pool.lock().await;
+    guard.insert(
+        key,
+        Box::new(PoolEntry {
+            client,
+            last_used: Instant::now(),
+        }),
+    );
+}
+
+/// Remove all idle pool entries whose `last_used` exceeds [`MCP_POOL_TTL_SECS`].
+///
+/// Intended to be called from a periodic background task in `main.rs`.
+pub async fn purge_mcp_pool(pool: &McpPool) {
+    let mut guard = pool.lock().await;
+    guard.retain(|_, v| {
+        v.downcast_ref::<PoolEntry>()
+            .map(|e| e.last_used.elapsed().as_secs() < MCP_POOL_TTL_SECS)
+            .unwrap_or(false)
+    });
+}
+
+/// Returns `true` when an [`ApiError`] originates from a JSON-RPC–level
+/// protocol response rather than from an underlying I/O failure.
+///
+/// Only JSON-RPC errors are safe to reuse the connection after; any I/O or
+/// framing error leaves the stream in an undefined state.
+fn is_jsonrpc_error(err: &ApiError) -> bool {
+    match err {
+        ApiError::BadRequest(msg) => msg.starts_with("jsonrpc_error:"),
+        _ => false,
+    }
+}
+
 fn jsonrpc_id_to_u64(v: &Value) -> Option<u64> {
     match v {
         Value::Number(n) => n.as_u64(),
@@ -476,38 +562,48 @@ pub async fn mcp_discover(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelo
     let list_params_raw = inp.list_params.unwrap_or_else(|| json!({}));
     let list_params = redact_value(&list_params_raw, &mut outbound_stats);
 
-    let mut client = McpStdioClient::connect(cfg, &inp.server).await?;
-    initialize(&mut client).await?;
-    let tools_result = client.send_request("tools/list", list_params).await?;
-    let tools_result_redacted = redact_value(&tools_result, &mut inbound_stats);
+    let mut client = get_or_connect(&cfg.mcp_pool, &inp.server, cfg).await?;
+    let tools_result = client.send_request("tools/list", list_params).await;
 
-    let tools = tools_result_redacted
-        .get("tools")
-        .cloned()
-        .unwrap_or_else(|| Value::Array(vec![]));
-
-    Ok(ToolEnvelope::ok(
-        "mcp_discover",
-        serde_json::to_string_pretty(&tools).unwrap_or_default(),
-        json!({
-            "server_name": server_name,
-            "jsonrpc": "2.0",
-            "handshake_completed": true,
-            "method": "tools/list",
-            "result": tools_result_redacted,
-            "redaction": {
-                "outbound": outbound_stats.into_metadata(),
-                "inbound": inbound_stats.into_metadata()
+    match tools_result {
+        Ok(result) => {
+            return_to_pool(&cfg.mcp_pool, &inp.server, client).await;
+            let tools_result_redacted = redact_value(&result, &mut inbound_stats);
+            let tools = tools_result_redacted
+                .get("tools")
+                .cloned()
+                .unwrap_or_else(|| Value::Array(vec![]));
+            Ok(ToolEnvelope::ok(
+                "mcp_discover",
+                serde_json::to_string_pretty(&tools).unwrap_or_default(),
+                json!({
+                    "server_name": server_name,
+                    "jsonrpc": "2.0",
+                    "handshake_completed": true,
+                    "method": "tools/list",
+                    "result": tools_result_redacted,
+                    "redaction": {
+                        "outbound": outbound_stats.into_metadata(),
+                        "inbound": inbound_stats.into_metadata()
+                    }
+                }),
+                0,
+            )
+            .with_mcp(McpMetadata {
+                server_name,
+                handshake_completed: true,
+                outbound_redactions: outbound_stats.into_metadata(),
+                inbound_redactions: inbound_stats.into_metadata(),
+            }))
+        }
+        Err(err) => {
+            if is_jsonrpc_error(&err) {
+                return_to_pool(&cfg.mcp_pool, &inp.server, client).await;
             }
-        }),
-        0,
-    )
-    .with_mcp(McpMetadata {
-        server_name,
-        handshake_completed: true,
-        outbound_redactions: outbound_stats.into_metadata(),
-        inbound_redactions: inbound_stats.into_metadata(),
-    }))
+            // else: client is dropped here, killing the subprocess
+            Err(err)
+        }
+    }
 }
 
 pub async fn mcp_execute(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiError> {
@@ -527,8 +623,7 @@ pub async fn mcp_execute(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelop
     let mut inbound_stats = RedactionStats::default();
     let redacted_args = redact_value(&inp.args, &mut outbound_stats);
 
-    let mut client = McpStdioClient::connect(cfg, &inp.server).await?;
-    initialize(&mut client).await?;
+    let mut client = get_or_connect(&cfg.mcp_pool, &inp.server, cfg).await?;
 
     let call_params = json!({"name": tool_name, "arguments": redacted_args});
     let call_result = client.send_request("tools/call", call_params).await;
@@ -542,6 +637,7 @@ pub async fn mcp_execute(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelop
 
     match call_result {
         Ok(result) => {
+            return_to_pool(&cfg.mcp_pool, &inp.server, client).await;
             let inbound_redacted = redact_value(&result, &mut inbound_stats);
             let mut env = ToolEnvelope::ok(
                 "mcp_execute",
@@ -567,6 +663,10 @@ pub async fn mcp_execute(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelop
             Ok(env)
         }
         Err(err) => {
+            if is_jsonrpc_error(&err) {
+                return_to_pool(&cfg.mcp_pool, &inp.server, client).await;
+            }
+            // else: client dropped here, killing the subprocess
             let message = err.to_string();
             let mut env = ToolEnvelope::err(
                 "mcp_execute",
@@ -609,36 +709,45 @@ pub async fn mcp_resources_list(cfg: &RunnerConfig, input: Value) -> Result<Tool
     let list_params_raw = inp.list_params.unwrap_or_else(|| json!({}));
     let list_params = redact_value(&list_params_raw, &mut outbound_stats);
 
-    let mut client = McpStdioClient::connect(cfg, &inp.server).await?;
-    initialize(&mut client).await?;
-    let result = client.send_request("resources/list", list_params).await?;
-    let result_redacted = redact_value(&result, &mut inbound_stats);
+    let mut client = get_or_connect(&cfg.mcp_pool, &inp.server, cfg).await?;
+    let result = client.send_request("resources/list", list_params).await;
 
-    let resources = result_redacted
-        .get("resources")
-        .cloned()
-        .unwrap_or_else(|| Value::Array(vec![]));
-
-    Ok(ToolEnvelope::ok(
-        "mcp_resources_list",
-        serde_json::to_string_pretty(&resources).unwrap_or_default(),
-        json!({
-            "server_name": server_name,
-            "method": "resources/list",
-            "result": result_redacted,
-            "redaction": {
-                "outbound": outbound_stats.into_metadata(),
-                "inbound": inbound_stats.into_metadata()
+    match result {
+        Ok(result) => {
+            return_to_pool(&cfg.mcp_pool, &inp.server, client).await;
+            let result_redacted = redact_value(&result, &mut inbound_stats);
+            let resources = result_redacted
+                .get("resources")
+                .cloned()
+                .unwrap_or_else(|| Value::Array(vec![]));
+            Ok(ToolEnvelope::ok(
+                "mcp_resources_list",
+                serde_json::to_string_pretty(&resources).unwrap_or_default(),
+                json!({
+                    "server_name": server_name,
+                    "method": "resources/list",
+                    "result": result_redacted,
+                    "redaction": {
+                        "outbound": outbound_stats.into_metadata(),
+                        "inbound": inbound_stats.into_metadata()
+                    }
+                }),
+                0,
+            )
+            .with_mcp(McpMetadata {
+                server_name,
+                handshake_completed: true,
+                outbound_redactions: outbound_stats.into_metadata(),
+                inbound_redactions: inbound_stats.into_metadata(),
+            }))
+        }
+        Err(err) => {
+            if is_jsonrpc_error(&err) {
+                return_to_pool(&cfg.mcp_pool, &inp.server, client).await;
             }
-        }),
-        0,
-    )
-    .with_mcp(McpMetadata {
-        server_name,
-        handshake_completed: true,
-        outbound_redactions: outbound_stats.into_metadata(),
-        inbound_redactions: inbound_stats.into_metadata(),
-    }))
+            Err(err)
+        }
+    }
 }
 
 pub async fn mcp_resource_read(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiError> {
@@ -659,34 +768,44 @@ pub async fn mcp_resource_read(cfg: &RunnerConfig, input: Value) -> Result<ToolE
 
     let uri_redacted = redact_string(&resource_uri, &mut outbound_stats);
 
-    let mut client = McpStdioClient::connect(cfg, &inp.server).await?;
-    initialize(&mut client).await?;
+    let mut client = get_or_connect(&cfg.mcp_pool, &inp.server, cfg).await?;
     let result = client
         .send_request("resources/read", json!({"uri": uri_redacted}))
-        .await?;
-    let result_redacted = redact_value(&result, &mut inbound_stats);
+        .await;
 
-    Ok(ToolEnvelope::ok(
-        "mcp_resource_read",
-        serde_json::to_string_pretty(&result_redacted).unwrap_or_default(),
-        json!({
-            "server_name": server_name,
-            "resource_uri": uri_redacted,
-            "method": "resources/read",
-            "result": result_redacted,
-            "redaction": {
-                "outbound": outbound_stats.into_metadata(),
-                "inbound": inbound_stats.into_metadata()
+    match result {
+        Ok(result) => {
+            return_to_pool(&cfg.mcp_pool, &inp.server, client).await;
+            let result_redacted = redact_value(&result, &mut inbound_stats);
+            Ok(ToolEnvelope::ok(
+                "mcp_resource_read",
+                serde_json::to_string_pretty(&result_redacted).unwrap_or_default(),
+                json!({
+                    "server_name": server_name,
+                    "resource_uri": uri_redacted,
+                    "method": "resources/read",
+                    "result": result_redacted,
+                    "redaction": {
+                        "outbound": outbound_stats.into_metadata(),
+                        "inbound": inbound_stats.into_metadata()
+                    }
+                }),
+                0,
+            )
+            .with_mcp(McpMetadata {
+                server_name,
+                handshake_completed: true,
+                outbound_redactions: outbound_stats.into_metadata(),
+                inbound_redactions: inbound_stats.into_metadata(),
+            }))
+        }
+        Err(err) => {
+            if is_jsonrpc_error(&err) {
+                return_to_pool(&cfg.mcp_pool, &inp.server, client).await;
             }
-        }),
-        0,
-    )
-    .with_mcp(McpMetadata {
-        server_name,
-        handshake_completed: true,
-        outbound_redactions: outbound_stats.into_metadata(),
-        inbound_redactions: inbound_stats.into_metadata(),
-    }))
+            Err(err)
+        }
+    }
 }
 
 pub async fn mcp_prompts_list(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiError> {
@@ -704,36 +823,45 @@ pub async fn mcp_prompts_list(cfg: &RunnerConfig, input: Value) -> Result<ToolEn
     let list_params_raw = inp.list_params.unwrap_or_else(|| json!({}));
     let list_params = redact_value(&list_params_raw, &mut outbound_stats);
 
-    let mut client = McpStdioClient::connect(cfg, &inp.server).await?;
-    initialize(&mut client).await?;
-    let result = client.send_request("prompts/list", list_params).await?;
-    let result_redacted = redact_value(&result, &mut inbound_stats);
+    let mut client = get_or_connect(&cfg.mcp_pool, &inp.server, cfg).await?;
+    let result = client.send_request("prompts/list", list_params).await;
 
-    let prompts = result_redacted
-        .get("prompts")
-        .cloned()
-        .unwrap_or_else(|| Value::Array(vec![]));
-
-    Ok(ToolEnvelope::ok(
-        "mcp_prompts_list",
-        serde_json::to_string_pretty(&prompts).unwrap_or_default(),
-        json!({
-            "server_name": server_name,
-            "method": "prompts/list",
-            "result": result_redacted,
-            "redaction": {
-                "outbound": outbound_stats.into_metadata(),
-                "inbound": inbound_stats.into_metadata()
+    match result {
+        Ok(result) => {
+            return_to_pool(&cfg.mcp_pool, &inp.server, client).await;
+            let result_redacted = redact_value(&result, &mut inbound_stats);
+            let prompts = result_redacted
+                .get("prompts")
+                .cloned()
+                .unwrap_or_else(|| Value::Array(vec![]));
+            Ok(ToolEnvelope::ok(
+                "mcp_prompts_list",
+                serde_json::to_string_pretty(&prompts).unwrap_or_default(),
+                json!({
+                    "server_name": server_name,
+                    "method": "prompts/list",
+                    "result": result_redacted,
+                    "redaction": {
+                        "outbound": outbound_stats.into_metadata(),
+                        "inbound": inbound_stats.into_metadata()
+                    }
+                }),
+                0,
+            )
+            .with_mcp(McpMetadata {
+                server_name,
+                handshake_completed: true,
+                outbound_redactions: outbound_stats.into_metadata(),
+                inbound_redactions: inbound_stats.into_metadata(),
+            }))
+        }
+        Err(err) => {
+            if is_jsonrpc_error(&err) {
+                return_to_pool(&cfg.mcp_pool, &inp.server, client).await;
             }
-        }),
-        0,
-    )
-    .with_mcp(McpMetadata {
-        server_name,
-        handshake_completed: true,
-        outbound_redactions: outbound_stats.into_metadata(),
-        inbound_redactions: inbound_stats.into_metadata(),
-    }))
+            Err(err)
+        }
+    }
 }
 
 pub async fn mcp_prompt_get(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiError> {
@@ -754,37 +882,47 @@ pub async fn mcp_prompt_get(cfg: &RunnerConfig, input: Value) -> Result<ToolEnve
 
     let redacted_args = redact_value(&inp.arguments, &mut outbound_stats);
 
-    let mut client = McpStdioClient::connect(cfg, &inp.server).await?;
-    initialize(&mut client).await?;
+    let mut client = get_or_connect(&cfg.mcp_pool, &inp.server, cfg).await?;
     let result = client
         .send_request(
             "prompts/get",
             json!({"name": prompt_name, "arguments": redacted_args}),
         )
-        .await?;
-    let result_redacted = redact_value(&result, &mut inbound_stats);
+        .await;
 
-    Ok(ToolEnvelope::ok(
-        "mcp_prompt_get",
-        serde_json::to_string_pretty(&result_redacted).unwrap_or_default(),
-        json!({
-            "server_name": server_name,
-            "prompt_name": prompt_name,
-            "method": "prompts/get",
-            "result": result_redacted,
-            "redaction": {
-                "outbound": outbound_stats.into_metadata(),
-                "inbound": inbound_stats.into_metadata()
+    match result {
+        Ok(result) => {
+            return_to_pool(&cfg.mcp_pool, &inp.server, client).await;
+            let result_redacted = redact_value(&result, &mut inbound_stats);
+            Ok(ToolEnvelope::ok(
+                "mcp_prompt_get",
+                serde_json::to_string_pretty(&result_redacted).unwrap_or_default(),
+                json!({
+                    "server_name": server_name,
+                    "prompt_name": prompt_name,
+                    "method": "prompts/get",
+                    "result": result_redacted,
+                    "redaction": {
+                        "outbound": outbound_stats.into_metadata(),
+                        "inbound": inbound_stats.into_metadata()
+                    }
+                }),
+                0,
+            )
+            .with_mcp(McpMetadata {
+                server_name,
+                handshake_completed: true,
+                outbound_redactions: outbound_stats.into_metadata(),
+                inbound_redactions: inbound_stats.into_metadata(),
+            }))
+        }
+        Err(err) => {
+            if is_jsonrpc_error(&err) {
+                return_to_pool(&cfg.mcp_pool, &inp.server, client).await;
             }
-        }),
-        0,
-    )
-    .with_mcp(McpMetadata {
-        server_name,
-        handshake_completed: true,
-        outbound_redactions: outbound_stats.into_metadata(),
-        inbound_redactions: inbound_stats.into_metadata(),
-    }))
+            Err(err)
+        }
+    }
 }
 
 #[cfg(test)]

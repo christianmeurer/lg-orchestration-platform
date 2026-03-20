@@ -11,7 +11,7 @@ use crate::snapshots::{create_snapshot, SnapshotError};
 
 mod exec;
 mod fs;
-mod mcp;
+pub(crate) mod mcp;
 
 static LAST_UNDO_POINTER: OnceLock<Mutex<Option<CheckpointPointer>>> = OnceLock::new();
 

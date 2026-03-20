@@ -47,11 +47,13 @@ def _mock_response(*, status: int, headers: dict[str, str] | None = None, body: 
 
 
 def _make_client(base_url: str = "http://test.local") -> InferenceClient:
+    from lg_orch.model_routing import SlaRoutingPolicy
     mock_http = MagicMock(spec=httpx.Client)
     client = InferenceClient.__new__(InferenceClient)
     object.__setattr__(client, "base_url", base_url)
     object.__setattr__(client, "api_key", "key")
     object.__setattr__(client, "timeout_s", 60)
+    object.__setattr__(client, "sla_policy", SlaRoutingPolicy(thresholds={}, fallbacks={}))
     object.__setattr__(client, "_client", mock_http)
     return client
 

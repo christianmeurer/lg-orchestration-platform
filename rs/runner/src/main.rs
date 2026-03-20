@@ -237,6 +237,20 @@ async fn main() -> anyhow::Result<()> {
     )?;
     cfg.indexing.ensure_started();
 
+    // ------------------------------------------------------------------
+    // MCP connection pool — periodic cleanup of stale entries
+    // ------------------------------------------------------------------
+    {
+        let pool_ref = cfg.mcp_pool.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                crate::tools::mcp::purge_mcp_pool(&pool_ref).await;
+            }
+        });
+    }
+
     let protected = Router::new()
         .route("/v1/tools/execute", post(execute_tool))
         .route("/v1/tools/batch_execute", post(batch_execute_tool))
