@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 """Admin API routes — healing loop control, procedure cache, diagnostics.
 
 These routes were previously inline in :mod:`lg_orch.remote_api` inside the

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 """Git-worktree-based branch isolation for parallel agents (Wave 8).
 
 Public surface:

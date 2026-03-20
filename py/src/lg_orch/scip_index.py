@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 """SCIP symbol-index reader (Wave 9 – Cross-Repository Microservice Orchestration).
 
 Reads a ``scip_index.json`` sidecar file from a repository root.  No protobuf

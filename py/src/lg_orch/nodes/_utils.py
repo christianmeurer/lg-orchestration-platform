@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 """Shared utilities for node implementations.
 
 Provides:

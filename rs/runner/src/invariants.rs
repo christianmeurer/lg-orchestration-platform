@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 //! Neurosymbolic vericoding layer: boundary invariant checker.
 //!
 //! Validates tool requests against a set of symbolic boundary invariants

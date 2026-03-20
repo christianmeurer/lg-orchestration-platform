@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 """Run lifecycle management: RunRecord, _RateLimiter, RemoteAPIService, and shared helpers.
 
 ``_spawn_run_subprocess`` and ``_start_daemon_thread`` are intentionally kept in

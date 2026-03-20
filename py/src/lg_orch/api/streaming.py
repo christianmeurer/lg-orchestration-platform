@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 """SSE streaming logic: push_run_event() and the /runs/{id}/stream endpoint."""
 from __future__ import annotations
 

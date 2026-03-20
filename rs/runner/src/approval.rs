@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 

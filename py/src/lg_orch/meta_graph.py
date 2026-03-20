@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 """Dependency-aware multi-agent scheduler (Gap 3, Wave 8).
 
 This module is intentionally decoupled from graph.py and state.py.

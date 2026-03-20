@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 """Prompt construction, schema validation, and deterministic fallback plan for the planner."""
 from __future__ import annotations
 

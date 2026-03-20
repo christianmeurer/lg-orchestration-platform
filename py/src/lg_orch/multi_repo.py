@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 """Multi-repository orchestration (Wave 9 – Cross-Repository Microservice Orchestration).
 
 Extends :class:`~lg_orch.meta_graph.MetaGraphScheduler` to fan out sub-agents

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 """Kubernetes sandbox configuration validation and TOML generation utilities.
 
 Used at deploy time to validate Deployment manifests against expected

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 """SPA file dispatcher used by the ThreadingHTTPServer in ``remote_api.py``.
 
 :func:`create_spa_router` returns a callable that maps a URL subpath to a

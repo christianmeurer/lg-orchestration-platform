@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 //! Vsock client for communicating with the Firecracker guest agent.
 //!
 //! On Linux, uses `AF_VSOCK` sockets to reach the guest agent running inside

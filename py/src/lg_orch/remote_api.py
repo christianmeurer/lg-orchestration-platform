@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 """Thin orchestrating router — assembles the Remote API from focused submodules.
 
 Public API backward-compat aliases
