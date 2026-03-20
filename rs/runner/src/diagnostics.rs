@@ -185,6 +185,38 @@ pub fn parse_structured_diagnostics(stderr: &str) -> Vec<Diagnostic> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    // ---------------------------------------------------------------------------
+    // Property-based tests
+    // ---------------------------------------------------------------------------
+
+    proptest! {
+        /// `parse_structured_diagnostics` must never panic on arbitrary input.
+        /// This is a stability / robustness property — no matter what bytes
+        /// the caller feeds in, the function must return (possibly empty) output.
+        #[test]
+        fn prop_parse_structured_diagnostics_never_panics(
+            input in proptest::string::string_regex("[[:print:]\n\r]{0,300}").unwrap()
+        ) {
+            let result = parse_structured_diagnostics(&input);
+            // Result can be any Vec<Diagnostic> — we only assert no panic and
+            // that the returned diagnostics have non-empty file/message fields.
+            for diag in &result {
+                prop_assert!(!diag.file.is_empty() || !diag.message.is_empty());
+            }
+        }
+
+        /// The FNV-1a fingerprint of two identical strings must be equal.
+        #[test]
+        fn prop_fnv1a_fingerprint_deterministic(
+            s in proptest::string::string_regex("[[:print:]]{0,100}").unwrap()
+        ) {
+            let h1 = fnv1a_64(&s);
+            let h2 = fnv1a_64(&s);
+            prop_assert_eq!(h1, h2);
+        }
+    }
 
     #[test]
     fn parses_rust_error_with_location() {

@@ -12,6 +12,8 @@ pub enum ApiError {
     Forbidden(String),
     #[error("approval_required")]
     ApprovalRequired(ApprovalMetadata),
+    #[error("rate limit exceeded")]
+    RateLimitExceeded,
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -24,6 +26,10 @@ impl IntoResponse for ApiError {
             ApiError::ApprovalRequired(_) => (
                 StatusCode::PRECONDITION_REQUIRED,
                 "approval_required".to_string(),
+            ),
+            ApiError::RateLimitExceeded => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate limit exceeded".to_string(),
             ),
             ApiError::Other(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         };

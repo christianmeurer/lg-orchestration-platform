@@ -5,8 +5,7 @@ use serde_json::{json, Value};
 use tokio::fs;
 
 use super::{
-    restore_checkpoint_alignment, serialize_semantic_hits, serialize_snapshot,
-    snapshot_for_operation,
+    serialize_semantic_hits, serialize_snapshot, snapshot_for_operation, ToolContext,
 };
 use crate::approval::{require_approval, ApprovalTokenInput};
 use crate::config::RunnerConfig;
@@ -101,7 +100,6 @@ pub async fn read_file(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope,
                 "read_file",
                 content,
                 json!({"path": inp.path}),
-                0,
             ))
         }
         Err(e) => {
@@ -196,7 +194,6 @@ pub async fn search_files(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelo
         "search_files",
         serde_json::to_string_pretty(&out).unwrap_or_default(),
         json!({"files_matched": out.len()}),
-        0,
     ))
 }
 
@@ -269,7 +266,6 @@ pub async fn search_codebase(cfg: &RunnerConfig, input: Value) -> Result<ToolEnv
             "hits": hits_json.as_array().map_or(0, Vec::len),
             "snapshot_version": cfg.indexing.current_version()
         }),
-        0,
     ))
 }
 
@@ -315,7 +311,6 @@ pub async fn ast_index_summary(cfg: &RunnerConfig, input: Value) -> Result<ToolE
             "path_prefix": path_prefix,
             "local": true
         }),
-        0,
     ))
 }
 
@@ -380,7 +375,6 @@ pub async fn list_files(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope
         "list_files",
         serde_json::to_string(&out).unwrap_or_default(),
         json!({"count": out.len()}),
-        0,
     ))
 }
 
@@ -417,7 +411,7 @@ struct UndoIn {
     skip_all,
     fields(tool = "apply_patch", challenge_id = tracing::field::Empty)
 )]
-pub async fn apply_patch(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiError> {
+pub async fn apply_patch(cfg: &RunnerConfig, ctx: &mut ToolContext, input: Value) -> Result<ToolEnvelope, ApiError> {
     let inp: ApplyPatchIn =
         serde_json::from_value(input).map_err(|e| ApiError::BadRequest(e.to_string()))?;
     if inp.changes.is_empty() {
@@ -428,7 +422,7 @@ pub async fn apply_patch(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelop
         tracing::Span::current().record("challenge_id", &*a.challenge_id);
     }
     let approval = require_approval(inp.approval, "apply_patch", "approval:apply_patch", cfg.approval_token_ttl_secs)?;
-    let snapshot = snapshot_for_operation(cfg, "apply_patch").await?;
+    let snapshot = snapshot_for_operation(cfg, ctx, "apply_patch").await?;
 
     // Collect temp paths so they can be cleaned up if an error occurs mid-batch.
     let mut tmp_files: Vec<std::path::PathBuf> = Vec::new();
@@ -446,7 +440,7 @@ pub async fn apply_patch(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelop
     metrics::counter!("runner_tool_calls_total", "tool" => "apply_patch", "status" => "ok")
         .increment(1);
     Ok(
-        ToolEnvelope::ok("apply_patch", "ok", json!({"changes": diffs}), 0)
+        ToolEnvelope::ok("apply_patch", "ok", json!({"changes": diffs}))
             .with_approval(approval)
             .with_snapshot(snapshot),
     )
@@ -517,7 +511,7 @@ async fn apply_patch_inner(
     Ok(diffs.clone())
 }
 
-pub async fn undo(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiError> {
+pub async fn undo(cfg: &RunnerConfig, ctx: &mut ToolContext, input: Value) -> Result<ToolEnvelope, ApiError> {
     let inp: UndoIn =
         serde_json::from_value(input).map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
@@ -534,7 +528,9 @@ pub async fn undo(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiE
         Err(SnapshotError::Other(err)) => return Err(ApiError::Other(err)),
     };
 
-    restore_checkpoint_alignment(outcome.checkpoint.clone());
+    // Update the per-request context with the restored checkpoint so that any
+    // subsequent snapshot operations in this same request use the right pointer.
+    ctx.checkpoint_pointer = outcome.checkpoint.clone();
 
     let undo_meta = UndoMetadata {
         requested_snapshot_id: inp.snapshot_id,
@@ -554,7 +550,6 @@ pub async fn undo(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiE
             "checkpoint_restored": outcome.checkpoint_restored,
             "checkpoint": outcome.checkpoint,
         }),
-        0,
     )
     .with_undo(undo_meta))
 }
@@ -563,6 +558,7 @@ pub async fn undo(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiE
 mod tests {
     use super::*;
     use crate::config::RunnerConfig;
+    use crate::tools::ToolContext;
     use std::fs as stdfs;
     use std::path::Path;
     use std::time::Duration;
@@ -824,11 +820,12 @@ mod tests {
         let (td, cfg) = test_cfg();
         init_git_repo(td.path());
         let token = signed_patch_token();
+        let mut ctx = ToolContext::default();
         let input = json!({
             "changes": [{"path": "py/new.txt", "op": "add", "content": "hello"}],
             "approval": {"challenge_id": "approval:apply_patch", "token": token}
         });
-        let result = apply_patch(&cfg, input).await;
+        let result = apply_patch(&cfg, &mut ctx, input).await;
         assert!(result.is_ok());
         let env = result.unwrap();
         assert!(env.ok);
@@ -841,11 +838,12 @@ mod tests {
         init_git_repo(td.path());
         stdfs::write(td.path().join("py/exists.txt"), "old").unwrap();
         let token = signed_patch_token();
+        let mut ctx = ToolContext::default();
         let input = json!({
             "changes": [{"path": "py/exists.txt", "op": "add", "content": "new"}],
             "approval": {"challenge_id": "approval:apply_patch", "token": token}
         });
-        let result = apply_patch(&cfg, input).await;
+        let result = apply_patch(&cfg, &mut ctx, input).await;
         assert!(result.is_err());
     }
 
@@ -855,11 +853,12 @@ mod tests {
         init_git_repo(td.path());
         stdfs::write(td.path().join("py/update.txt"), "old content").unwrap();
         let token = signed_patch_token();
+        let mut ctx = ToolContext::default();
         let input = json!({
             "changes": [{"path": "py/update.txt", "op": "update", "content": "new content"}],
             "approval": {"challenge_id": "approval:apply_patch", "token": token}
         });
-        let result = apply_patch(&cfg, input).await;
+        let result = apply_patch(&cfg, &mut ctx, input).await;
         assert!(result.is_ok());
         let content = stdfs::read_to_string(td.path().join("py/update.txt")).unwrap();
         assert_eq!(content, "new content");
@@ -870,11 +869,12 @@ mod tests {
         let (td, cfg) = test_cfg();
         init_git_repo(td.path());
         let token = signed_patch_token();
+        let mut ctx = ToolContext::default();
         let input = json!({
             "changes": [{"path": "py/missing.txt", "op": "update", "content": "x"}],
             "approval": {"challenge_id": "approval:apply_patch", "token": token}
         });
-        let result = apply_patch(&cfg, input).await;
+        let result = apply_patch(&cfg, &mut ctx, input).await;
         assert!(result.is_err());
     }
 
@@ -884,11 +884,12 @@ mod tests {
         init_git_repo(td.path());
         stdfs::write(td.path().join("py/delete_me.txt"), "bye").unwrap();
         let token = signed_patch_token();
+        let mut ctx = ToolContext::default();
         let input = json!({
             "changes": [{"path": "py/delete_me.txt", "op": "delete"}],
             "approval": {"challenge_id": "approval:apply_patch", "token": token}
         });
-        let result = apply_patch(&cfg, input).await;
+        let result = apply_patch(&cfg, &mut ctx, input).await;
         assert!(result.is_ok());
         assert!(!td.path().join("py/delete_me.txt").exists());
     }
@@ -898,11 +899,12 @@ mod tests {
         let (td, cfg) = test_cfg();
         init_git_repo(td.path());
         let token = signed_patch_token();
+        let mut ctx = ToolContext::default();
         let input = json!({
             "changes": [],
             "approval": {"challenge_id": "approval:apply_patch", "token": token}
         });
-        let result = apply_patch(&cfg, input).await;
+        let result = apply_patch(&cfg, &mut ctx, input).await;
         assert!(result.is_err());
     }
 
@@ -910,10 +912,11 @@ mod tests {
     async fn test_apply_patch_missing_approval_rejected() {
         let (td, cfg) = test_cfg();
         init_git_repo(td.path());
+        let mut ctx = ToolContext::default();
         let input = json!({
             "changes": [{"path": "py/new_reject.txt", "op": "add", "content": "hello"}]
         });
-        let result = apply_patch(&cfg, input).await;
+        let result = apply_patch(&cfg, &mut ctx, input).await;
         assert!(matches!(result, Err(ApiError::ApprovalRequired(_))));
     }
 
@@ -924,11 +927,12 @@ mod tests {
         let new_file = td.path().join("py/atomic_new.txt");
         let tmp_file = td.path().join("py/atomic_new.tmp_lula_add");
         let token = signed_patch_token();
+        let mut ctx = ToolContext::default();
         let input = json!({
             "changes": [{"path": "py/atomic_new.txt", "op": "add", "content": "atomic content"}],
             "approval": {"challenge_id": "approval:apply_patch", "token": token}
         });
-        let result = apply_patch(&cfg, input).await;
+        let result = apply_patch(&cfg, &mut ctx, input).await;
         assert!(result.is_ok());
         // Final file must exist with correct content.
         assert!(new_file.exists());
@@ -940,7 +944,8 @@ mod tests {
     #[tokio::test]
     async fn test_undo_non_git_repo_fails_deterministically() {
         let (_td, cfg) = test_cfg();
-        let result = undo(&cfg, json!({})).await;
+        let mut ctx = ToolContext::default();
+        let result = undo(&cfg, &mut ctx, json!({})).await;
         assert!(matches!(result, Err(ApiError::BadRequest(_))));
         if let Err(ApiError::BadRequest(msg)) = result {
             assert!(msg.contains("non_git_workspace"));

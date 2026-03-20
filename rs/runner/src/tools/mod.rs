@@ -1,5 +1,4 @@
 use std::time::Instant;
-use std::{sync::Mutex, sync::OnceLock};
 
 use serde_json::json;
 
@@ -13,23 +12,22 @@ mod exec;
 mod fs;
 pub(crate) mod mcp;
 
-static LAST_UNDO_POINTER: OnceLock<Mutex<Option<CheckpointPointer>>> = OnceLock::new();
-
-fn undo_pointer_slot() -> &'static Mutex<Option<CheckpointPointer>> {
-    LAST_UNDO_POINTER.get_or_init(|| Mutex::new(None))
-}
-
-pub(crate) fn restore_checkpoint_alignment(pointer: Option<CheckpointPointer>) {
-    if let Ok(mut slot) = undo_pointer_slot().lock() {
-        *slot = pointer;
-    }
+/// Per-request context threaded through `dispatch_tool` and its callees.
+///
+/// Replacing the former process-global `LAST_UNDO_POINTER` with a
+/// request-scoped value eliminates the data race that occurred when
+/// concurrent `batch_execute` tasks overwrote each other's checkpoint pointer.
+#[derive(Default)]
+pub struct ToolContext {
+    pub checkpoint_pointer: Option<CheckpointPointer>,
 }
 
 pub(crate) async fn snapshot_for_operation(
     cfg: &RunnerConfig,
+    ctx: &ToolContext,
     operation_class: &str,
 ) -> Result<SnapshotMetadata, ApiError> {
-    let checkpoint = undo_pointer_slot().lock().ok().and_then(|s| (*s).clone());
+    let checkpoint = ctx.checkpoint_pointer.clone();
 
     match create_snapshot(cfg.root_dir.as_path(), operation_class, checkpoint.clone()).await {
         Ok(rec) => Ok(SnapshotMetadata {
@@ -56,26 +54,27 @@ pub async fn dispatch_tool(
     req: ToolExecuteRequest,
 ) -> Result<ToolEnvelope, ApiError> {
     let started = Instant::now();
-    restore_checkpoint_alignment(req.checkpoint.clone());
     let route = req.route.clone();
+
+    // Build a fresh per-request context; initialise the checkpoint pointer
+    // from the incoming request so snapshot/undo operations use the caller's
+    // LangGraph checkpoint rather than any stale global state.
+    let mut ctx = ToolContext {
+        checkpoint_pointer: req.checkpoint.clone(),
+    };
 
     let tool = req.tool.trim().to_string();
     let input = req.input;
     let out = match tool.as_str() {
-        "health" => Ok(ToolEnvelope::ok(
-            "health",
-            "ok",
-            json!({}),
-            started.elapsed().as_millis(),
-        )),
+        "health" => Ok(ToolEnvelope::ok("health", "ok", json!({}))),
         "read_file" => fs::read_file(cfg, input).await,
         "search_files" => fs::search_files(cfg, input).await,
         "search_codebase" => fs::search_codebase(cfg, input).await,
         "ast_index_summary" => fs::ast_index_summary(cfg, input).await,
         "list_files" => fs::list_files(cfg, input).await,
-        "apply_patch" => fs::apply_patch(cfg, input).await,
-        "exec" => exec::exec(cfg, input).await,
-        "undo" => fs::undo(cfg, input).await,
+        "apply_patch" => fs::apply_patch(cfg, &mut ctx, input).await,
+        "exec" => exec::exec(cfg, &mut ctx, input).await,
+        "undo" => fs::undo(cfg, &mut ctx, input).await,
         "mcp_discover" => mcp::mcp_discover(cfg, input).await,
         "mcp_execute" => mcp::mcp_execute(cfg, input).await,
         "mcp_resources_list" => mcp::mcp_resources_list(cfg, input).await,
@@ -86,6 +85,7 @@ pub async fn dispatch_tool(
     };
     match out {
         Ok(mut env) => {
+            // Single authoritative timing write — tool impls produce timing_ms=0.
             env.timing_ms = started.elapsed().as_millis();
             if let Some(route_meta) = route.clone() {
                 env = env.with_route(route_meta);
@@ -104,7 +104,6 @@ pub async fn dispatch_tool(
                         "diagnostics": [],
                         "approval": approval
                     }),
-                    started.elapsed().as_millis(),
                 )
                 .with_approval(approval),
                 _ => ToolEnvelope::err(
@@ -112,7 +111,6 @@ pub async fn dispatch_tool(
                     1,
                     error_message.clone(),
                     json!({"error": error_message, "diagnostics": []}),
-                    started.elapsed().as_millis(),
                 ),
             };
             env.timing_ms = started.elapsed().as_millis();
@@ -249,7 +247,7 @@ mod tests {
             route: None,
         };
         let env = dispatch_tool(&cfg, req).await.unwrap();
-        // timing_ms should be set (>= 0)
+        // timing_ms is set by dispatch_tool, not by the tool impl
         assert!(env.timing_ms < 10_000); // sanity check: less than 10 seconds
     }
 
@@ -283,5 +281,38 @@ mod tests {
         let env = dispatch_tool(&cfg, req).await.unwrap();
         assert!(!env.ok);
         assert!(env.stderr.contains("approval_required"));
+    }
+
+    #[tokio::test]
+    async fn test_tool_context_per_request_isolation() {
+        // Two requests with different checkpoints must not interfere.
+        let (_td, cfg) = test_cfg();
+        let req_a = ToolExecuteRequest {
+            tool: "health".to_string(),
+            input: json!({}),
+            checkpoint: Some(crate::envelope::CheckpointPointer {
+                thread_id: "thread-a".to_string(),
+                checkpoint_ns: "ns-a".to_string(),
+                checkpoint_id: None,
+                run_id: None,
+            }),
+            route: None,
+        };
+        let req_b = ToolExecuteRequest {
+            tool: "health".to_string(),
+            input: json!({}),
+            checkpoint: Some(crate::envelope::CheckpointPointer {
+                thread_id: "thread-b".to_string(),
+                checkpoint_ns: "ns-b".to_string(),
+                checkpoint_id: None,
+                run_id: None,
+            }),
+            route: None,
+        };
+        // Both should succeed without cross-contamination; no panics from
+        // the formerly-global mutex.
+        let (env_a, env_b) = tokio::join!(dispatch_tool(&cfg, req_a), dispatch_tool(&cfg, req_b));
+        assert!(env_a.unwrap().ok);
+        assert!(env_b.unwrap().ok);
     }
 }

@@ -587,7 +587,6 @@ pub async fn mcp_discover(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelo
                         "inbound": inbound_stats.into_metadata()
                     }
                 }),
-                0,
             )
             .with_mcp(McpMetadata {
                 server_name,
@@ -654,7 +653,6 @@ pub async fn mcp_execute(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelop
                         "inbound": inbound_stats.into_metadata()
                     }
                 }),
-                0,
             );
             env.mcp = Some(McpMetadata {
                 inbound_redactions: inbound_stats.into_metadata(),
@@ -683,7 +681,6 @@ pub async fn mcp_execute(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelop
                         "inbound": inbound_stats.into_metadata()
                     }
                 }),
-                0,
             );
             env.mcp = Some(McpMetadata {
                 inbound_redactions: inbound_stats.into_metadata(),
@@ -732,7 +729,6 @@ pub async fn mcp_resources_list(cfg: &RunnerConfig, input: Value) -> Result<Tool
                         "inbound": inbound_stats.into_metadata()
                     }
                 }),
-                0,
             )
             .with_mcp(McpMetadata {
                 server_name,
@@ -790,7 +786,6 @@ pub async fn mcp_resource_read(cfg: &RunnerConfig, input: Value) -> Result<ToolE
                         "inbound": inbound_stats.into_metadata()
                     }
                 }),
-                0,
             )
             .with_mcp(McpMetadata {
                 server_name,
@@ -846,7 +841,6 @@ pub async fn mcp_prompts_list(cfg: &RunnerConfig, input: Value) -> Result<ToolEn
                         "inbound": inbound_stats.into_metadata()
                     }
                 }),
-                0,
             )
             .with_mcp(McpMetadata {
                 server_name,
@@ -907,7 +901,6 @@ pub async fn mcp_prompt_get(cfg: &RunnerConfig, input: Value) -> Result<ToolEnve
                         "inbound": inbound_stats.into_metadata()
                     }
                 }),
-                0,
             )
             .with_mcp(McpMetadata {
                 server_name,
@@ -929,8 +922,44 @@ pub async fn mcp_prompt_get(cfg: &RunnerConfig, input: Value) -> Result<ToolEnve
 mod tests {
     use super::*;
     use crate::config::RunnerConfig;
+    use proptest::prelude::*;
     use std::path::Path;
     use std::path::PathBuf;
+
+    proptest! {
+        /// For any printable ASCII string, `redact_string` must never produce
+        /// output whose byte length exceeds a bounded multiple of the input.
+        /// Token format: `[PREFIX_xxxxxxxx]` ≈ 18 chars.  For very short
+        /// single-char matches that would be replaced by a longer token the
+        /// ratio is bounded: at most 18× a 1-char input == 18 chars growth.
+        /// We assert ≤ (input.len() + 1) * 20 as a generous upper bound.
+        #[test]
+        fn prop_redact_string_bounded_growth(
+            input in proptest::string::string_regex("[[:print:]]{0,200}").unwrap()
+        ) {
+            let mut stats = RedactionStats::default();
+            let output = redact_string(&input, &mut stats);
+            let max_allowed = (input.len() + 1) * 20;
+            prop_assert!(
+                output.len() <= max_allowed,
+                "output len {} exceeds 20x input len {} for input {:?}",
+                output.len(), input.len(), input
+            );
+        }
+
+        /// `redact_string` is deterministic: the same input always yields the
+        /// same output.
+        #[test]
+        fn prop_redact_string_deterministic(
+            input in proptest::string::string_regex("[[:print:]]{0,100}").unwrap()
+        ) {
+            let mut stats1 = RedactionStats::default();
+            let mut stats2 = RedactionStats::default();
+            let out1 = redact_string(&input, &mut stats1);
+            let out2 = redact_string(&input, &mut stats2);
+            prop_assert_eq!(out1, out2);
+        }
+    }
 
     fn mock_mcp_server_script(temp_dir: &Path) -> PathBuf {
         let script = temp_dir.join("mock_mcp_server.py");
