@@ -279,8 +279,39 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = args.bind.parse()?;
     tracing::info!(%addr, rate_limit_rps = args.rate_limit_rps, "runner_listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
     opentelemetry::global::shutdown_tracer_provider();
     Ok(())
+}
+
+/// Wait for a shutdown signal (SIGTERM on Unix, or Ctrl-C everywhere).
+///
+/// Resolves once either signal is received, allowing [`axum::serve`] to
+/// drain in-flight requests before the process exits.
+#[cfg(unix)]
+async fn shutdown_signal() {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut sigterm = signal(SignalKind::terminate())
+        .expect("failed to install SIGTERM handler");
+
+    tokio::select! {
+        _ = sigterm.recv() => {
+            tracing::info!("runner_shutdown: received SIGTERM");
+        }
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("runner_shutdown: received ctrl-c");
+        }
+    }
+}
+
+#[cfg(not(unix))]
+async fn shutdown_signal() {
+    tokio::signal::ctrl_c()
+        .await
+        .expect("failed to install ctrl-c handler");
+    tracing::info!("runner_shutdown: received ctrl-c");
 }
