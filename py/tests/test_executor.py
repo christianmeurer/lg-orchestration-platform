@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from lg_orch.nodes.executor import executor
+from lg_orch.nodes.executor import _coerce_approval_token, executor
 
 
 def _base_state(**overrides: Any) -> dict[str, Any]:
@@ -368,3 +368,53 @@ def test_executor_preserves_mcp_response_mapping(mock_cls: MagicMock) -> None:
     assert result["tool"] == "mcp_execute"
     assert result["mcp"]["server_name"] == "mock"
     assert result["artifacts"]["redaction"]["outbound"]["paths"] == 1
+
+
+# ---------------------------------------------------------------------------
+# _coerce_approval_token structural validation
+# ---------------------------------------------------------------------------
+
+
+def test_coerce_approval_token_accepts_legacy_format() -> None:
+    result = _coerce_approval_token(
+        {"challenge_id": "approval:apply_patch", "token": "approve:approval:apply_patch"}
+    )
+    assert result is not None
+    assert result["challenge_id"] == "approval:apply_patch"
+    assert result["token"] == "approve:approval:apply_patch"
+
+
+def test_coerce_approval_token_accepts_hmac_format() -> None:
+    hmac_token = "approval:apply_patch|1700000000|abcdef1234567890abcdef1234567890|deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    result = _coerce_approval_token(
+        {"challenge_id": "approval:apply_patch", "token": hmac_token}
+    )
+    assert result is not None
+    parts = result["token"].split("|")
+    assert len(parts) == 4
+
+
+def test_coerce_approval_token_rejects_malformed_pipe_count() -> None:
+    result = _coerce_approval_token(
+        {"challenge_id": "approval:apply_patch", "token": "a|b|c"}
+    )
+    assert result is None
+
+
+def test_coerce_approval_token_rejects_hmac_with_empty_field() -> None:
+    result = _coerce_approval_token(
+        {"challenge_id": "approval:apply_patch", "token": "approval:apply_patch||nonce|sig"}
+    )
+    assert result is None
+
+
+def test_coerce_approval_token_rejects_non_dict() -> None:
+    assert _coerce_approval_token("bare-string") is None
+    assert _coerce_approval_token(None) is None
+    assert _coerce_approval_token(42) is None
+
+
+def test_coerce_approval_token_rejects_missing_fields() -> None:
+    assert _coerce_approval_token({"challenge_id": "id"}) is None
+    assert _coerce_approval_token({"token": "tok"}) is None
+    assert _coerce_approval_token({}) is None

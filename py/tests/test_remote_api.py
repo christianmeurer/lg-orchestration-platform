@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import io
 import json
+import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 import lg_orch.remote_api as remote_api
-from lg_orch.remote_api import RemoteAPIService, _api_http_response
+from lg_orch.remote_api import RemoteAPIService, _api_http_response, _approval_token_for_challenge
 
 
 class DummyProcess:
@@ -542,6 +544,50 @@ def test_api_http_response_rejects_suspended_run(
 # ---------------------------------------------------------------------------
 # _RateLimiter tests
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# _approval_token_for_challenge tests
+# ---------------------------------------------------------------------------
+
+
+def test_approval_token_uses_hmac_format_when_secret_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LG_RUNNER_APPROVAL_SECRET", "test-secret-value")
+    token = _approval_token_for_challenge("approval:apply_patch")
+    parts = token.split("|")
+    assert len(parts) == 4, f"expected 4 pipe-separated fields, got {len(parts)}: {token!r}"
+    challenge_id, iat_str, nonce, signature = parts
+    assert challenge_id == "approval:apply_patch"
+    assert iat_str.isdigit()
+    assert len(nonce) == 32
+    assert len(signature) == 64
+
+
+def test_approval_token_falls_back_to_legacy_when_no_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LG_RUNNER_APPROVAL_SECRET", raising=False)
+    token = _approval_token_for_challenge("approval:apply_patch")
+    assert token == "approve:approval:apply_patch"
+
+
+def test_approval_token_hmac_is_consistent_with_known_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    import hashlib
+    import hmac as _hmac
+
+    monkeypatch.setenv("LG_RUNNER_APPROVAL_SECRET", "known-secret")
+    token = _approval_token_for_challenge("chal-id")
+    parts = token.split("|")
+    assert len(parts) == 4
+    challenge_id, iat_str, nonce, signature = parts
+    message = f"{challenge_id}|{iat_str}|{nonce}"
+    expected_sig = _hmac.new("known-secret".encode(), message.encode(), hashlib.sha256).hexdigest()
+    assert signature == expected_sig
+
+
+def test_approval_token_two_calls_produce_different_nonces(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LG_RUNNER_APPROVAL_SECRET", "secret")
+    t1 = _approval_token_for_challenge("chal")
+    t2 = _approval_token_for_challenge("chal")
+    assert t1.split("|")[2] != t2.split("|")[2], "nonces must differ between calls"
 
 
 def test_rate_limiter_allows_one_and_blocks_second() -> None:

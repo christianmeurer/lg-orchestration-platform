@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import hmac
 import json
 import os
 import queue
 import re
+import secrets
 import subprocess
 import sys
 import threading
@@ -133,7 +135,28 @@ def _trace_path_for_run(repo_root: Path, trace_out_dir: Path, run_id: str) -> Pa
 
 
 def _approval_token_for_challenge(challenge_id: str) -> str:
-    return f"approve:{challenge_id}"
+    """Generate a cryptographically signed approval token.
+
+    Format: ``{challenge_id}|{iat}|{nonce}|{signature}``
+
+    Matches the HMAC-SHA256 protocol expected by the Rust runner in
+    ``rs/runner/src/approval.rs``.  When ``LG_RUNNER_APPROVAL_SECRET`` is
+    unset or empty, falls back to the legacy plain-text format and logs a
+    warning.
+    """
+    secret = os.environ.get("LG_RUNNER_APPROVAL_SECRET", "")
+    if not secret:
+        _log = get_logger()
+        _log.warning(
+            "approval_token_insecure",
+            detail="LG_RUNNER_APPROVAL_SECRET not set; using deprecated plain-text token",
+        )
+        return f"approve:{challenge_id}"
+    nonce = secrets.token_hex(16)
+    iat = int(time.time())
+    message = f"{challenge_id}|{iat}|{nonce}"
+    signature = hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
+    return f"{message}|{signature}"
 
 
 def _tool_name_for_approval(*, operation_class: str, challenge_id: str) -> str:

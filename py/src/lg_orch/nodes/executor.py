@@ -78,6 +78,13 @@ def _normalize_rel_path(path: str) -> str:
 
 
 def _coerce_approval_token(raw: object) -> dict[str, str] | None:
+    """Validate and extract an approval token dict.
+
+    Accepts tokens in both the legacy plain-text format (``approve:<id>``) and
+    the current HMAC format (``<challenge_id>|<iat>|<nonce>|<signature>``).
+    Structural integrity is checked here; cryptographic verification is
+    delegated to the Rust runner.
+    """
     if not isinstance(raw, dict):
         return None
     challenge_id = raw.get("challenge_id")
@@ -86,7 +93,14 @@ def _coerce_approval_token(raw: object) -> dict[str, str] | None:
         return None
     if not isinstance(token, str) or not token.strip():
         return None
-    return {"challenge_id": challenge_id.strip(), "token": token.strip()}
+    token_s = token.strip()
+    parts = token_s.split("|")
+    if len(parts) != 1 and len(parts) != 4:
+        return None
+    if len(parts) == 4:
+        if not all(parts):
+            return None
+    return {"challenge_id": challenge_id.strip(), "token": token_s}
 
 
 def _approval_for_tool(

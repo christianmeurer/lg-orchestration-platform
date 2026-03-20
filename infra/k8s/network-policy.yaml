@@ -17,7 +17,7 @@ spec:
               app: lula-orch
       ports:
         - protocol: TCP
-          port: 8080
+          port: 8088
   egress:
     - to:
         - namespaceSelector:

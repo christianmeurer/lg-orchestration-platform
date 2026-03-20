@@ -124,7 +124,7 @@ class GCSAuditSink(AuditSink):
 
     async def export(self, event: AuditEvent) -> None:
         try:
-            from google.cloud import storage as gcs
+            from google.cloud import storage as gcs  # noqa: F401 — import-check only
         except ImportError:
             return
 
@@ -146,9 +146,19 @@ class GCSAuditSink(AuditSink):
         if not batch:
             return
 
+        lines = [to_jsonl(e) for e in batch]
+        await asyncio.to_thread(self._do_export, lines)
+
+    def _do_export(self, lines: list[str]) -> None:
+        """Synchronous GCS upload — called from a thread pool via asyncio.to_thread."""
+        try:
+            from google.cloud import storage as gcs
+        except ImportError:
+            return
+
         date_str = datetime.now(UTC).strftime("%Y-%m-%d")
         blob_name = f"{self._prefix}/{date_str}/{uuid.uuid4().hex}.jsonl"
-        body = "\n".join(to_jsonl(e) for e in batch).encode("utf-8")
+        body = "\n".join(lines).encode("utf-8")
 
         try:
             client = gcs.Client()

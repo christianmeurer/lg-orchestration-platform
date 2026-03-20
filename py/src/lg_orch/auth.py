@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -67,28 +68,47 @@ class TokenClaims:
 # 5-minute TTL; refresh on expiry to handle JWKS key rotation
 _JWKS_CACHE_TTL_SECONDS: int = 300
 _jwks_cache: dict[str, tuple[Any, float]] = {}
+_jwks_lock: threading.Lock = threading.Lock()
 
 
 def _fetch_jwks(url: str) -> dict[str, Any]:
+    """Fetch and cache JWKS from *url* with a double-checked locking pattern.
+
+    The HTTP request is performed outside the lock to avoid holding it during
+    network I/O.  Two concurrent callers for an expired entry may both fetch,
+    but only one write will win; the result is deterministically correct.
+    """
     import json
     import urllib.request
 
-    cached = _jwks_cache.get(url)
-    if cached is not None:
-        jwks_data, fetched_at = cached
-        if time.monotonic() - fetched_at < _JWKS_CACHE_TTL_SECONDS:
-            return jwks_data  # type: ignore[return-value]
-        del _jwks_cache[url]
+    # --- First check (lock held) ---
+    with _jwks_lock:
+        cached = _jwks_cache.get(url)
+        if cached is not None:
+            jwks_data, fetched_at = cached
+            if time.monotonic() - fetched_at < _JWKS_CACHE_TTL_SECONDS:
+                return jwks_data  # type: ignore[return-value]
 
+    # --- Fetch without lock ---
     with urllib.request.urlopen(url, timeout=10) as resp:
         data: dict[str, Any] = json.loads(resp.read().decode("utf-8"))
-    _jwks_cache[url] = (data, time.monotonic())
+
+    # --- Re-check and write (lock held) ---
+    with _jwks_lock:
+        cached = _jwks_cache.get(url)
+        if cached is not None:
+            _, fetched_at = cached
+            if time.monotonic() - fetched_at < _JWKS_CACHE_TTL_SECONDS:
+                return cached[0]  # type: ignore[return-value]
+        _jwks_cache[url] = (data, time.monotonic())
+
     return data
 
 
 def _clear_jwks_cache() -> None:
     """Clear the JWKS cache (useful in tests)."""
-    _jwks_cache.clear()
+    with _jwks_lock:
+        _jwks_cache.clear()
 
 
 # ---------------------------------------------------------------------------
