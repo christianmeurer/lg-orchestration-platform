@@ -46,8 +46,34 @@ The `remote_api.py` monolith (previously ~2,045 lines) was decomposed in Wave 2 
 | `streaming.py` | SSE stream management — per-run event queues, chunk serialisation, client lifecycle |
 | `approvals.py` | Approval suspend/resume API — token issuance, HMAC-SHA256 validation, approve/reject endpoints |
 | `service.py` | Top-level `RemoteAPIService` wiring: mounts the sub-routers, initialises rate-limit middleware, and owns the server lifecycle |
+| `admin.py` | Healing loop admin routes — force-trigger, status query, and loop-budget override endpoints added in Wave B |
 
 The `remote_api.py` facade in `py/src/lg_orch/remote_api.py` re-exports from these submodules for backward-compatibility.
+
+## CLI Commands Subpackage (`py/src/lg_orch/commands/`)
+
+`main.py` was decomposed in Wave B into a thin dispatcher (<200 lines) that delegates all CLI entry points to four focused command modules:
+
+| Module | Entry point | Responsibility |
+|---|---|---|
+| `run.py` | `lg-orch run` | Graph execution — wires state, checkpoint store, and invokes the LangGraph runner |
+| `serve.py` | `lg-orch serve` | Remote API server startup — binds the `RemoteAPIService` and manages the server lifecycle |
+| `trace.py` | `lg-orch trace` | Trace inspection — loads and pretty-prints persisted OTel/structlog trace records |
+| `heal.py` | `lg-orch heal` | Healing loop management — triggers manual repair cycles and reports loop status |
+
+The `commands/__init__.py` re-exports all four entry points so that `main.py`'s `typer` app can register them with a single import.
+
+## Configuration Overlay (`pydantic-settings`)
+
+Three `pydantic-settings` classes layer on top of the TOML config files, giving environment variable precedence without modifying config files:
+
+| Class | Env prefix | Overrides |
+|---|---|---|
+| `RunnerSettings` | `LG_RUNNER_` | `base_url`, `api_key`, `timeout_s`, `max_retries` |
+| `AuthSettings` | `LG_AUTH_` | `mode`, `bearer_token`, `jwks_url`, `hmac_secret` |
+| `CheckpointSettings` | `LG_CHECKPOINT_` | `backend`, `sqlite_path`, `redis_url`, `postgres_dsn` |
+
+This makes Kubernetes Secret injection work without patching TOML files at deploy time — inject `LG_RUNNER_BASE_URL`, `LG_AUTH_MODE`, `LG_CHECKPOINT_BACKEND`, etc. as pod environment variables and the overlay picks them up automatically.
 
 ## Shared Node Utilities (`py/src/lg_orch/nodes/_utils.py`)
 
@@ -84,6 +110,15 @@ The logic for tools is located in `rs/runner/src/tools/`.
   - `apply_patch`: Adds, updates, or deletes files safely.
 - **Exec Tool (`exec.rs`)**:
   - `exec`: Spawns a subprocess. It uses the allowlist defined in `config.rs` (`uv`, `python`, `pytest`, `ruff`, `mypy`, `cargo`, `git`) to prevent arbitrary command execution.
+
+## Eval Framework (`eval/run.py`)
+
+The eval runner gained the following capabilities in Wave D:
+
+- **`--swe-bench PATH`** — loads a SWE-bench JSONL file (one task object per line). Each line's `instance_id`, `problem_statement`, and `patch` fields are mapped to Lula's internal task format. The loader respects `--swe-bench-limit N` to cap the number of tasks for fast iteration.
+- **`resolved_rate` metric** — the summary table now reports `resolved_rate = resolved / total` alongside the existing `pass@k` columns. Nightly CI enforces a minimum threshold of `0.30` on `real_world_repair.json`.
+- **Benchmark class grouping** — the `pass@k` table groups tasks by their `class` field (e.g. `repair`, `analysis`, `refactor`) so per-class pass rates are visible alongside the aggregate.
+- **`--dry-run` flag** — prints the resolved task list (IDs, requests, golden file paths) without invoking the LangGraph graph. Useful for verifying loader output and fixture availability before a full eval run.
 
 ## Testing & CI
 Both sides of the codebase are heavily tested:

@@ -13,7 +13,7 @@
 
 ---
 
-**Maturity: Production-Ready (v1.0-rc2)** — All Wave 14–16 debt resolved and all CRITICAL/HIGH sprint items closed (2026-03-20). Production-ready with the exception of external secrets management (ESO/Vault — operational dependency) and Firecracker VMM dispatch path completion.
+**Maturity: Production-Ready (v1.0-rc3)** — All Wave 14–16 debt resolved, all CRITICAL/HIGH sprint items closed, and second sprint (Waves A/B/D) complete (2026-03-20). Full eval framework coverage with SWE-bench adapter active. Production-ready with the exception of external secrets management (ESO/Vault — operational dependency) and Firecracker VMM dispatch path completion.
 
 ---
 
@@ -40,7 +40,7 @@ Persistent memory spans three tiers — semantic (cosine similarity over SQLite)
 - **Multi-repo orchestration with SCIP indexing** — `ScipIndex` reads cross-repo symbol definitions; `MultiRepoScheduler` injects dependency-ordered sub-agent handoffs with per-repo runner URLs
 - **Typed `AgentHandoff` specialist envelopes** — structured objective, file scope, evidence, constraints, acceptance checks, retry budget, and provenance carried between planner, coder, verifier, and recovery paths
 - **SSE streaming SPA and VS Code extension** — D3 v7 force-directed agent graph with node-state animations, SQLite FTS5 full-text run search, inline diffs, verifier report panels, and approval action buttons
-- **Eval framework with golden-file assertions** — structural behavioral scoring plus outcome correctness via `post_apply_pytest_pass` assertions; `pass@k` scoring and SWE-bench lite adapter on the roadmap
+- **Eval framework with golden-file assertions** — structural behavioral scoring plus outcome correctness via `post_apply_pytest_pass` assertions; `pass@k` scoring with benchmark class grouping, `resolved_rate` metric, `--swe-bench` JSONL adapter, and `--dry-run` task preview
 
 ---
 
@@ -136,7 +136,14 @@ uv run pytest
 ### Run the eval framework
 
 ```bash
+# Run a single task
 python eval/run.py --task eval/tasks/canary.json
+
+# Dry-run: preview task list without executing the graph
+python eval/run.py --task eval/tasks/real_world_repair.json --dry-run
+
+# Run SWE-bench JSONL tasks (first 20)
+python eval/run.py --swe-bench path/to/swe_bench_lite.jsonl --swe-bench-limit 20
 ```
 
 ### Run with a real model
@@ -167,6 +174,8 @@ All runtime configuration is in [`configs/runtime.dev.toml`](configs/runtime.dev
 | `[budgets] max_tool_calls_per_loop` | `12` | `12` | Maximum tool calls dispatched per loop iteration |
 | `[checkpoint] enabled` | `true` | `true` | Enable LangGraph SQLite checkpoint store for suspend/resume |
 | `[vericoding] enabled` | `true` | `true` | Enable Python-side invariant pre-checks before tool dispatch |
+
+**Environment variable overlay (`pydantic-settings`):** Any TOML config value can be overridden at runtime with an environment variable, making Kubernetes Secret injection seamless. Key overrides: `LG_RUNNER_BASE_URL`, `LG_AUTH_MODE`, `LG_AUTH_BEARER_TOKEN`, `LG_AUTH_JWKS_URL`, `LG_AUTH_HMAC_SECRET`, `LG_CHECKPOINT_BACKEND`, `LG_CHECKPOINT_REDIS_URL`, `LG_CHECKPOINT_POSTGRES_DSN`. Environment variables take precedence over TOML values; no config file modification is required.
 
 ---
 
@@ -260,7 +269,6 @@ All items from the Wave 14–16 backlog have been implemented as of commit `1324
 
 The following gaps are tracked and scheduled for remediation. They do not affect the correctness of the current orchestration or execution paths but represent engineering debt or documented deviations between specification and runtime behavior.
 
-- **JWKS cache has no TTL.** The JWKS key cache in [`auth.py`](py/src/lg_orch/auth.py) does not expire entries based on age; key rotation requires a process restart. The cache is now thread-safe (double-checked locking added in sprint commit `626f31e`); the remaining limitation is TTL expiry, not thread safety.
 - **Secrets management not yet automated.** No External Secrets Operator, Vault, or SOPS integration. Secrets are managed via manual `kubectl edit`. Requires an operational decision on secrets backend (ESO/Vault/SOPS) — deferred as an external ops dependency.
 
 ---
