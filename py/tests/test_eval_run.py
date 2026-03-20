@@ -28,9 +28,10 @@ def test_score_task_passes_with_matching_output() -> None:
             "intent": "analysis",
             "halt_reason": "",
             "final": "done",
+            "loop_count": 1,
             "tool_results": [],
             "verification": {"acceptance_ok": True, "ok": True},
-            "route": {"lane": "fast"},
+            "route": {"lane": "interactive"},
             "telemetry": {"compression_summary": {"total_events": 1}},
         },
     )
@@ -98,9 +99,10 @@ def test_main_json_output_uses_scored_report(tmp_path: Path, capsys: object) -> 
         "intent": "analysis",
         "halt_reason": "",
         "final": "done",
+        "loop_count": 1,
         "tool_results": [],
         "verification": {"acceptance_ok": True, "ok": True},
-        "route": {"lane": "fast"},
+        "route": {"lane": "interactive"},
         "telemetry": {"compression_summary": {"total_events": 1}},
     }
     try:

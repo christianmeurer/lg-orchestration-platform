@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.invalid/schemas/tool_envelope.schema.json",
+  "$id": "https://github.com/lula-ai/lula/schemas/tool_envelope.schema.json",
   "type": "object",
   "required": ["tool", "ok", "exit_code", "stdout", "stderr", "diagnostics", "timing_ms", "artifacts"],
   "additionalProperties": false,

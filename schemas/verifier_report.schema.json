@@ -1,12 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.invalid/schemas/verifier_report.schema.json",
+  "$id": "https://github.com/lula-ai/lula/schemas/verifier_report.schema.json",
   "type": "object",
   "required": [
     "ok",
+    "acceptance_ok",
     "checks",
     "retry_target",
-    "plan_action"
+    "plan_action",
+    "failure_class"
   ],
   "additionalProperties": false,
   "$defs": {

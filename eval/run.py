@@ -92,51 +92,75 @@ def load_tasks(
 
     normalised_filter = {_normalise(f) for f in task_filter} if task_filter else None
 
+    def _build_task(task_data: dict[str, Any]) -> EvalTask:
+        # Apply defaults for fields that may be absent in multi-task inner dicts.
+        task_data.setdefault("expected_intent", "code_change")
+        task_data.setdefault("expected_halt_reason", "")
+        task_data.setdefault("require_final", False)
+        task_data.setdefault("expected_acceptance_ok", True)
+        task_data.setdefault("budget_max_loops", 1)
+        task_data.setdefault("expected_recovery_packet_present", False)
+        task_data.setdefault("description", "")
+        task_data.setdefault("acceptance_criteria", [])
+        task_data.setdefault("expected_tool_calls", [])
+        task_data.setdefault("benchmark_class", "")
+        task_data.setdefault("difficulty", "")
+        task_data.setdefault("target_file", "")
+        task_data.setdefault("target_function", "")
+        task_data.setdefault("expected_status", "")
+        expected_pending_approval_raw = task_data.get("expected_pending_approval")
+        expected_checkpoint_present_raw = task_data.get("expected_checkpoint_present")
+        expected_approval_history_present_raw = task_data.get("expected_approval_history_present")
+        return EvalTask(
+            id=str(task_data["id"]),
+            request=str(task_data["request"]),
+            expected_intent=str(task_data["expected_intent"]),
+            expected_halt_reason=str(task_data.get("expected_halt_reason", "")),
+            require_final=bool(task_data.get("require_final", True)),
+            expected_acceptance_ok=bool(task_data.get("expected_acceptance_ok", True)),
+            budget_max_loops=int(task_data.get("budget_max_loops", 1)),
+            expected_recovery_packet_present=bool(task_data.get("expected_recovery_packet_present", False)),
+            description=str(task_data.get("description", "")),
+            acceptance_criteria=list(task_data.get("acceptance_criteria", [])),
+            expected_tool_calls=list(task_data.get("expected_tool_calls", [])),
+            benchmark_class=str(task_data.get("benchmark_class", "")),
+            difficulty=str(task_data.get("difficulty", "")),
+            target_file=str(task_data.get("target_file", "")),
+            target_function=str(task_data.get("target_function", "")),
+            expected_status=str(task_data.get("expected_status", "")),
+            expected_pending_approval=(
+                expected_pending_approval_raw
+                if isinstance(expected_pending_approval_raw, bool)
+                else None
+            ),
+            expected_checkpoint_present=(
+                expected_checkpoint_present_raw
+                if isinstance(expected_checkpoint_present_raw, bool)
+                else None
+            ),
+            expected_approval_history_present=(
+                expected_approval_history_present_raw
+                if isinstance(expected_approval_history_present_raw, bool)
+                else None
+            ),
+        )
+
     for path in sorted(tasks_dir.glob("*.json")):
         if normalised_filter is not None and _normalise(path.stem) not in normalised_filter:
             continue
         data = json.loads(path.read_text(encoding="utf-8"))
-        # Multi-task format: top-level "tasks" array (no top-level id/request).
+        # Multi-task format: top-level "tasks" array with no top-level id/request.
         if "tasks" in data and isinstance(data["tasks"], list) and "id" not in data:
+            for inner in data["tasks"]:
+                if not isinstance(inner, dict) or "id" not in inner:
+                    _log.warning("skipping inner task in %s: missing 'id'", path)
+                    continue
+                tasks.append(_build_task(inner))
             continue
-        expected_pending_approval_raw = data.get("expected_pending_approval")
-        expected_checkpoint_present_raw = data.get("expected_checkpoint_present")
-        expected_approval_history_present_raw = data.get("expected_approval_history_present")
-        tasks.append(
-            EvalTask(
-                id=str(data["id"]),
-                request=str(data["request"]),
-                expected_intent=str(data["expected_intent"]),
-                expected_halt_reason=str(data.get("expected_halt_reason", "")),
-                require_final=bool(data.get("require_final", True)),
-                expected_acceptance_ok=bool(data.get("expected_acceptance_ok", True)),
-                budget_max_loops=int(data.get("budget_max_loops", 1)),
-                expected_recovery_packet_present=bool(data.get("expected_recovery_packet_present", False)),
-                description=str(data.get("description", "")),
-                acceptance_criteria=list(data.get("acceptance_criteria", [])),
-                expected_tool_calls=list(data.get("expected_tool_calls", [])),
-                benchmark_class=str(data.get("benchmark_class", "")),
-                difficulty=str(data.get("difficulty", "")),
-                target_file=str(data.get("target_file", "")),
-                target_function=str(data.get("target_function", "")),
-                expected_status=str(data.get("expected_status", "")),
-                expected_pending_approval=(
-                    expected_pending_approval_raw
-                    if isinstance(expected_pending_approval_raw, bool)
-                    else None
-                ),
-                expected_checkpoint_present=(
-                    expected_checkpoint_present_raw
-                    if isinstance(expected_checkpoint_present_raw, bool)
-                    else None
-                ),
-                expected_approval_history_present=(
-                    expected_approval_history_present_raw
-                    if isinstance(expected_approval_history_present_raw, bool)
-                    else None
-                ),
-            )
-        )
+        if "id" not in data:
+            _log.warning("skipping %s: no 'id' field and not a multi-task file", path)
+            continue
+        tasks.append(_build_task(data))
     return tasks
 
 

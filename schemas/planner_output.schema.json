@@ -1,11 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.invalid/schemas/planner_output.schema.json",
+  "$id": "https://github.com/lula-ai/lula/schemas/planner_output.schema.json",
   "type": "object",
   "required": [
     "steps",
     "verification",
-    "rollback"
+    "rollback",
+    "acceptance_criteria",
+    "max_iterations"
   ],
   "additionalProperties": false,
   "$defs": {
