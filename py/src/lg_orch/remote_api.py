@@ -168,6 +168,345 @@ def _audit_action_and_resource(*, method: str, route: str, path_parts: list[str]
 _audit_logger: AuditLogger | None = None
 
 
+# ---------------------------------------------------------------------------
+# Route handler functions (extracted from the former if/elif chain)
+# ---------------------------------------------------------------------------
+
+
+def _hdl_metrics(
+    service: "RemoteAPIService", method: str, request_path: str,
+    request_body: bytes | None, auth_subject: str, path_parts: list[str],
+    request_id: str, client_ip: str,
+) -> tuple[int, str, bytes]:
+    return _handle_metrics(method)
+
+
+def _hdl_root_ui(
+    service: "RemoteAPIService", method: str, request_path: str,
+    request_body: bytes | None, auth_subject: str, path_parts: list[str],
+    request_id: str, client_ip: str,
+) -> tuple[int, str, bytes]:
+    if method != "GET":
+        return _json_response(405, {"error": "method_not_allowed"})
+    from lg_orch.graph import export_mermaid
+    from lg_orch.visualize import render_run_viewer_spa
+    html = render_run_viewer_spa(api_base_url="", mermaid_graph=export_mermaid())
+    return 200, "text/html; charset=utf-8", html.encode("utf-8")
+
+
+def _hdl_healthz(
+    service: "RemoteAPIService", method: str, request_path: str,
+    request_body: bytes | None, auth_subject: str, path_parts: list[str],
+    request_id: str, client_ip: str,
+) -> tuple[int, str, bytes]:
+    if method != "GET":
+        return _json_response(405, {"error": "method_not_allowed"})
+    return _json_response(200, {"ok": True})
+
+
+def _hdl_v1_runs(
+    service: "RemoteAPIService", method: str, request_path: str,
+    request_body: bytes | None, auth_subject: str, path_parts: list[str],
+    request_id: str, client_ip: str,
+) -> tuple[int, str, bytes]:
+    if method == "GET":
+        return _json_response(200, {"runs": service.list_runs()})
+    if method != "POST":
+        return _json_response(405, {"error": "method_not_allowed"})
+    try:
+        payload_raw = json.loads((request_body or b"{}").decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _json_response(400, {"error": "invalid_json"})
+    if not isinstance(payload_raw, dict):
+        return _json_response(400, {"error": "invalid_json"})
+    try:
+        return _json_response(201, service.create_run(payload_raw, request_id=request_id, auth_subject=auth_subject, client_ip=client_ip))
+    except ValueError as exc:
+        error = str(exc)
+        return _json_response(409 if error == "duplicate_run_id" else 400, {"error": error})
+    except OSError as exc:
+        return _json_response(500, {"error": "launch_failed", "detail": str(exc)})
+
+
+def _hdl_runs_list(
+    service: "RemoteAPIService", method: str, request_path: str,
+    request_body: bytes | None, auth_subject: str, path_parts: list[str],
+    request_id: str, client_ip: str,
+) -> tuple[int, str, bytes]:
+    if method != "GET":
+        return _json_response(405, {"error": "method_not_allowed"})
+    return _json_response(200, {"runs": service.list_runs()})
+
+
+def _hdl_runs_search(
+    service: "RemoteAPIService", method: str, request_path: str,
+    request_body: bytes | None, auth_subject: str, path_parts: list[str],
+    request_id: str, client_ip: str,
+) -> tuple[int, str, bytes]:
+    if method != "GET":
+        return _json_response(405, {"error": "method_not_allowed"})
+    qs = parse_qs(urlsplit(request_path).query, keep_blank_values=False)
+    q_values = qs.get("q", [])
+    if not q_values or not q_values[0].strip():
+        return _json_response(422, {"error": "missing_required_param", "param": "q"})
+    q = q_values[0].strip()
+    limit_raw = qs.get("limit", ["50"])[0]
+    try:
+        limit = max(1, min(200, int(limit_raw)))
+    except ValueError:
+        limit = 50
+    results = service.search_runs(q, limit=limit)
+    return _json_response(200, {"results": results, "total": len(results)})
+
+
+# ---------------------------------------------------------------------------
+# Parameterized route handlers (path_parts-based dispatch)
+# ---------------------------------------------------------------------------
+
+
+def _hdl_v1_run_logs(
+    service: "RemoteAPIService", method: str, request_path: str,
+    request_body: bytes | None, auth_subject: str, path_parts: list[str],
+    request_id: str, client_ip: str,
+) -> tuple[int, str, bytes]:
+    if method != "GET":
+        return _json_response(405, {"error": "method_not_allowed"})
+    run_id = path_parts[2]
+    payload = service.get_logs(run_id)
+    return _json_response(200, payload) if payload is not None else _json_response(404, {"error": "not_found", "run_id": run_id})
+
+
+def _hdl_v1_run_cancel(
+    service: "RemoteAPIService", method: str, request_path: str,
+    request_body: bytes | None, auth_subject: str, path_parts: list[str],
+    request_id: str, client_ip: str,
+) -> tuple[int, str, bytes]:
+    if method != "POST":
+        return _json_response(405, {"error": "method_not_allowed"})
+    run_id = path_parts[2]
+    payload = service.cancel_run(run_id)
+    return _json_response(202, payload) if payload is not None else _json_response(404, {"error": "not_found", "run_id": run_id})
+
+
+def _hdl_v1_run_approve_reject(
+    service: "RemoteAPIService", method: str, request_path: str,
+    request_body: bytes | None, auth_subject: str, path_parts: list[str],
+    request_id: str, client_ip: str,
+) -> tuple[int, str, bytes]:
+    if method != "POST":
+        return _json_response(405, {"error": "method_not_allowed"})
+    try:
+        payload_raw = json.loads((request_body or b"{}").decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _json_response(400, {"error": "invalid_json"})
+    if not isinstance(payload_raw, dict):
+        return _json_response(400, {"error": "invalid_json"})
+    run_id = path_parts[2]
+    try:
+        payload = (
+            service.approve_run(run_id, payload_raw, auth_subject=auth_subject)
+            if path_parts[3] == "approve"
+            else service.reject_run(run_id, payload_raw, auth_subject=auth_subject)
+        )
+    except ValueError as exc:
+        return _json_response(409, {"error": str(exc), "run_id": run_id})
+    return _json_response(202, payload) if payload is not None else _json_response(404, {"error": "not_found", "run_id": run_id})
+
+
+def _hdl_v1_run_stream(
+    service: "RemoteAPIService", method: str, request_path: str,
+    request_body: bytes | None, auth_subject: str, path_parts: list[str],
+    request_id: str, client_ip: str,
+) -> tuple[int, str, bytes]:
+    return -1, "sse", path_parts[2].encode("utf-8")  # type: ignore[return-value]
+
+
+def _hdl_v1_run_get(
+    service: "RemoteAPIService", method: str, request_path: str,
+    request_body: bytes | None, auth_subject: str, path_parts: list[str],
+    request_id: str, client_ip: str,
+) -> tuple[int, str, bytes]:
+    if method != "GET":
+        return _json_response(405, {"error": "method_not_allowed"})
+    run_id = path_parts[2]
+    payload = service.get_run(run_id)
+    return _json_response(200, payload) if payload is not None else _json_response(404, {"error": "not_found", "run_id": run_id})
+
+
+def _hdl_runs_stream(
+    service: "RemoteAPIService", method: str, request_path: str,
+    request_body: bytes | None, auth_subject: str, path_parts: list[str],
+    request_id: str, client_ip: str,
+) -> tuple[int, str, bytes]:
+    _sse_run_id = path_parts[1]
+    if service.get_run(_sse_run_id) is None:
+        return _json_response(404, {"error": "not_found", "run_id": _sse_run_id})
+    return -2, "sse_new", _sse_run_id.encode("utf-8")  # type: ignore[return-value]
+
+
+def _hdl_runs_approve_reject(
+    service: "RemoteAPIService", method: str, request_path: str,
+    request_body: bytes | None, auth_subject: str, path_parts: list[str],
+    request_id: str, client_ip: str,
+) -> tuple[int, str, bytes]:
+    try:
+        payload_raw = json.loads((request_body or b"{}").decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _json_response(400, {"error": "invalid_json"})
+    if not isinstance(payload_raw, dict):
+        return _json_response(400, {"error": "invalid_json"})
+    run_id = path_parts[1]
+    try:
+        payload = (
+            service.approve_run(run_id, payload_raw, auth_subject=auth_subject)
+            if path_parts[2] == "approve"
+            else service.reject_run(run_id, payload_raw, auth_subject=auth_subject)
+        )
+    except ValueError as exc:
+        return _json_response(409, {"error": str(exc), "run_id": run_id})
+    return _json_response(202, payload) if payload is not None else _json_response(404, {"error": "not_found", "run_id": run_id})
+
+
+def _hdl_runs_approval_policy(
+    service: "RemoteAPIService", method: str, request_path: str,
+    request_body: bytes | None, auth_subject: str, path_parts: list[str],
+    request_id: str, client_ip: str,
+) -> tuple[int, str, bytes]:
+    try:
+        payload_raw = json.loads((request_body or b"{}").decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _json_response(400, {"error": "invalid_json"})
+    if not isinstance(payload_raw, dict):
+        return _json_response(400, {"error": "invalid_json"})
+    policy_raw = payload_raw.get("policy")
+    if not isinstance(policy_raw, dict):
+        return _json_response(400, {"error": "missing_policy"})
+    kind = policy_raw.get("kind")
+    if kind == "timed":
+        from typing import cast as _cast
+        policy = TimedApprovalPolicy(
+            timeout_seconds=float(policy_raw.get("timeout_seconds", 300.0)),
+            auto_action=_cast("Literal['approve', 'reject']", policy_raw.get("auto_action", "reject")),
+        )
+    elif kind == "quorum":
+        policy = QuorumApprovalPolicy(
+            required_approvals=int(policy_raw.get("required_approvals", 1)),
+            required_rejections=int(policy_raw.get("required_rejections", 1)),
+            allowed_reviewers=list(policy_raw.get("allowed_reviewers", [])),
+        )
+    elif kind == "role":
+        policy = RoleApprovalPolicy(
+            required_roles=list(policy_raw.get("required_roles", [])),
+            require_all_roles=bool(policy_raw.get("require_all_roles", False)),
+        )
+    else:
+        return _json_response(400, {"error": "unknown_policy_kind"})
+    run_id = path_parts[1]
+    return _json_response(200, service.set_approval_policy(run_id, policy))
+
+
+def _hdl_runs_vote(
+    service: "RemoteAPIService", method: str, request_path: str,
+    request_body: bytes | None, auth_subject: str, path_parts: list[str],
+    request_id: str, client_ip: str,
+) -> tuple[int, str, bytes]:
+    try:
+        payload_raw = json.loads((request_body or b"{}").decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return _json_response(400, {"error": "invalid_json"})
+    if not isinstance(payload_raw, dict):
+        return _json_response(400, {"error": "invalid_json"})
+    run_id = path_parts[1]
+    reviewer_id = _non_empty_str(payload_raw.get("reviewer_id"))
+    if reviewer_id is None:
+        return _json_response(400, {"error": "missing_reviewer_id"})
+    action = _non_empty_str(payload_raw.get("action"))
+    if action not in {"approve", "reject"}:
+        return _json_response(400, {"error": "invalid_action"})
+    role_raw = payload_raw.get("role")
+    role = _non_empty_str(role_raw) if role_raw is not None else None
+    comment = str(payload_raw.get("comment", ""))
+    try:
+        result = service.cast_vote(run_id, reviewer_id=reviewer_id, role=role, action=action, comment=comment)
+    except KeyError:
+        return _json_response(404, {"error": "policy_not_found", "run_id": run_id})
+    return _json_response(200, result)
+
+
+def _hdl_spa(
+    service: "RemoteAPIService", method: str, request_path: str,
+    request_body: bytes | None, auth_subject: str, path_parts: list[str],
+    request_id: str, client_ip: str,
+) -> tuple[int, str, bytes]:
+    if method != "GET":
+        return _json_response(405, {"error": "method_not_allowed"})
+    spa_dir = Path(__file__).parent / "spa"
+    if not spa_dir.exists():
+        return _json_response(503, {"error": "spa_not_available"})
+    from lg_orch.spa.router import create_spa_router
+    subpath = "/".join(path_parts[1:]) if len(path_parts) > 1 else ""
+    return create_spa_router(spa_dir)(subpath)
+
+
+# ---------------------------------------------------------------------------
+# Dispatch table — exact routes
+# ---------------------------------------------------------------------------
+
+_HandlerFn = Callable[
+    ["RemoteAPIService", str, str, "bytes | None", str, "list[str]", str, str],
+    "tuple[int, str, bytes]",
+]
+
+_EXACT_ROUTE_TABLE: dict[str, _HandlerFn] = {
+    "/metrics": _hdl_metrics,
+    "/": _hdl_root_ui,
+    "/ui": _hdl_root_ui,
+    "/healthz": _hdl_healthz,
+    "/v1/runs": _hdl_v1_runs,
+    "/runs": _hdl_runs_list,
+    "/runs/": _hdl_runs_list,
+    "/runs/search": _hdl_runs_search,
+}
+
+
+def _match_parameterized(
+    route: str, method: str, path_parts: list[str],
+) -> _HandlerFn | None:
+    """Return the handler for a parameterized route, or None if no match."""
+    n = len(path_parts)
+    # /v1/runs/{run_id}/logs
+    if n == 4 and path_parts[:2] == ["v1", "runs"] and path_parts[3] == "logs":
+        return _hdl_v1_run_logs
+    # /v1/runs/{run_id}/cancel
+    if n == 4 and path_parts[:2] == ["v1", "runs"] and path_parts[3] == "cancel":
+        return _hdl_v1_run_cancel
+    # /v1/runs/{run_id}/approve|reject
+    if n == 4 and path_parts[:2] == ["v1", "runs"] and path_parts[3] in {"approve", "reject"}:
+        return _hdl_v1_run_approve_reject
+    # /v1/runs/{run_id}/stream
+    if n == 4 and path_parts[:2] == ["v1", "runs"] and path_parts[3] == "stream":
+        return _hdl_v1_run_stream
+    # /v1/runs/{run_id}
+    if n == 3 and path_parts[:2] == ["v1", "runs"]:
+        return _hdl_v1_run_get
+    # /runs/{run_id}/stream
+    if method == "GET" and n == 3 and path_parts[0] == "runs" and path_parts[2] == "stream":
+        return _hdl_runs_stream
+    # /runs/{run_id}/approve|reject
+    if method == "POST" and n == 3 and path_parts[0] == "runs" and path_parts[2] in {"approve", "reject"}:
+        return _hdl_runs_approve_reject
+    # /runs/{run_id}/approval-policy
+    if method == "POST" and n == 3 and path_parts[0] == "runs" and path_parts[2] == "approval-policy":
+        return _hdl_runs_approval_policy
+    # /runs/{run_id}/vote
+    if method == "POST" and n == 3 and path_parts[0] == "runs" and path_parts[2] == "vote":
+        return _hdl_runs_vote
+    # /app/...
+    if path_parts and path_parts[0] == "app":
+        return _hdl_spa
+    return None
+
+
 def _api_http_dispatch(
     service: RemoteAPIService,
     *,
@@ -182,8 +521,6 @@ def _api_http_dispatch(
     allow_unauthenticated_healthz: bool = True,
     jwt_settings: JWTSettings | None = None,
 ) -> tuple[int, str, bytes]:
-    from typing import cast
-
     route = urlsplit(request_path).path.rstrip("/") or "/"
     auth_subject, auth_error = _authorize_request(
         route=route, auth_mode=auth_mode, expected_bearer_token=expected_bearer_token,
@@ -191,214 +528,36 @@ def _api_http_dispatch(
         allow_unauthenticated_healthz=allow_unauthenticated_healthz,
     )
     if auth_error is not None:
-        _path_parts_early = [p for p in route.split("/") if p]
-        _action_early, _rid_early = _audit_action_and_resource(method=method, route=route, path_parts=_path_parts_early, status=auth_error[0])
+        _pp = [p for p in route.split("/") if p]
+        _action, _rid = _audit_action_and_resource(method=method, route=route, path_parts=_pp, status=auth_error[0])
         if _audit_logger is not None:
-            _audit_logger.log(AuditEvent(ts=utc_now_iso(), subject="anonymous", roles=[], action=_action_early, resource_id=_rid_early, outcome="denied", detail="bearer_auth_failed"))
+            _audit_logger.log(AuditEvent(ts=utc_now_iso(), subject="anonymous", roles=[], action=_action, resource_id=_rid, outcome="denied", detail="bearer_auth_failed"))
         return auth_error
 
     if service._rate_limiter is not None and not service._rate_limiter.acquire():
         return _json_response(429, {"error": "rate_limit_exceeded"})
 
     _jwt = jwt_settings or JWTSettings(jwt_secret=None, jwks_url=None)
-    _early_path_parts = [part for part in route.split("/") if part]
-    _required_roles = _route_policy(route=route, method=method, path_parts=_early_path_parts, jwt_enabled=_jwt.enabled)
-    _jwt_claims_roles: list[str] = []
+    path_parts = [p for p in route.split("/") if p]
+    _required_roles = _route_policy(route=route, method=method, path_parts=path_parts, jwt_enabled=_jwt.enabled)
     if _required_roles:
         try:
             _claims = authorize_stdlib(authorization=authorization_header, settings=_jwt, required_roles=_required_roles)
             if _claims.sub and _claims.sub != "anonymous":
                 auth_subject = _claims.sub
-            _jwt_claims_roles = list(_claims.roles)
         except AuthError as _auth_exc:
-            _path_parts_jwt = [p for p in route.split("/") if p]
-            _action_jwt, _rid_jwt = _audit_action_and_resource(method=method, route=route, path_parts=_path_parts_jwt, status=_auth_exc.status_code)
+            _action, _rid = _audit_action_and_resource(method=method, route=route, path_parts=path_parts, status=_auth_exc.status_code)
             if _audit_logger is not None:
-                _audit_logger.log(AuditEvent(ts=utc_now_iso(), subject="anonymous", roles=[], action=_action_jwt, resource_id=_rid_jwt, outcome="denied", detail=_auth_exc.detail))
+                _audit_logger.log(AuditEvent(ts=utc_now_iso(), subject="anonymous", roles=[], action=_action, resource_id=_rid, outcome="denied", detail=_auth_exc.detail))
             return _json_response(_auth_exc.status_code, {"error": _auth_exc.detail})
 
-    if route == "/metrics":
-        return _handle_metrics(method)
+    handler: _HandlerFn | None = _EXACT_ROUTE_TABLE.get(route)
+    if handler is None:
+        handler = _match_parameterized(route, method, path_parts)
+    if handler is not None:
+        return handler(service, method, request_path, request_body, auth_subject, path_parts, request_id, client_ip)
 
-    if route in {"/", "/ui"}:
-        if method != "GET":
-            return _json_response(405, {"error": "method_not_allowed"})
-        from lg_orch.graph import export_mermaid
-        from lg_orch.visualize import render_run_viewer_spa
-        html = render_run_viewer_spa(api_base_url="", mermaid_graph=export_mermaid())
-        return 200, "text/html; charset=utf-8", html.encode("utf-8")
-
-    if route == "/healthz":
-        if method != "GET":
-            return _json_response(405, {"error": "method_not_allowed"})
-        return _json_response(200, {"ok": True})
-
-    if route == "/v1/runs":
-        if method == "GET":
-            return _json_response(200, {"runs": service.list_runs()})
-        if method != "POST":
-            return _json_response(405, {"error": "method_not_allowed"})
-        try:
-            payload_raw = json.loads((request_body or b"{}").decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return _json_response(400, {"error": "invalid_json"})
-        if not isinstance(payload_raw, dict):
-            return _json_response(400, {"error": "invalid_json"})
-        try:
-            return _json_response(201, service.create_run(payload_raw, request_id=request_id, auth_subject=auth_subject, client_ip=client_ip))
-        except ValueError as exc:
-            error = str(exc)
-            return _json_response(409 if error == "duplicate_run_id" else 400, {"error": error})
-        except OSError as exc:
-            return _json_response(500, {"error": "launch_failed", "detail": str(exc)})
-
-    path_parts = [part for part in route.split("/") if part]
-
-    if len(path_parts) == 4 and path_parts[:2] == ["v1", "runs"] and path_parts[3] == "logs":
-        if method != "GET":
-            return _json_response(405, {"error": "method_not_allowed"})
-        run_id = path_parts[2]
-        payload = service.get_logs(run_id)
-        return _json_response(200, payload) if payload is not None else _json_response(404, {"error": "not_found", "run_id": run_id})
-
-    if len(path_parts) == 4 and path_parts[:2] == ["v1", "runs"] and path_parts[3] == "cancel":
-        if method != "POST":
-            return _json_response(405, {"error": "method_not_allowed"})
-        run_id = path_parts[2]
-        payload = service.cancel_run(run_id)
-        return _json_response(202, payload) if payload is not None else _json_response(404, {"error": "not_found", "run_id": run_id})
-
-    if len(path_parts) == 4 and path_parts[:2] == ["v1", "runs"] and path_parts[3] in {"approve", "reject"}:
-        if method != "POST":
-            return _json_response(405, {"error": "method_not_allowed"})
-        try:
-            payload_raw = json.loads((request_body or b"{}").decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return _json_response(400, {"error": "invalid_json"})
-        if not isinstance(payload_raw, dict):
-            return _json_response(400, {"error": "invalid_json"})
-        run_id = path_parts[2]
-        try:
-            payload = service.approve_run(run_id, payload_raw, auth_subject=auth_subject) if path_parts[3] == "approve" else service.reject_run(run_id, payload_raw, auth_subject=auth_subject)
-        except ValueError as exc:
-            return _json_response(409, {"error": str(exc), "run_id": run_id})
-        return _json_response(202, payload) if payload is not None else _json_response(404, {"error": "not_found", "run_id": run_id})
-
-    if len(path_parts) == 4 and path_parts[:2] == ["v1", "runs"] and path_parts[3] == "stream":
-        return -1, "sse", path_parts[2].encode("utf-8")
-
-    if len(path_parts) == 3 and path_parts[:2] == ["v1", "runs"]:
-        if method != "GET":
-            return _json_response(405, {"error": "method_not_allowed"})
-        run_id = path_parts[2]
-        payload = service.get_run(run_id)
-        return _json_response(200, payload) if payload is not None else _json_response(404, {"error": "not_found", "run_id": run_id})
-
-    if route == "/runs/search":
-        if method != "GET":
-            return _json_response(405, {"error": "method_not_allowed"})
-        qs = parse_qs(urlsplit(request_path).query, keep_blank_values=False)
-        q_values = qs.get("q", [])
-        if not q_values or not q_values[0].strip():
-            return _json_response(422, {"error": "missing_required_param", "param": "q"})
-        q = q_values[0].strip()
-        limit_raw = qs.get("limit", ["50"])[0]
-        try:
-            limit = max(1, min(200, int(limit_raw)))
-        except ValueError:
-            limit = 50
-        results = service.search_runs(q, limit=limit)
-        return _json_response(200, {"results": results, "total": len(results)})
-
-    if route in {"/runs", "/runs/"}:
-        if method != "GET":
-            return _json_response(405, {"error": "method_not_allowed"})
-        return _json_response(200, {"runs": service.list_runs()})
-
-    if method == "GET" and len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "stream":
-        _sse_run_id = path_parts[1]
-        if service.get_run(_sse_run_id) is None:
-            return _json_response(404, {"error": "not_found", "run_id": _sse_run_id})
-        return -2, "sse_new", _sse_run_id.encode("utf-8")
-
-    if method == "POST" and len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] in {"approve", "reject"}:
-        try:
-            payload_raw = json.loads((request_body or b"{}").decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return _json_response(400, {"error": "invalid_json"})
-        if not isinstance(payload_raw, dict):
-            return _json_response(400, {"error": "invalid_json"})
-        run_id = path_parts[1]
-        try:
-            payload = service.approve_run(run_id, payload_raw, auth_subject=auth_subject) if path_parts[2] == "approve" else service.reject_run(run_id, payload_raw, auth_subject=auth_subject)
-        except ValueError as exc:
-            return _json_response(409, {"error": str(exc), "run_id": run_id})
-        return _json_response(202, payload) if payload is not None else _json_response(404, {"error": "not_found", "run_id": run_id})
-
-    if method == "POST" and len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "approval-policy":
-        try:
-            payload_raw = json.loads((request_body or b"{}").decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return _json_response(400, {"error": "invalid_json"})
-        if not isinstance(payload_raw, dict):
-            return _json_response(400, {"error": "invalid_json"})
-        policy_raw = payload_raw.get("policy")
-        if not isinstance(policy_raw, dict):
-            return _json_response(400, {"error": "missing_policy"})
-        kind = policy_raw.get("kind")
-        if kind == "timed":
-            from typing import cast as _cast
-            policy = TimedApprovalPolicy(timeout_seconds=float(policy_raw.get("timeout_seconds", 300.0)), auto_action=_cast("Literal['approve', 'reject']", policy_raw.get("auto_action", "reject")))
-        elif kind == "quorum":
-            policy = QuorumApprovalPolicy(required_approvals=int(policy_raw.get("required_approvals", 1)), required_rejections=int(policy_raw.get("required_rejections", 1)), allowed_reviewers=list(policy_raw.get("allowed_reviewers", [])))
-        elif kind == "role":
-            policy = RoleApprovalPolicy(required_roles=list(policy_raw.get("required_roles", [])), require_all_roles=bool(policy_raw.get("require_all_roles", False)))
-        else:
-            return _json_response(400, {"error": "unknown_policy_kind"})
-        run_id = path_parts[1]
-        return _json_response(200, service.set_approval_policy(run_id, policy))
-
-    if method == "POST" and len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "vote":
-        try:
-            payload_raw = json.loads((request_body or b"{}").decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return _json_response(400, {"error": "invalid_json"})
-        if not isinstance(payload_raw, dict):
-            return _json_response(400, {"error": "invalid_json"})
-        run_id = path_parts[1]
-        reviewer_id = _non_empty_str(payload_raw.get("reviewer_id"))
-        if reviewer_id is None:
-            return _json_response(400, {"error": "missing_reviewer_id"})
-        action = _non_empty_str(payload_raw.get("action"))
-        if action not in {"approve", "reject"}:
-            return _json_response(400, {"error": "invalid_action"})
-        role_raw = payload_raw.get("role")
-        role = _non_empty_str(role_raw) if role_raw is not None else None
-        comment = str(payload_raw.get("comment", ""))
-        try:
-            result = service.cast_vote(run_id, reviewer_id=reviewer_id, role=role, action=action, comment=comment)
-        except KeyError:
-            return _json_response(404, {"error": "policy_not_found", "run_id": run_id})
-        return _json_response(200, result)
-
-    if path_parts and path_parts[0] == "app":
-        if method != "GET":
-            return _json_response(405, {"error": "method_not_allowed"})
-        spa_dir = Path(__file__).parent / "spa"
-        if not spa_dir.exists():
-            return _json_response(503, {"error": "spa_not_available"})
-        from lg_orch.spa.router import create_spa_router
-        subpath = "/".join(path_parts[1:]) if len(path_parts) > 1 else ""
-        return create_spa_router(spa_dir)(subpath)
-
-    # Admin routes (healing loop control) — delegated to lg_orch.api.admin
-    _admin_response = register_admin_routes(
-        service,
-        method=method,
-        route=route,
-        path_parts=path_parts,
-        request_body=request_body,
-    )
+    _admin_response = register_admin_routes(service, method=method, route=route, path_parts=path_parts, request_body=request_body)
     if _admin_response is not None:
         return _admin_response
 
