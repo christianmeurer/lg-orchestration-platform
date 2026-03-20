@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import textwrap
 from pathlib import Path
 
 
@@ -347,3 +348,178 @@ def test_score_task_tracks_approval_control_plane_fields() -> None:
     assert result["checks"]["pending_approval_match"] is True
     assert result["checks"]["checkpoint_presence_match"] is True
     assert result["checks"]["approval_history_match"] is True
+
+
+# --- Wave 8 new tests ---
+
+_SWE_BENCH_FIXTURE = textwrap.dedent("""\
+    {"instance_id": "astropy__astropy-1234", "repo": "astropy/astropy", "problem_statement": "Calling foo() raises ValueError when bar is None.", "base_commit": "abc123", "patch": "diff --git a/foo.py", "test_patch": "diff --git a/test_foo.py", "FAIL_TO_PASS": ["test_foo"], "PASS_TO_PASS": []}
+    {"instance_id": "django__django-5678", "repo": "django/django", "problem_statement": "Migration crashes on PostgreSQL when table has no rows.", "base_commit": "def456", "patch": "diff --git a/db.py", "test_patch": "diff --git a/test_db.py", "FAIL_TO_PASS": ["test_db"], "PASS_TO_PASS": ["test_models"]}
+""")
+
+
+def test_load_swe_bench_tasks_basic(tmp_path: Path) -> None:
+    module = _load_eval_run_module()
+    jsonl_file = tmp_path / "swe_bench.jsonl"
+    jsonl_file.write_text(_SWE_BENCH_FIXTURE, encoding="utf-8")
+
+    tasks = module.load_swe_bench_tasks(str(jsonl_file))
+
+    assert len(tasks) == 2
+    t0 = tasks[0]
+    assert t0.id == "astropy__astropy-1234"
+    assert t0.expected_intent == "code_change"
+    assert t0.expected_acceptance_ok is True
+    assert t0.expected_halt_reason == "accepted"
+    assert t0.benchmark_class == "swe_bench"
+    assert t0.difficulty == "hard"
+    assert "Calling foo()" in t0.request
+    assert len(t0.request) <= 500
+
+    t1 = tasks[1]
+    assert t1.id == "django__django-5678"
+
+
+def test_load_swe_bench_tasks_limit(tmp_path: Path) -> None:
+    module = _load_eval_run_module()
+    jsonl_file = tmp_path / "swe_bench.jsonl"
+    jsonl_file.write_text(_SWE_BENCH_FIXTURE, encoding="utf-8")
+
+    tasks = module.load_swe_bench_tasks(str(jsonl_file), limit=1)
+
+    assert len(tasks) == 1
+    assert tasks[0].id == "astropy__astropy-1234"
+
+
+def test_load_swe_bench_tasks_truncates_task_text(tmp_path: Path) -> None:
+    module = _load_eval_run_module()
+    long_statement = "X" * 600
+    line = json.dumps(
+        {
+            "instance_id": "long-id",
+            "repo": "x/x",
+            "problem_statement": long_statement,
+            "base_commit": "a",
+            "patch": "",
+            "test_patch": "",
+            "FAIL_TO_PASS": [],
+            "PASS_TO_PASS": [],
+        }
+    )
+    jsonl_file = tmp_path / "long.jsonl"
+    jsonl_file.write_text(line + "\n", encoding="utf-8")
+
+    tasks = module.load_swe_bench_tasks(str(jsonl_file))
+    assert len(tasks[0].request) == 500
+
+
+def test_resolved_rate_in_evaluate_tasks_summary() -> None:
+    module = _load_eval_run_module()
+    tasks = [
+        module.EvalTask(id="a", request="fix it", expected_intent="code_change"),
+        module.EvalTask(id="b", request="fix it too", expected_intent="code_change"),
+    ]
+
+    def _make_output(acceptance_ok: bool) -> dict:
+        return {
+            "intent": "code_change",
+            "halt_reason": "",
+            "final": "done",
+            "tool_results": [],
+            "verification": {"acceptance_ok": acceptance_ok, "ok": acceptance_ok},
+            "route": {"lane": "fast"},
+            "telemetry": {"compression_summary": {"total_events": 1}},
+        }
+
+    outputs = {"a": _make_output(True), "b": _make_output(False)}
+    report = module.evaluate_tasks(
+        tasks,
+        repo_root=Path("."),
+        evaluator=lambda t: outputs[t.id],
+    )
+
+    assert "resolved_rate" in report["summary"]
+    assert report["summary"]["resolved_rate"] == 0.5
+
+
+def test_resolved_rate_all_resolved() -> None:
+    module = _load_eval_run_module()
+    tasks = [
+        module.EvalTask(id="x", request="r", expected_intent="code_change"),
+        module.EvalTask(id="y", request="r", expected_intent="code_change"),
+    ]
+    ok_output = {
+        "intent": "code_change",
+        "halt_reason": "",
+        "final": "done",
+        "tool_results": [],
+        "verification": {"acceptance_ok": True, "ok": True},
+        "route": {"lane": "fast"},
+        "telemetry": {"compression_summary": {"total_events": 1}},
+    }
+    report = module.evaluate_tasks(
+        tasks,
+        repo_root=Path("."),
+        evaluator=lambda _t: ok_output,
+    )
+    assert report["summary"]["resolved_rate"] == 1.0
+
+
+def test_swe_bench_flag_parsed(tmp_path: Path, capsys: object) -> None:
+    module = _load_eval_run_module()
+    jsonl_file = tmp_path / "swe.jsonl"
+    jsonl_file.write_text(_SWE_BENCH_FIXTURE, encoding="utf-8")
+
+    # Use --dry-run so no graph is actually invoked.
+    rc = module.main(["--swe-bench", str(jsonl_file), "--dry-run"])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "astropy__astropy-1234" in captured.out
+    assert "django__django-5678" in captured.out
+
+
+def test_dry_run_exits_zero_with_task_list(tmp_path: Path, capsys: object) -> None:
+    module = _load_eval_run_module()
+    task_path = tmp_path / "canary.json"
+    task_path.write_text(
+        json.dumps(
+            {
+                "id": "canary-dry",
+                "request": "Summarize the repository.",
+                "expected_intent": "analysis",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rc = module.main(["--tasks-dir", str(tmp_path), "--dry-run"])
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "canary-dry" in captured.out
+
+
+def test_dry_run_does_not_invoke_graph(tmp_path: Path) -> None:
+    """--dry-run must not call run_task even when tasks are present."""
+    module = _load_eval_run_module()
+    task_path = tmp_path / "t.json"
+    task_path.write_text(
+        json.dumps({"id": "t-1", "request": "do it", "expected_intent": "code_change"}),
+        encoding="utf-8",
+    )
+    called: list[str] = []
+    original = module.run_task
+
+    def _mock_run_task(task, **kwargs):  # type: ignore[override]
+        called.append(task.id)
+        return {}
+
+    module.run_task = _mock_run_task
+    try:
+        rc = module.main(["--tasks-dir", str(tmp_path), "--dry-run"])
+    finally:
+        module.run_task = original
+
+    assert rc == 0
+    assert called == [], "run_task must not be called during --dry-run"

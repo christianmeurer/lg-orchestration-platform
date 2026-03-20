@@ -6,6 +6,7 @@ import logging
 import math
 import re
 import sys
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -161,6 +162,54 @@ def load_tasks(
             _log.warning("skipping %s: no 'id' field and not a multi-task file", path)
             continue
         tasks.append(_build_task(data))
+    return tasks
+
+
+def load_swe_bench_tasks(
+    path: str,
+    *,
+    limit: int | None = None,
+) -> list[EvalTask]:
+    """Load SWE-bench format task definitions from a JSONL file.
+
+    Each line must be a JSON object with fields:
+    ``instance_id``, ``repo``, ``problem_statement``, ``base_commit``,
+    ``patch``, ``test_patch``, ``FAIL_TO_PASS``, ``PASS_TO_PASS``.
+
+    Args:
+        path: Path to the JSONL file containing SWE-bench instances.
+        limit: If provided, only the first *limit* instances are returned.
+
+    Returns:
+        List of :class:`EvalTask` objects mapped from SWE-bench instances.
+    """
+    tasks: list[EvalTask] = []
+    source = Path(path)
+    with source.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            instance: dict[str, Any] = json.loads(line)
+            instance_id: str = str(instance.get("instance_id", ""))
+            problem_statement: str = str(instance.get("problem_statement", ""))
+            task_text: str = f"Fix the issue described in: {problem_statement}"
+            if len(task_text) > 500:
+                task_text = task_text[:500]
+            tasks.append(
+                EvalTask(
+                    id=instance_id,
+                    description=problem_statement,
+                    request=task_text,
+                    expected_intent="code_change",
+                    expected_acceptance_ok=True,
+                    expected_halt_reason="accepted",
+                    benchmark_class="swe_bench",
+                    difficulty="hard",
+                )
+            )
+            if limit is not None and len(tasks) >= limit:
+                break
     return tasks
 
 
@@ -543,12 +592,19 @@ def evaluate_tasks(
         if bool(result.get("checks", {}).get("approval_history_match", False))
     ) / total if total else 0.0
 
+    resolved_rate: float = (
+        sum(1 for r in results if bool(r.get("acceptance_ok", False))) / total
+        if total
+        else 0.0
+    )
+
     return {
         "summary": {
             "total_tasks": total,
             "passed_tasks": passed,
             "failed_tasks": total - passed,
             "pass_rate": passed / total if total else 0.0,
+            "resolved_rate": resolved_rate,
             "intent_accuracy": intent_matches / total if total else 0.0,
             "average_score": avg_score,
             "average_tool_results": avg_tool_results,
@@ -578,6 +634,7 @@ def _render_text_report(report: dict[str, Any]) -> str:
             "summary: "
             f"passed={int(summary.get('passed_tasks', 0))}/{int(summary.get('total_tasks', 0))} "
             f"pass_rate={float(summary.get('pass_rate', 0.0)):.2f} "
+            f"resolved_rate={float(summary.get('resolved_rate', 0.0)):.2f} "
             f"intent_accuracy={float(summary.get('intent_accuracy', 0.0)):.2f} "
             f"avg_score={float(summary.get('average_score', 0.0)):.2f} "
             f"recovery_packet_acc={float(summary.get('recovery_packet_accuracy', 0.0)):.2f} "
@@ -592,41 +649,82 @@ def _render_text_report(report: dict[str, Any]) -> str:
             f"approval_history_acc={float(summary.get('approval_history_accuracy', 0.0)):.2f}"
         )
     ]
+
+    # Group results by benchmark_class for structured output.
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for result in results:
         if not isinstance(result, dict):
             continue
+        bclass = str(result.get("benchmark_class", "")) or "default"
+        groups[bclass].append(result)
+
+    def _fmt_result(result: dict[str, Any]) -> str:
         status = "PASS" if bool(result.get("passed", False)) else "FAIL"
         halt_reason = str(result.get("actual_halt_reason", "")).strip() or "(none)"
-        lines.append(
-            (
-                f"[{status}] {str(result.get('id', ''))} "
-                f"score={float(result.get('score', 0.0)):.2f} "
-                f"intent={str(result.get('actual_intent', '')) or '(missing)'} "
-                f"halt={halt_reason} "
-                f"acceptance_ok={bool(result.get('acceptance_ok', False))} "
-                f"tools={int(result.get('tool_results_count', 0))}"
-            )
+        return (
+            f"  [{status}] {str(result.get('id', ''))} "
+            f"score={float(result.get('score', 0.0)):.2f} "
+            f"intent={str(result.get('actual_intent', '')) or '(missing)'} "
+            f"halt={halt_reason} "
+            f"acceptance_ok={bool(result.get('acceptance_ok', False))} "
+            f"tools={int(result.get('tool_results_count', 0))}"
         )
+
+    for group_name, group_results in sorted(groups.items()):
+        group_passed = sum(1 for r in group_results if bool(r.get("passed", False)))
+        group_total = len(group_results)
+        lines.append(f"\n[{group_name}] subtotal: {group_passed}/{group_total}")
+        for result in group_results:
+            lines.append(_fmt_result(result))
+
     return "\n".join(lines)
 
 
 def _render_pass_at_k_table(rows: list[dict[str, Any]], k: int) -> str:
-    """Render a structured pass@k summary table."""
-    col_task = max(len(str(r["task"])) for r in rows)
+    """Render a structured pass@k summary table grouped by benchmark_class."""
+    col_task = max((len(str(r["task"])) for r in rows), default=4)
     col_task = max(col_task, len("AGGREGATE"), len("task"))
     header = f"{'task':<{col_task}} | {'runs':>4} | {'correct':>7} | {'pass@k':>7}"
     sep = "-" * len(header)
-    lines = [header, sep]
+    lines: list[str] = []
+
+    # Group rows by benchmark_class (may be absent — default to empty string).
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        lines.append(
+        bclass = str(row.get("benchmark_class", "")) or "default"
+        groups[bclass].append(row)
+
+    def _render_row(row: dict[str, Any]) -> str:
+        return (
             f"{str(row['task']):<{col_task}} | {int(row['runs']):>4} | "
             f"{int(row['correct']):>7} | {float(row['pass_at_k']):>7.3f}"
         )
+
+    def _subtotal_row(label: str, group_rows: list[dict[str, Any]]) -> str:
+        g_runs = sum(int(r["runs"]) for r in group_rows)
+        g_correct = sum(int(r["correct"]) for r in group_rows)
+        g_pak = pass_at_k(g_runs, g_correct, min(k, g_runs)) if g_runs else 0.0
+        return (
+            f"{label:<{col_task}} | {g_runs:>4} | "
+            f"{g_correct:>7} | {g_pak:>7.3f}"
+        )
+
+    for group_name, group_rows in sorted(groups.items()):
+        lines.append(f"\n# {group_name}")
+        lines.append(header)
+        lines.append(sep)
+        for row in group_rows:
+            lines.append(_render_row(row))
+        if len(group_rows) > 1:
+            lines.append(sep)
+            lines.append(_subtotal_row(f"{group_name.upper()}_TOTAL", group_rows))
+
+    # Overall aggregate.
     if len(rows) > 1:
         total_runs = sum(int(r["runs"]) for r in rows)
         total_correct = sum(int(r["correct"]) for r in rows)
         agg_pak = pass_at_k(total_runs, total_correct, min(k, total_runs))
-        lines.append(sep)
+        lines.append(f"\n{sep}")
         lines.append(
             f"{'AGGREGATE':<{col_task}} | {total_runs:>4} | "
             f"{total_correct:>7} | {agg_pak:>7.3f}"
@@ -666,15 +764,51 @@ def main(argv: list[str] | None = None) -> int:
         metavar="FLOAT",
         help="Sampling temperature passed to inference. Defaults to 0.8 when --pass-at-k > 1.",
     )
+    parser.add_argument(
+        "--swe-bench",
+        dest="swe_bench",
+        default=None,
+        metavar="PATH",
+        help="Path to a SWE-bench JSONL file. Tasks are appended to any tasks loaded from --tasks-dir.",
+    )
+    parser.add_argument(
+        "--swe-bench-limit",
+        dest="swe_bench_limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Limit the number of SWE-bench instances loaded.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        default=False,
+        help="Load all tasks, print the task list, and exit without running any graph.",
+    )
     args = parser.parse_args(argv)
 
     task_filter: list[str] | None = args.tasks if args.tasks else None
-    tasks = load_tasks(Path(str(args.tasks_dir)), task_filter=task_filter)
+    tasks: list[EvalTask] = []
+
+    # Only load from tasks-dir when no explicit --swe-bench-only scenario is
+    # intended; always merge both sources when both are provided.
+    tasks.extend(load_tasks(Path(str(args.tasks_dir)), task_filter=task_filter))
+
+    if args.swe_bench:
+        swe_limit: int | None = int(args.swe_bench_limit) if args.swe_bench_limit is not None else None
+        tasks.extend(load_swe_bench_tasks(str(args.swe_bench), limit=swe_limit))
+
     if not tasks:
         raise SystemExit("no tasks")
     for task in tasks:
         if not task.id or not task.request or not task.expected_intent:
             raise SystemExit(f"invalid task: {task}")
+
+    if args.dry_run:
+        for task in tasks:
+            print(f"task: {task.id}  benchmark_class={task.benchmark_class or '(none)'}  difficulty={task.difficulty or '(none)'}")
+        return 0
 
     k: int = int(args.pass_at_k)
     runner_enabled: bool = bool(args.runner_enabled)
@@ -695,10 +829,13 @@ def main(argv: list[str] | None = None) -> int:
             runner_enabled=runner_enabled,
             temperature=temperature,
         )
+        summary = report.get("summary", {})
+        resolved_rate = float(summary.get("resolved_rate", 0.0))
         if str(args.format) == "json":
             print(json.dumps(report, ensure_ascii=False, indent=2))
         else:
             print(_render_text_report(report))
+            print(f"resolved_rate={resolved_rate:.3f}")
         return 0
 
     # pass@k multi-run path.
@@ -724,14 +861,31 @@ def main(argv: list[str] | None = None) -> int:
                 "runs": k,
                 "correct": n_correct,
                 "pass_at_k": pak_score,
+                "benchmark_class": task.benchmark_class,
             }
         )
         all_reports.extend(run_results)
 
+    resolved_rate_pak = (
+        sum(1 for r in all_reports if bool(r.get("acceptance_ok", False))) / len(all_reports)
+        if all_reports
+        else 0.0
+    )
     if str(args.format) == "json":
-        print(json.dumps({"pass_at_k_rows": pak_rows, "results": all_reports}, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {
+                    "pass_at_k_rows": pak_rows,
+                    "results": all_reports,
+                    "resolved_rate": resolved_rate_pak,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
     else:
         print(_render_pass_at_k_table(pak_rows, k))
+        print(f"resolved_rate={resolved_rate_pak:.3f}")
 
     return 0
 

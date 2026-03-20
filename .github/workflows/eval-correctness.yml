@@ -56,6 +56,30 @@ jobs:
               sys.exit(1)
           EOF
 
+      - name: Run real-world repair benchmarks
+        id: real_world_repair
+        working-directory: eval
+        env:
+          LG_RUNNER_URL: ${{ secrets.LG_RUNNER_URL }}
+          LG_API_KEY: ${{ secrets.LG_API_KEY }}
+          LG_MODEL: ${{ secrets.LG_MODEL }}
+        run: |
+          uv run --project ../py python run.py \
+            --tasks real-world-repair \
+            --format json \
+            | tee ../eval-results-repair.json
+          python - <<'EOF'
+          import json, sys
+          with open("../eval-results-repair.json") as fh:
+              data = json.load(fh)
+          summary = data.get("summary", {})
+          resolved_rate = summary.get("resolved_rate", 0.0)
+          print(f"Real-world repair resolved_rate: {resolved_rate:.3f}")
+          if resolved_rate < 0.3:
+              print(f"ERROR: resolved_rate {resolved_rate:.3f} is below threshold 0.3", file=sys.stderr)
+              sys.exit(1)
+          EOF
+
       - name: Upload eval results
         if: always()
         uses: actions/upload-artifact@v4
