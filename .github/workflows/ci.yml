@@ -125,7 +125,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-deny
-        run: cargo install cargo-deny --locked --version "0.14"
+        run: cargo install cargo-deny --version "^0.14"
 
       - name: Cargo deny check
         run: cd rs && cargo deny check
