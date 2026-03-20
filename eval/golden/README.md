@@ -95,3 +95,60 @@ The following fields are emitted by the graph and are safe to assert against:
 `id` field in the corresponding `eval/tasks/*.json` file (with the numeric suffix dropped for
 multi-instance tasks). Each golden file's `assertions` list is evaluated in order; all assertions
 must pass for the task to be marked green.
+
+---
+
+## Wave D — Extended Eval Capabilities
+
+### `--swe-bench PATH` flag and JSONL format
+
+Pass a SWE-bench JSONL file (one task object per line) with `--swe-bench`:
+
+```bash
+python eval/run.py --swe-bench path/to/swe_bench_lite.jsonl --swe-bench-limit 50
+```
+
+Each line must be a JSON object with at least `instance_id`, `problem_statement`, and `patch`
+fields. The loader maps these to Lula's internal task format (`id`, `request`, `expected_intent`).
+`--swe-bench-limit N` caps the number of tasks loaded (useful for fast iteration). The SWE-bench
+loader and the existing `--task` path are mutually exclusive per invocation.
+
+### `resolved_rate` metric in summary output
+
+The eval summary table now includes a `resolved_rate` column alongside `pass@k`:
+
+```
+benchmark            tasks   resolved   pass@1   resolved_rate
+real_world_repair    10      4          0.60     0.40
+swe_bench_lite       50      18         0.52     0.36
+```
+
+`resolved_rate = resolved / total` where a task is "resolved" if all golden assertions pass **and**
+`verification.acceptance_ok` is `true`. Nightly CI enforces a minimum `resolved_rate` of `0.30`
+on `real_world_repair.json`; the job fails if the threshold is not met.
+
+### `--dry-run` flag for task list preview
+
+```bash
+python eval/run.py --task eval/tasks/real_world_repair.json --dry-run
+```
+
+Prints the resolved task list (IDs, requests, golden file paths, fixture paths) to stdout without
+invoking the LangGraph graph. Use this to verify loader output and confirm fixture availability
+before committing to a full eval run.
+
+### Benchmark class grouping in `pass@k` tables
+
+Tasks that carry a `"class"` field in their task definition (e.g. `"class": "repair"`) are grouped
+in the `pass@k` summary table so per-class pass rates are visible alongside the aggregate:
+
+```
+class       tasks   pass@1
+repair      6       0.67
+analysis    3       1.00
+refactor    1       0.00
+(all)       10      0.70
+```
+
+The `"class"` field is optional; tasks without it are grouped under `"(unclassified)"` in the
+grouped view.
