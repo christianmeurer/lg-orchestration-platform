@@ -267,7 +267,7 @@ impl FirecrackerVmm {
         .await?;
 
         let boot_body = format!(
-            r#"{{"kernel_image_path": {kp}, "boot_args": "console=ttyS0 reboot=k panic=1 pci=off"}}"#,
+            r#"{{"kernel_image_path": {kp}, "boot_args": "console=ttyS0 reboot=k panic=1 pci=off init=/sbin/init"}}"#,
             kp = serde_json::Value::String(kernel_image_path.to_string())
         );
         self.put_api("/boot-source", &boot_body).await?;

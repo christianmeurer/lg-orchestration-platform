@@ -26,12 +26,16 @@ pub struct SandboxConfig {
     /// When `true`, the runner rejects write operations that target paths
     /// outside `workspace_path`.
     pub enforce_read_only_root: bool,
-    /// Path to the guest kernel image passed to Firecracker's `/boot-source` API.
-    /// Read from `LG_SANDBOX_KERNEL_IMAGE_PATH`. `None` means unset.
-    pub kernel_image_path: Option<String>,
-    /// Path to the root filesystem image passed to Firecracker's `/drives/rootfs` API.
-    /// Read from `LG_SANDBOX_ROOTFS_PATH`. `None` means unset.
-    pub rootfs_path: Option<String>,
+    /// Path to the ext4 rootfs image for Firecracker MicroVM.
+    /// Passed to Firecracker's `PUT /drives/rootfs` API.
+    /// Read from `LG_RUNNER_ROOTFS_IMAGE`.
+    /// Defaults to `"artifacts/rootfs.ext4"` relative to the process working directory.
+    pub rootfs_image_path: PathBuf,
+    /// Path to the Firecracker-compatible Linux kernel image.
+    /// Passed to Firecracker's `PUT /boot-source` API.
+    /// Read from `LG_RUNNER_KERNEL_IMAGE`.
+    /// Defaults to `"artifacts/vmlinux"` relative to the process working directory.
+    pub kernel_image_path: PathBuf,
 }
 
 impl Default for SandboxConfig {
@@ -40,8 +44,8 @@ impl Default for SandboxConfig {
             runtime_class: "gvisor".to_string(),
             workspace_path: PathBuf::from("/workspace"),
             enforce_read_only_root: true,
-            kernel_image_path: None,
-            rootfs_path: None,
+            rootfs_image_path: PathBuf::from("artifacts/rootfs.ext4"),
+            kernel_image_path: PathBuf::from("artifacts/vmlinux"),
         }
     }
 }
@@ -49,13 +53,13 @@ impl Default for SandboxConfig {
 impl SandboxConfig {
     /// Construct from environment variables, falling back to defaults.
     ///
-    /// | Env var                          | Default        |
-    /// |----------------------------------|----------------|
-    /// | `LG_SANDBOX_RUNTIME_CLASS`       | `"gvisor"`     |
-    /// | `LG_SANDBOX_WORKSPACE_PATH`      | `"/workspace"` |
-    /// | `LG_SANDBOX_ENFORCE_READONLY`    | `"true"`       |
-    /// | `LG_SANDBOX_KERNEL_IMAGE_PATH`   | `None`         |
-    /// | `LG_SANDBOX_ROOTFS_PATH`         | `None`         |
+    /// | Env var                       | Default                    |
+    /// |-------------------------------|----------------------------|
+    /// | `LG_SANDBOX_RUNTIME_CLASS`    | `"gvisor"`                 |
+    /// | `LG_SANDBOX_WORKSPACE_PATH`   | `"/workspace"`             |
+    /// | `LG_SANDBOX_ENFORCE_READONLY` | `"true"`                   |
+    /// | `LG_RUNNER_ROOTFS_IMAGE`      | `"artifacts/rootfs.ext4"`  |
+    /// | `LG_RUNNER_KERNEL_IMAGE`      | `"artifacts/vmlinux"`      |
     #[must_use]
     pub fn from_env() -> Self {
         let runtime_class = std::env::var("LG_SANDBOX_RUNTIME_CLASS")
@@ -79,20 +83,20 @@ impl SandboxConfig {
             })
             .unwrap_or(true);
 
-        let kernel_image_path = std::env::var("LG_SANDBOX_KERNEL_IMAGE_PATH")
-            .ok()
-            .filter(|v| !v.trim().is_empty());
+        let rootfs_image_path = std::env::var("LG_RUNNER_ROOTFS_IMAGE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("artifacts/rootfs.ext4"));
 
-        let rootfs_path = std::env::var("LG_SANDBOX_ROOTFS_PATH")
-            .ok()
-            .filter(|v| !v.trim().is_empty());
+        let kernel_image_path = std::env::var("LG_RUNNER_KERNEL_IMAGE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("artifacts/vmlinux"));
 
         Self {
             runtime_class,
             workspace_path,
             enforce_read_only_root,
+            rootfs_image_path,
             kernel_image_path,
-            rootfs_path,
         }
     }
 }
@@ -434,6 +438,38 @@ fn allowlists_for_profile(profile: &str) -> (Vec<&'static str>, Vec<&'static str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_sandbox_config_rootfs_defaults() {
+        // Temporarily unset the env var so we get the default.
+        let prev = std::env::var("LG_RUNNER_ROOTFS_IMAGE").ok();
+        std::env::remove_var("LG_RUNNER_ROOTFS_IMAGE");
+        let cfg = SandboxConfig::from_env();
+        assert_eq!(cfg.rootfs_image_path, PathBuf::from("artifacts/rootfs.ext4"));
+        // Restore.
+        if let Some(v) = prev {
+            std::env::set_var("LG_RUNNER_ROOTFS_IMAGE", v);
+        }
+    }
+
+    #[test]
+    fn test_sandbox_config_rootfs_from_env() {
+        std::env::set_var("LG_RUNNER_ROOTFS_IMAGE", "/custom/path.ext4");
+        let cfg = SandboxConfig::from_env();
+        assert_eq!(cfg.rootfs_image_path, PathBuf::from("/custom/path.ext4"));
+        std::env::remove_var("LG_RUNNER_ROOTFS_IMAGE");
+    }
+
+    #[test]
+    fn test_sandbox_config_kernel_defaults() {
+        let prev = std::env::var("LG_RUNNER_KERNEL_IMAGE").ok();
+        std::env::remove_var("LG_RUNNER_KERNEL_IMAGE");
+        let cfg = SandboxConfig::from_env();
+        assert_eq!(cfg.kernel_image_path, PathBuf::from("artifacts/vmlinux"));
+        if let Some(v) = prev {
+            std::env::set_var("LG_RUNNER_KERNEL_IMAGE", v);
+        }
+    }
 
     #[test]
     fn test_config_new_with_current_dir() {

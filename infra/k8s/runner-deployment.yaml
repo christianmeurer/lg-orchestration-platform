@@ -1,3 +1,9 @@
+# Firecracker MicroVM Prerequisites:
+# The runner deployment requires two files to be present on the node:
+#   /opt/lula/rootfs.ext4  — built by scripts/build_guest_rootfs.sh
+#   /opt/lula/vmlinux      — Firecracker-compatible Linux kernel (download from firecracker-microvm/firecracker)
+# Mount these via a HostPath volume (see the firecracker-assets volume below)
+# or pre-bake them into a custom node image.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -52,6 +58,10 @@ spec:
             # Enable Linux namespace isolation inside the gVisor sandbox
             - name: LG_RUNNER_LINUX_NAMESPACE_ENABLED
               value: "0"  # unshare not available inside gVisor; gVisor itself provides isolation
+            - name: LG_RUNNER_ROOTFS_IMAGE
+              value: "/opt/lula/rootfs.ext4"
+            - name: LG_RUNNER_KERNEL_IMAGE
+              value: "/opt/lula/vmlinux"
           livenessProbe:
             httpGet:
               path: /healthz
@@ -83,9 +93,16 @@ spec:
           volumeMounts:
             - name: work-dir
               mountPath: /workspace
+            - name: firecracker-assets
+              mountPath: /opt/lula
+              readOnly: true
       securityContext:
         seccompProfile:
           type: RuntimeDefault
       volumes:
         - name: work-dir
           emptyDir: {}
+        - name: firecracker-assets
+          hostPath:
+            path: /opt/lula
+            type: DirectoryOrCreate

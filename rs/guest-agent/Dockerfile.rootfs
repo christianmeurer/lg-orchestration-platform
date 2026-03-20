@@ -1,0 +1,84 @@
+# Firecracker guest rootfs build pipeline for lula-guest-agent.
+#
+# Requires Docker with BuildKit enabled (DOCKER_BUILDKIT=1).
+# Build and export with:
+#   DOCKER_BUILDKIT=1 docker build \
+#     --file rs/guest-agent/Dockerfile.rootfs \
+#     --target export \
+#     --output type=local,dest=artifacts \
+#     rs/
+#
+# Output: artifacts/rootfs.ext4 (256 MiB ext4, musl-linked Alpine + lula-guest-agent)
+
+# ---------------------------------------------------------------------------
+# Stage 1: Rust musl builder
+# ---------------------------------------------------------------------------
+FROM rust:1.88-bookworm AS builder
+
+RUN rustup target add x86_64-unknown-linux-musl
+RUN apt-get update && apt-get install -y musl-tools && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . .
+RUN cargo build --release --target x86_64-unknown-linux-musl -p lula-guest-agent
+
+# ---------------------------------------------------------------------------
+# Stage 2: Alpine rootfs assembler
+# ---------------------------------------------------------------------------
+FROM alpine:3.19 AS rootfs
+
+RUN apk add --no-cache \
+    bash coreutils util-linux e2fsprogs \
+    python3 cargo git make
+
+# Copy the statically-linked guest agent
+COPY --from=builder /src/target/x86_64-unknown-linux-musl/release/lula-guest-agent /rootfs/sbin/lula-guest-agent
+RUN chmod +x /rootfs/sbin/lula-guest-agent
+
+# Minimal directory structure
+RUN mkdir -p /rootfs/{bin,sbin,lib,lib64,dev,proc,sys,tmp,etc,var/run,root}
+
+# Copy busybox for a minimal shell environment
+RUN cp /bin/busybox /rootfs/bin/busybox
+RUN chroot /rootfs /bin/busybox --install /bin
+
+# Init script that mounts essential filesystems then starts the guest agent
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'mount -t proc proc /proc' \
+    'mount -t sysfs sysfs /sys' \
+    'mount -t devtmpfs devtmpfs /dev 2>/dev/null || true' \
+    'mkdir -p /dev/pts' \
+    'mount -t devpts devpts /dev/pts 2>/dev/null || true' \
+    'exec /sbin/lula-guest-agent' \
+    > /rootfs/sbin/init
+RUN chmod +x /rootfs/sbin/init
+
+# Minimal /etc/passwd and /etc/group
+RUN printf 'root:x:0:0:root:/root:/bin/sh\n' > /rootfs/etc/passwd
+RUN printf 'root:x:0:\n' > /rootfs/etc/group
+
+# ---------------------------------------------------------------------------
+# Stage 3: ext4 image builder
+# ---------------------------------------------------------------------------
+FROM alpine:3.19 AS image-builder
+
+RUN apk add --no-cache e2fsprogs
+
+COPY --from=rootfs /rootfs /build/rootfs
+
+# Ensure output directory exists
+RUN mkdir -p /output
+
+# Create 256 MiB ext4 image populated from the rootfs directory.
+# BuildKit is required; if it is absent dd/mkfs will still run but the
+# --output export stage will not be reachable — the build will error clearly.
+RUN dd if=/dev/zero of=/output/rootfs.ext4 bs=1M count=256 && \
+    mkfs.ext4 -d /build/rootfs /output/rootfs.ext4
+
+# ---------------------------------------------------------------------------
+# Stage 4: export-only scratch stage
+# Build with --target export --output type=local,dest=<dir> to extract the image.
+# ---------------------------------------------------------------------------
+FROM scratch AS export
+COPY --from=image-builder /output/rootfs.ext4 /rootfs.ext4

@@ -130,6 +130,31 @@ The host-side vsock client lives in `rs/runner/src/vsock.rs`. On Linux it create
 
 **Linux-only constraint:** All `AF_VSOCK` socket code is guarded by `#[cfg(target_os = "linux")]`. The runner and guest-agent compile and test cleanly on Windows/macOS for development purposes; the `MicroVmEphemeral` execution path returns a graceful `BadRequest` error on those platforms.
 
+### Guest rootfs build pipeline
+
+The `rs/guest-agent/Dockerfile.rootfs` multi-stage Docker build produces a bootable 256 MiB ext4 image containing a minimal Alpine Linux environment and the statically-linked (`musl`) `lula-guest-agent` binary.
+
+| Aspect | Detail |
+|---|---|
+| Build script | `scripts/build_guest_rootfs.sh` (Bash) / `scripts/build_guest_rootfs.cmd` (Windows) |
+| Output | `artifacts/rootfs.ext4` — 256 MiB ext4, musl-linked Alpine + `lula-guest-agent` |
+| Init script | `/sbin/init` mounts `proc`, `sysfs`, `devtmpfs`, `devpts` then `exec`s `lula-guest-agent` |
+| CI | `build-guest-rootfs` job in `ci.yml` — runs on every `main` push or when `rs/guest-agent/` changes; uploads `artifacts/rootfs.ext4` as a GitHub Actions artifact |
+| Release | `build-guest-rootfs` job in `release.yml` — attaches `rootfs.ext4` to each GitHub Release as a downloadable asset |
+| Deployment | Mount at `/opt/lula/rootfs.ext4` via Kubernetes `HostPath` volume (`infra/k8s/runner-deployment.yaml`) |
+| Kernel | Download from `firecracker-microvm/firecracker` releases; place at `/opt/lula/vmlinux` on each node |
+| Env vars | `LG_RUNNER_ROOTFS_IMAGE` (default `artifacts/rootfs.ext4`), `LG_RUNNER_KERNEL_IMAGE` (default `artifacts/vmlinux`) |
+
+Build steps (requires Docker with BuildKit):
+
+```bash
+# Linux / macOS
+bash scripts/build_guest_rootfs.sh
+
+# Windows
+scripts\build_guest_rootfs.cmd
+```
+
 ## Eval Framework (`eval/run.py`)
 
 The eval runner gained the following capabilities in Wave D:

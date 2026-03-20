@@ -158,7 +158,9 @@ Any TOML key can be overridden at runtime via environment variable using the `py
 
 All code execution is delegated to the Rust runner (`rs/runner/`), which selects a sandbox tier based on host capabilities:
 
-**Firecracker MicroVM** (`MicroVmEphemeral`) — Full VM isolation. The runner communicates with a `lula-guest-agent` binary running inside the Firecracker rootfs over `AF_VSOCK` (CID 3, port 52525). The guest agent accepts `GuestCommandRequest` JSON and returns `GuestCommandResponse` JSON over the vsock connection. Linux-only; non-Linux hosts receive a graceful `BadRequest` response. Requires a Firecracker binary and a prepared rootfs.
+**Firecracker MicroVM** (`MicroVmEphemeral`) — Full VM isolation. The runner communicates with a `lula-guest-agent` binary running inside the Firecracker rootfs over `AF_VSOCK` (CID 3, port 52525). The guest agent accepts `GuestCommandRequest` JSON and returns `GuestCommandResponse` JSON over the vsock connection. Linux-only; non-Linux hosts receive a graceful `BadRequest` response.
+
+**Firecracker prerequisites:** `rootfs.ext4` (built via `scripts/build_guest_rootfs.sh`) and `vmlinux` (download from [firecracker-microvm/firecracker](https://github.com/firecracker-microvm/firecracker/releases)) must be present at the paths configured by `LG_RUNNER_ROOTFS_IMAGE` (default `artifacts/rootfs.ext4`) and `LG_RUNNER_KERNEL_IMAGE` (default `artifacts/vmlinux`). In Kubernetes, these are mounted from the node at `/opt/lula/` via a `HostPath` volume; see `infra/k8s/runner-deployment.yaml`.
 
 **Linux namespaces** (`LinuxNamespace`) — User/PID/net/mount namespace isolation via `unshare`. No external dependencies beyond a Linux kernel. Medium security tier; suitable for trusted multi-tenant deployments.
 

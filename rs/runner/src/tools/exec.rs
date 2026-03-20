@@ -144,17 +144,9 @@ pub async fn exec(cfg: &RunnerConfig, ctx: &mut ToolContext, input: Value) -> Re
     // spawning the guest command.
     if resolved_backend == SandboxBackend::MicroVmEphemeral {
         if let Some(ref vmm) = vmm_handle {
-            let kernel_path = cfg
-                .sandbox
-                .kernel_image_path
-                .as_deref()
-                .unwrap_or("/var/lib/firecracker/vmlinux");
-            let rootfs_path = cfg
-                .sandbox
-                .rootfs_path
-                .as_deref()
-                .unwrap_or("/var/lib/firecracker/rootfs.ext4");
-            vmm.configure_and_start(kernel_path, rootfs_path)
+            let kernel_path = cfg.sandbox.kernel_image_path.to_string_lossy();
+            let rootfs_path = cfg.sandbox.rootfs_image_path.to_string_lossy();
+            vmm.configure_and_start(&kernel_path, &rootfs_path)
                 .await
                 .map_err(|e| {
                     tracing::warn!(error = %e, "firecracker configure_and_start failed");

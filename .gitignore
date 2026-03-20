@@ -13,6 +13,8 @@ target/
 rs/target/
 
 artifacts/
+artifacts/*.ext4
+artifacts/vmlinux
 
 .DS_Store
 Thumbs.db
