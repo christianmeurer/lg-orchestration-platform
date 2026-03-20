@@ -119,7 +119,7 @@ pub async fn exec(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiE
         None
     };
 
-    let sandbox_resolution = cfg.sandbox_policy.resolve_backend();
+    let sandbox_resolution = cfg.sandbox_policy.resolve_backend_with_vmm().await;
     let isolation = sandbox_resolution.to_isolation_metadata();
     // Increment sandbox tier metric
     let sandbox_tier_label = match sandbox_resolution.backend {
@@ -129,13 +129,45 @@ pub async fn exec(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiE
     };
     metrics::counter!("runner_sandbox_tier", "tier" => sandbox_tier_label).increment(1);
 
+    // Destructure to obtain the VMM handle separately so it stays alive for
+    // the entire lifetime of the child process (dropping it kills the VM).
+    let crate::sandbox::SandboxResolution {
+        backend: resolved_backend,
+        vmm: vmm_handle,
+        ..
+    } = sandbox_resolution;
+
+    // When the MicroVmEphemeral backend is active and a live VMM handle is
+    // present, configure and start the VM via the socket REST API before
+    // spawning the guest command.
+    if resolved_backend == SandboxBackend::MicroVmEphemeral {
+        if let Some(ref vmm) = vmm_handle {
+            let kernel_path = cfg
+                .sandbox
+                .kernel_image_path
+                .as_deref()
+                .unwrap_or("/var/lib/firecracker/vmlinux");
+            let rootfs_path = cfg
+                .sandbox
+                .rootfs_path
+                .as_deref()
+                .unwrap_or("/var/lib/firecracker/rootfs.ext4");
+            vmm.configure_and_start(kernel_path, rootfs_path)
+                .await
+                .map_err(|e| {
+                    tracing::warn!(error = %e, "firecracker configure_and_start failed");
+                    e
+                })?;
+        }
+    }
+
     let cwd = inp
         .cwd
         .as_deref()
         .map(|p| super::fs::resolve_under_root(cfg, p))
         .transpose()?;
 
-    let mut c = match sandbox_resolution.backend {
+    let mut c = match resolved_backend {
         SandboxBackend::LinuxNamespace => {
             let unshare_path = cfg
                 .sandbox_policy
@@ -151,41 +183,11 @@ pub async fn exec(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiE
             cmd_obj
         }
         SandboxBackend::MicroVmEphemeral => {
-            let firecracker_path = cfg
-                .sandbox_policy
-                .microvm
-                .firecracker_bin
-                .as_ref()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "firecracker".to_string());
-
-            let kernel_path = cfg
-                .sandbox_policy
-                .microvm
-                .kernel_image
-                .as_ref()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "/var/lib/firecracker/vmlinux".to_string());
-
-            let rootfs_path = cfg
-                .sandbox_policy
-                .microvm
-                .rootfs_image
-                .as_ref()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "/var/lib/firecracker/rootfs.ext4".to_string());
-
-            let mut cmd_obj = Command::new(&firecracker_path);
-            
-            let mut fc_args = vec![
-                "--kernel".to_string(), kernel_path,
-                "--rootfs".to_string(), rootfs_path,
-                "--".to_string(),
-                cmd.to_string()
-            ];
-            fc_args.extend(inp.args.iter().cloned());
-            
-            cmd_obj.args(&fc_args);
+            // The Firecracker VM has been configured and started above via the
+            // socket REST API.  The guest command runs directly; the VM
+            // provides the isolation boundary.
+            let mut cmd_obj = Command::new(cmd);
+            cmd_obj.args(&inp.args);
             cmd_obj
         }
         _ => {
@@ -225,7 +227,7 @@ pub async fn exec(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiE
 
     // Apply cgroup v2 resource limits for the LinuxNamespace backend.
     // Gracefully no-ops when not running as root or cgroup v2 is not mounted.
-    let cgroup_name = if sandbox_resolution.backend == SandboxBackend::LinuxNamespace {
+    let cgroup_name = if resolved_backend == SandboxBackend::LinuxNamespace {
         if let Some(pid) = child.id() {
             let name = format!("run-{pid}");
             if let Err(e) =

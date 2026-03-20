@@ -26,6 +26,12 @@ pub struct SandboxConfig {
     /// When `true`, the runner rejects write operations that target paths
     /// outside `workspace_path`.
     pub enforce_read_only_root: bool,
+    /// Path to the guest kernel image passed to Firecracker's `/boot-source` API.
+    /// Read from `LG_SANDBOX_KERNEL_IMAGE_PATH`. `None` means unset.
+    pub kernel_image_path: Option<String>,
+    /// Path to the root filesystem image passed to Firecracker's `/drives/rootfs` API.
+    /// Read from `LG_SANDBOX_ROOTFS_PATH`. `None` means unset.
+    pub rootfs_path: Option<String>,
 }
 
 impl Default for SandboxConfig {
@@ -34,6 +40,8 @@ impl Default for SandboxConfig {
             runtime_class: "gvisor".to_string(),
             workspace_path: PathBuf::from("/workspace"),
             enforce_read_only_root: true,
+            kernel_image_path: None,
+            rootfs_path: None,
         }
     }
 }
@@ -46,6 +54,8 @@ impl SandboxConfig {
     /// | `LG_SANDBOX_RUNTIME_CLASS`       | `"gvisor"`     |
     /// | `LG_SANDBOX_WORKSPACE_PATH`      | `"/workspace"` |
     /// | `LG_SANDBOX_ENFORCE_READONLY`    | `"true"`       |
+    /// | `LG_SANDBOX_KERNEL_IMAGE_PATH`   | `None`         |
+    /// | `LG_SANDBOX_ROOTFS_PATH`         | `None`         |
     #[must_use]
     pub fn from_env() -> Self {
         let runtime_class = std::env::var("LG_SANDBOX_RUNTIME_CLASS")
@@ -69,10 +79,20 @@ impl SandboxConfig {
             })
             .unwrap_or(true);
 
+        let kernel_image_path = std::env::var("LG_SANDBOX_KERNEL_IMAGE_PATH")
+            .ok()
+            .filter(|v| !v.trim().is_empty());
+
+        let rootfs_path = std::env::var("LG_SANDBOX_ROOTFS_PATH")
+            .ok()
+            .filter(|v| !v.trim().is_empty());
+
         Self {
             runtime_class,
             workspace_path,
             enforce_read_only_root,
+            kernel_image_path,
+            rootfs_path,
         }
     }
 }

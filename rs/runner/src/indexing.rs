@@ -1,7 +1,5 @@
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -9,6 +7,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
+use sha2::{Digest, Sha256};
 use globset::GlobSet;
 use rusqlite::{params, Connection};
 use serde::Serialize;
@@ -594,12 +593,13 @@ fn map_row_to_hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<SemanticSearchHit
 }
 
 fn semantic_db_path_for_root(root_dir: &Path) -> PathBuf {
-    let mut hasher = DefaultHasher::new();
-    root_dir.to_string_lossy().hash(&mut hasher);
-    let digest = hasher.finish();
+    // Use SHA-256 (first 8 bytes) for a stable, version-independent path derivation.
+    // DefaultHasher is NOT stable across Rust versions — it would orphan the index after upgrades.
+    let digest = Sha256::digest(root_dir.to_string_lossy().as_bytes());
+    let h: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
     std::env::temp_dir()
         .join("lg-runner")
-        .join(format!("semantic-index-{digest:016x}.sqlite3"))
+        .join(format!("semantic-index-{h}.sqlite3"))
 }
 
 fn normalize_rel_path(path: &str) -> String {

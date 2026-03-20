@@ -2,6 +2,8 @@ use std::env;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+#[cfg(unix)]
+use std::time::Duration;
 
 use regex::Regex;
 use thiserror::Error;
@@ -163,12 +165,179 @@ pub struct SandboxPolicy {
     pub linux_namespace: LinuxNamespaceSettings,
 }
 
-#[derive(Debug, Clone)]
+// ---------------------------------------------------------------------------
+// Firecracker VMM real API integration
+// ---------------------------------------------------------------------------
+
+// On non-Unix targets (Windows, WASM) Firecracker cannot run.
+// We provide a zero-sized stub so that `Option<FirecrackerVmm>` compiles
+// everywhere and all `SandboxResolution` struct literals stay uniform.
+#[cfg(not(unix))]
+#[derive(Debug)]
+pub struct FirecrackerVmm(());
+
+#[cfg(not(unix))]
+impl FirecrackerVmm {
+    pub async fn configure_and_start(
+        &self,
+        _kernel_image_path: &str,
+        _rootfs_path: &str,
+    ) -> Result<(), ApiError> {
+        Err(ApiError::Other(anyhow::anyhow!(
+            "firecracker unavailable: not supported on this platform"
+        )))
+    }
+}
+
+/// A running Firecracker microVM managed via its Unix socket REST API.
+///
+/// Dropping this value kills the `firecracker` process (via `kill_on_drop`).
+#[cfg(unix)]
+pub struct FirecrackerVmm {
+    socket_path: PathBuf,
+    /// The firecracker process itself; kept alive while this handle is held.
+    _proc: tokio::process::Child,
+}
+
+#[cfg(unix)]
+impl std::fmt::Debug for FirecrackerVmm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FirecrackerVmm")
+            .field("socket_path", &self.socket_path)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(unix)]
+impl FirecrackerVmm {
+    /// Spawn the `firecracker` binary and wait for its API socket to appear.
+    ///
+    /// Returns `Err` if the binary is not found or the socket does not appear
+    /// within 2 seconds — the caller should then degrade to `LinuxNamespace`.
+    pub async fn start(firecracker_bin: &Path) -> Result<Self, ApiError> {
+        let socket_path = std::env::temp_dir()
+            .join(format!("fc-{}.sock", uuid::Uuid::new_v4()));
+
+        let child = tokio::process::Command::new(firecracker_bin)
+            .arg("--api-sock")
+            .arg(&socket_path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| ApiError::Other(anyhow::anyhow!("firecracker spawn failed: {e}")))?;
+
+        // Poll until the socket file appears (up to 2 s with 50 ms intervals).
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if socket_path.exists() {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(ApiError::Other(anyhow::anyhow!(
+                    "firecracker unavailable: socket {:?} did not appear within 2s",
+                    socket_path
+                )));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        Ok(Self {
+            socket_path,
+            _proc: child,
+        })
+    }
+
+    /// Configure and start the VM by sending the minimal Firecracker API calls.
+    pub async fn configure_and_start(
+        &self,
+        kernel_image_path: &str,
+        rootfs_path: &str,
+    ) -> Result<(), ApiError> {
+        self.put_api(
+            "/machine-config",
+            r#"{"vcpu_count": 1, "mem_size_mib": 512}"#,
+        )
+        .await?;
+
+        let boot_body = format!(
+            r#"{{"kernel_image_path": {kp}, "boot_args": "console=ttyS0 reboot=k panic=1 pci=off"}}"#,
+            kp = serde_json::Value::String(kernel_image_path.to_string())
+        );
+        self.put_api("/boot-source", &boot_body).await?;
+
+        let drive_body = format!(
+            r#"{{"drive_id": "rootfs", "path_on_host": {rp}, "is_root_device": true, "is_read_only": false}}"#,
+            rp = serde_json::Value::String(rootfs_path.to_string())
+        );
+        self.put_api("/drives/rootfs", &drive_body).await?;
+
+        self.put_api(
+            "/actions",
+            r#"{"action_type": "InstanceStart"}"#,
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    /// Send a single HTTP PUT to the Firecracker API socket.
+    async fn put_api(&self, path: &str, body: &str) -> Result<(), ApiError> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mut stream = tokio::net::UnixStream::connect(&self.socket_path)
+            .await
+            .map_err(|e| ApiError::Other(anyhow::anyhow!("fc socket connect: {e}")))?;
+
+        let req = format!(
+            "PUT {} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccept: application/json\r\n\r\n{}",
+            path,
+            body.len(),
+            body
+        );
+
+        stream
+            .write_all(req.as_bytes())
+            .await
+            .map_err(|e| ApiError::Other(anyhow::anyhow!("fc write: {e}")))?;
+
+        // Signal EOF so Firecracker flushes its response.
+        stream
+            .shutdown()
+            .await
+            .map_err(|e| ApiError::Other(anyhow::anyhow!("fc shutdown: {e}")))?;
+
+        let mut resp = Vec::new();
+        stream
+            .read_to_end(&mut resp)
+            .await
+            .map_err(|e| ApiError::Other(anyhow::anyhow!("fc read: {e}")))?;
+
+        let resp_str = String::from_utf8_lossy(&resp);
+        // Firecracker returns 204 No Content on success; any 2xx is acceptable.
+        if resp_str.contains("HTTP/1.1 2") {
+            Ok(())
+        } else {
+            Err(ApiError::Other(anyhow::anyhow!(
+                "fc api error for {path}: {}",
+                resp_str
+            )))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
 pub struct SandboxResolution {
     pub backend: SandboxBackend,
     pub degraded: bool,
     pub reason: Option<String>,
     pub policy_constraints: Vec<String>,
+    /// Live Firecracker VMM handle.  `Some` only when `backend ==
+    /// MicroVmEphemeral` and the VMM started successfully.
+    pub vmm: Option<FirecrackerVmm>,
 }
 
 impl SandboxResolution {
@@ -271,6 +440,7 @@ impl SandboxPolicy {
                 degraded: false,
                 reason: None,
                 policy_constraints,
+                vmm: None,
             };
         }
 
@@ -282,6 +452,7 @@ impl SandboxPolicy {
                     degraded: true,
                     reason: Some(reason),
                     policy_constraints,
+                    vmm: None,
                 };
             }
             policy_constraints.push("backend=linux_namespace_unshare".to_string());
@@ -291,6 +462,7 @@ impl SandboxPolicy {
                 degraded: false,
                 reason: None,
                 policy_constraints,
+                vmm: None,
             };
         }
 
@@ -304,6 +476,7 @@ impl SandboxPolicy {
                         degraded: true,
                         reason: Some(format!("{reason}; {ns_reason}")),
                         policy_constraints,
+                        vmm: None,
                     };
                 }
                 policy_constraints.push("backend=linux_namespace_unshare".to_string());
@@ -313,6 +486,7 @@ impl SandboxPolicy {
                     degraded: true,
                     reason: Some(reason),
                     policy_constraints,
+                    vmm: None,
                 };
             }
             policy_constraints.push("backend=microvm_ephemeral_firecracker_style".to_string());
@@ -321,6 +495,7 @@ impl SandboxPolicy {
                 degraded: false,
                 reason: None,
                 policy_constraints,
+                vmm: None,
             };
         }
 
@@ -332,6 +507,7 @@ impl SandboxPolicy {
                 degraded: false,
                 reason: None,
                 policy_constraints,
+                vmm: None,
             };
         }
 
@@ -342,6 +518,7 @@ impl SandboxPolicy {
                 degraded: true,
                 reason: Some(ns_reason),
                 policy_constraints,
+                vmm: None,
             };
         }
 
@@ -352,7 +529,69 @@ impl SandboxPolicy {
             degraded: false,
             reason: None,
             policy_constraints,
+            vmm: None,
         }
+    }
+
+    /// Like [`resolve_backend`] but, when the `MicroVmEphemeral` tier is
+    /// selected, attempts to actually start a Firecracker VMM via the socket
+    /// REST API.  If startup fails the method logs a warning and falls through
+    /// to `LinuxNamespace` with `degraded: true`.
+    ///
+    /// On non-Unix platforms the Firecracker path is not available; this
+    /// method behaves identically to [`resolve_backend`].
+    #[cfg(unix)]
+    pub async fn resolve_backend_with_vmm(&self) -> SandboxResolution {
+        let mut base = self.resolve_backend();
+
+        if base.backend != SandboxBackend::MicroVmEphemeral {
+            return base;
+        }
+
+        // Determine which firecracker binary to use.
+        let fc_bin: PathBuf = self
+            .microvm
+            .firecracker_bin
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("firecracker"));
+
+        match FirecrackerVmm::start(&fc_bin).await {
+            Ok(vmm) => {
+                base.vmm = Some(vmm);
+                base
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "firecracker VMM startup failed; degrading to LinuxNamespace"
+                );
+                // Attempt namespace fallback.
+                let degraded_reason = format!("firecracker unavailable: {e}");
+                if let Some(ns_reason) = self.namespace_unavailable_reason() {
+                    SandboxResolution {
+                        backend: SandboxBackend::SafeFallback,
+                        degraded: true,
+                        reason: Some(format!("{degraded_reason}; {ns_reason}")),
+                        policy_constraints: base.policy_constraints,
+                        vmm: None,
+                    }
+                } else {
+                    SandboxResolution {
+                        backend: SandboxBackend::LinuxNamespace,
+                        degraded: true,
+                        reason: Some(degraded_reason),
+                        policy_constraints: base.policy_constraints,
+                        vmm: None,
+                    }
+                }
+            }
+        }
+    }
+
+    /// Non-Unix stub: Firecracker is unavailable; delegates to [`resolve_backend`].
+    #[cfg(not(unix))]
+    pub async fn resolve_backend_with_vmm(&self) -> SandboxResolution {
+        self.resolve_backend()
     }
 
     fn namespace_unavailable_reason(&self) -> Option<String> {

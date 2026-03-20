@@ -8,8 +8,17 @@ metadata:
   annotations:
     # Substitute REPLACE_WITH_REPO_URL with the actual Git remote before kubectl apply.
     argocd.argoproj.io/sync-wave: "0"
+    # ArgoCD Image Updater: track the lula image using semver strategy
+    argocd-image-updater.argoproj.io/image-list: "lula=registry.digitalocean.com/lula-registry/lula"
+    argocd-image-updater.argoproj.io/lula.update-strategy: semver
+    argocd-image-updater.argoproj.io/lula.semver-constraint: ">=1.0.0"
+    argocd-image-updater.argoproj.io/lula.pull-secret: pullsecret:lula-orch/docr-secret
+    argocd-image-updater.argoproj.io/write-back-method: git
+    argocd-image-updater.argoproj.io/git-branch: main
 spec:
-  project: default
+  # NOTE: Sync windows are configured at the AppProject level.
+  # See infra/k8s/argocd-project.yaml for production sync window configuration.
+  project: lula
 
   source:
     repoURL: REPLACE_WITH_REPO_URL
@@ -27,6 +36,7 @@ spec:
     syncOptions:
       - CreateNamespace=true
       - ServerSideApply=true
+      - PrunePropagationPolicy=foreground
 
   # Prevent ArgoCD from treating managed-field / status drift as an out-of-sync condition.
   ignoreDifferences:

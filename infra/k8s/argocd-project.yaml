@@ -1,0 +1,65 @@
+# ArgoCD AppProject for the Lula platform.
+# Defines source/destination restrictions and production sync windows.
+#
+# Sync window schedule:
+#   allow  Mon–Fri 09:00–17:00 UTC  (8 h window, manual sync permitted)
+#   deny   Sat–Sun 00:00–00:00 UTC  (48 h blackout, manual sync blocked)
+#
+# Emergency override:
+#   To bypass the deny window for a one-off urgent deployment run:
+#     argocd app sync lula --force
+#   This requires the user to have the 'override' action on the Application.
+#   Prefer scheduling within the allow window whenever possible.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: lula
+  namespace: argocd
+spec:
+  description: Lula agentic coding platform
+  sourceRepos:
+    - '*'
+  destinations:
+    - namespace: lula-orch
+      server: https://kubernetes.default.svc
+    - namespace: argocd
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ''
+      kind: Namespace
+    - group: networking.k8s.io
+      kind: NetworkPolicy
+  namespaceResourceWhitelist:
+    - group: apps
+      kind: Deployment
+    - group: ''
+      kind: Service
+    - group: ''
+      kind: ServiceAccount
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+    - group: networking.k8s.io
+      kind: Ingress
+    - group: ''
+      kind: ConfigMap
+    - group: ''
+      kind: Secret
+  syncWindows:
+    - kind: allow
+      schedule: '0 9 * * 1-5'
+      duration: 8h
+      applications:
+        - '*'
+      namespaces:
+        - lula-orch
+      manualSync: true
+      timeZone: UTC
+    - kind: deny
+      schedule: '0 0 * * 6-7'
+      duration: 48h
+      applications:
+        - '*'
+      namespaces:
+        - lula-orch
+      manualSync: false
+      timeZone: UTC
