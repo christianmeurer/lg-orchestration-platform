@@ -113,6 +113,35 @@ jobs:
         working-directory: rs
         run: cargo test --all-features
 
+  security-audit:
+    name: "Security Audit (cargo-deny + pip-audit)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [lint-python, lint-rust]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked --version "0.14"
+
+      - name: Cargo deny check
+        run: cd rs && cargo deny check
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: pip-audit
+        working-directory: py
+        run: uv run pip-audit
+
   eval-canary:
     name: "Eval Canary Smoke Test"
     runs-on: ubuntu-latest

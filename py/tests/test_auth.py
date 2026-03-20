@@ -19,6 +19,8 @@ from lg_orch.auth import (
     authorize_stdlib,
     get_current_user,
     require_roles,
+    start_jwks_background_refresh,
+    stop_jwks_background_refresh,
     verify_token,
 )
 
@@ -354,3 +356,106 @@ class TestRoutePolicy:
             jwt_enabled=True,
         )
         assert result == ("admin",)
+
+
+# ---------------------------------------------------------------------------
+# JWKS background refresh tests
+# ---------------------------------------------------------------------------
+
+
+class TestJwksBackgroundRefresh:
+    def setup_method(self) -> None:
+        stop_jwks_background_refresh()
+        _clear_jwks_cache()
+
+    def teardown_method(self) -> None:
+        stop_jwks_background_refresh()
+        _clear_jwks_cache()
+
+    def test_start_creates_daemon_thread(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """start_jwks_background_refresh starts a live daemon thread."""
+        import urllib.request
+
+        def _fake_urlopen(url: str, timeout: int = 10) -> Any:
+            class _FakeResp:
+                def read(self) -> bytes:
+                    return b'{"keys": []}'
+
+                def __enter__(self) -> "_FakeResp":
+                    return self
+
+                def __exit__(self, *args: object) -> None:
+                    pass
+
+            return _FakeResp()
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+        start_jwks_background_refresh("https://example.com/.well-known/jwks.json", interval_seconds=60)
+
+        import lg_orch.auth as auth_mod
+
+        assert auth_mod._jwks_refresh_task is not None
+        assert auth_mod._jwks_refresh_task.is_alive()
+        assert auth_mod._jwks_refresh_task.daemon is True
+
+    def test_start_is_idempotent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Calling start twice does not create a second thread."""
+        import urllib.request
+
+        def _fake_urlopen(url: str, timeout: int = 10) -> Any:
+            class _FakeResp:
+                def read(self) -> bytes:
+                    return b'{"keys": []}'
+
+                def __enter__(self) -> "_FakeResp":
+                    return self
+
+                def __exit__(self, *args: object) -> None:
+                    pass
+
+            return _FakeResp()
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+        start_jwks_background_refresh("https://example.com/.well-known/jwks.json", interval_seconds=120)
+
+        import lg_orch.auth as auth_mod
+
+        first_thread = auth_mod._jwks_refresh_task
+        start_jwks_background_refresh("https://example.com/.well-known/jwks.json", interval_seconds=120)
+        assert auth_mod._jwks_refresh_task is first_thread
+
+    def test_stop_terminates_thread(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """stop_jwks_background_refresh signals the thread to exit and joins it."""
+        import urllib.request
+
+        def _fake_urlopen(url: str, timeout: int = 10) -> Any:
+            class _FakeResp:
+                def read(self) -> bytes:
+                    return b'{"keys": []}'
+
+                def __enter__(self) -> "_FakeResp":
+                    return self
+
+                def __exit__(self, *args: object) -> None:
+                    pass
+
+            return _FakeResp()
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+        start_jwks_background_refresh("https://example.com/.well-known/jwks.json", interval_seconds=300)
+
+        import lg_orch.auth as auth_mod
+
+        assert auth_mod._jwks_refresh_task is not None
+        assert auth_mod._jwks_refresh_task.is_alive()
+
+        stop_jwks_background_refresh()
+
+        assert auth_mod._jwks_refresh_task is None
+
+    def test_stop_is_safe_when_not_started(self) -> None:
+        """stop_jwks_background_refresh is safe to call without a prior start."""
+        stop_jwks_background_refresh()  # must not raise

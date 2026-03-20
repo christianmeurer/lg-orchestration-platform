@@ -44,6 +44,8 @@ Required fields: `intent`, `task_class`, `lane`, `rationale`, `context_scope`, `
 
 ## Example output
 
+# Example 1 — analysis intent
+
 ```json
 {
   "intent": "analysis",
@@ -54,5 +56,37 @@ Required fields: `intent`, `task_class`, `lane`, `rationale`, `context_scope`, `
   "latency_sensitive": true,
   "cache_affinity": "workspace:interactive",
   "prefix_segment": "stable_prefix"
+}
+```
+
+# Example 2 — code_change to deep_planning
+
+```json
+{
+  "intent": "code_change",
+  "task_class": "feature_implementation",
+  "lane": "deep_planning",
+  "rationale": "New feature request with multi-file impact and > 2000 token context; routing to deep_planning for thorough analysis",
+  "context_scope": "stable_prefix",
+  "latency_sensitive": false,
+  "cache_affinity": "workspace:deep_planning",
+  "prefix_segment": "stable_prefix",
+  "confidence": 0.91
+}
+```
+
+# Example 3 — debug to recovery
+
+```json
+{
+  "intent": "debug",
+  "task_class": "test_regression_diagnosis",
+  "lane": "recovery",
+  "rationale": "Failure context present with test regression; routing to recovery lane for targeted diagnosis",
+  "context_scope": "working_set",
+  "latency_sensitive": false,
+  "cache_affinity": "workspace:recovery",
+  "prefix_segment": "working_set",
+  "confidence": 0.88
 }
 ```

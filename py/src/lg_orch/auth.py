@@ -10,6 +10,13 @@ from jose import ExpiredSignatureError, JWTError, jwt
 from jose.exceptions import JWKError
 
 # ---------------------------------------------------------------------------
+# Background JWKS refresh
+# ---------------------------------------------------------------------------
+
+_jwks_refresh_task: threading.Thread | None = None
+_stop_refresh: threading.Event = threading.Event()
+
+# ---------------------------------------------------------------------------
 # Internal exception
 # ---------------------------------------------------------------------------
 
@@ -109,6 +116,45 @@ def _clear_jwks_cache() -> None:
     """Clear the JWKS cache (useful in tests)."""
     with _jwks_lock:
         _jwks_cache.clear()
+
+
+def start_jwks_background_refresh(
+    jwks_url: str, interval_seconds: int = 240
+) -> None:
+    """Start a daemon thread that refreshes the JWKS cache every *interval_seconds*.
+
+    The default interval of 240 s (4 min) keeps the cache warm before the
+    5-minute TTL expires, eliminating per-request synchronous HTTP fetches.
+    Call ``stop_jwks_background_refresh()`` on shutdown.
+
+    Calling this function while a refresh thread is already running is a no-op.
+    """
+    global _jwks_refresh_task, _stop_refresh
+
+    if _jwks_refresh_task is not None and _jwks_refresh_task.is_alive():
+        return
+
+    _stop_refresh.clear()
+
+    def _loop() -> None:
+        while not _stop_refresh.wait(timeout=interval_seconds):
+            try:
+                _fetch_jwks(jwks_url)
+            except Exception:  # noqa: BLE001
+                pass  # network hiccup — next tick will retry
+
+    _jwks_refresh_task = threading.Thread(target=_loop, daemon=True, name="jwks-refresh")
+    _jwks_refresh_task.start()
+
+
+def stop_jwks_background_refresh() -> None:
+    """Signal the background refresh thread to stop and wait for it to exit."""
+    global _jwks_refresh_task
+
+    _stop_refresh.set()
+    if _jwks_refresh_task is not None and _jwks_refresh_task.is_alive():
+        _jwks_refresh_task.join(timeout=5)
+    _jwks_refresh_task = None
 
 
 # ---------------------------------------------------------------------------
@@ -410,5 +456,7 @@ __all__ = [
     "get_current_user",
     "jwt_settings_from_config",
     "require_roles",
+    "start_jwks_background_refresh",
+    "stop_jwks_background_refresh",
     "verify_token",
 ]

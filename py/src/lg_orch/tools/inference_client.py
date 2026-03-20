@@ -14,6 +14,19 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from lg_orch.model_routing import SlaRoutingPolicy
 
+# ---------------------------------------------------------------------------
+# Optional Prometheus metrics — guarded so inference_client works in unit
+# tests that do not set up the full app (prometheus_client not registered).
+# ---------------------------------------------------------------------------
+try:
+    from lg_orch.api.metrics import (
+        LULA_LLM_DURATION_SECONDS as _LLM_DURATION_SECONDS,
+        LULA_LLM_REQUESTS_TOTAL as _LLM_REQUESTS_TOTAL,
+    )
+except ImportError:
+    _LLM_REQUESTS_TOTAL = None  # type: ignore[assignment]
+    _LLM_DURATION_SECONDS = None  # type: ignore[assignment]
+
 # Process-level default SLA policy. Inject via InferenceClient(sla_policy=...) for test isolation.
 _DEFAULT_SLA_POLICY: SlaRoutingPolicy | None = None
 
@@ -222,12 +235,21 @@ class InferenceClient:
 
         # Outer retry for HTTP 429/5xx (up to 4 attempts).
         last_exc: Exception | None = None
+        _t0 = time.monotonic()
         for attempt in range(4):
             try:
                 result = _do_transport()
                 breaker.record_success()
                 if policy is not None:
                     policy.record_latency(effective_model, result.latency_ms / 1000.0)
+                _elapsed = time.monotonic() - _t0
+                _provider = result.provider or "unknown"
+                if _LLM_REQUESTS_TOTAL is not None:
+                    _LLM_REQUESTS_TOTAL.labels(
+                        provider=_provider, model=effective_model, status="ok"
+                    ).inc()
+                if _LLM_DURATION_SECONDS is not None:
+                    _LLM_DURATION_SECONDS.labels(model=effective_model).observe(_elapsed)
                 return result
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
@@ -238,17 +260,33 @@ class InferenceClient:
                         time.sleep(wait_s)
                     else:
                         breaker.record_failure()
+                        if _LLM_REQUESTS_TOTAL is not None:
+                            _LLM_REQUESTS_TOTAL.labels(
+                                provider="unknown", model=effective_model, status="error"
+                            ).inc()
                         raise
                 else:
                     breaker.record_failure()
+                    if _LLM_REQUESTS_TOTAL is not None:
+                        _LLM_REQUESTS_TOTAL.labels(
+                            provider="unknown", model=effective_model, status="error"
+                        ).inc()
                     raise
             except Exception as exc:
                 breaker.record_failure()
+                if _LLM_REQUESTS_TOTAL is not None:
+                    _LLM_REQUESTS_TOTAL.labels(
+                        provider="unknown", model=effective_model, status="error"
+                    ).inc()
                 raise exc
 
         # Unreachable, but satisfies the type checker.
         breaker.record_failure()
         assert last_exc is not None
+        if _LLM_REQUESTS_TOTAL is not None:
+            _LLM_REQUESTS_TOTAL.labels(
+                provider="unknown", model=effective_model, status="error"
+            ).inc()
         raise last_exc
 
     def _execute_request(
@@ -410,8 +448,19 @@ class InferenceClient:
                 future = pool.submit(asyncio.run, _run())
                 text = future.result()
             breaker.record_success()
+            _stream_elapsed = time.monotonic() - started
+            if _LLM_REQUESTS_TOTAL is not None:
+                _LLM_REQUESTS_TOTAL.labels(
+                    provider="unknown", model=effective_model, status="ok"
+                ).inc()
+            if _LLM_DURATION_SECONDS is not None:
+                _LLM_DURATION_SECONDS.labels(model=effective_model).observe(_stream_elapsed)
         except Exception:
             breaker.record_failure()
+            if _LLM_REQUESTS_TOTAL is not None:
+                _LLM_REQUESTS_TOTAL.labels(
+                    provider="unknown", model=effective_model, status="error"
+                ).inc()
             raise
 
         latency_ms = int((time.perf_counter() - started) * 1000)
@@ -491,12 +540,24 @@ class InferenceClient:
                     delta = chunk["choices"][0]["delta"].get("content", "")
                     if isinstance(delta, str) and delta:
                         yield delta
+                _stream_elapsed_s = time.perf_counter() - _stream_started
                 breaker.record_success()
                 if policy is not None:
-                    _stream_latency_s = time.perf_counter() - _stream_started
-                    policy.record_latency(effective_model, _stream_latency_s)
+                    policy.record_latency(effective_model, _stream_elapsed_s)
+                if _LLM_REQUESTS_TOTAL is not None:
+                    _LLM_REQUESTS_TOTAL.labels(
+                        provider="unknown", model=effective_model, status="ok"
+                    ).inc()
+                if _LLM_DURATION_SECONDS is not None:
+                    _LLM_DURATION_SECONDS.labels(model=effective_model).observe(
+                        _stream_elapsed_s
+                    )
             except Exception:
                 breaker.record_failure()
+                if _LLM_REQUESTS_TOTAL is not None:
+                    _LLM_REQUESTS_TOTAL.labels(
+                        provider="unknown", model=effective_model, status="error"
+                    ).inc()
                 raise
         finally:
             await client.aclose()

@@ -1,3 +1,11 @@
+# Base image digests — update with: docker inspect <image> --format '{{index .RepoDigests 0}}'
+# rust:1.88-bookworm  — pin with: FROM rust:1.88-bookworm@sha256:<digest>
+# python:3.12-slim-bookworm — pin with: FROM python:3.12-slim-bookworm@sha256:<digest>
+# debian:bookworm-slim — pin with: FROM debian:bookworm-slim@sha256:<digest>
+#
+# To obtain digests in CI: docker pull <image> && docker inspect <image> --format '{{index .RepoDigests 0}}'
+# The release workflow records the built image digest in the release notes via docker/metadata-action.
+
 # Stage 1: Rust build
 FROM rust:1.88-bookworm AS rust-builder
 

@@ -21,16 +21,19 @@ LULA_ACTIVE_RUNS: Gauge = Gauge(
     "lula_active_runs",
     "Number of currently active runs",
 )
-# Placeholder — wired to LLM calls in Wave 13
 LULA_LLM_REQUESTS_TOTAL: Counter = Counter(
     "lula_llm_requests_total",
     "Total number of LLM requests",
     ["provider", "model", "status"],
 )
-# Placeholder — wired to tool calls in Wave 13
+LULA_LLM_DURATION_SECONDS: Histogram = Histogram(
+    "lula_llm_duration_seconds",
+    "Wall-clock duration of LLM inference calls in seconds",
+    ["model"],
+)
 LULA_TOOL_CALLS_TOTAL: Counter = Counter(
     "lula_tool_calls_total",
-    "Total number of tool calls",
+    "Total number of tool calls dispatched to the runner",
     ["tool_name", "status"],
 )
 

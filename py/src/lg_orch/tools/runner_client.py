@@ -9,6 +9,15 @@ from opentelemetry import trace as _otel_trace
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+# ---------------------------------------------------------------------------
+# Optional Prometheus metrics — guarded so runner_client works in unit
+# tests that do not set up the full app (prometheus_client not registered).
+# ---------------------------------------------------------------------------
+try:
+    from lg_orch.api.metrics import LULA_TOOL_CALLS_TOTAL as _TOOL_CALLS_TOTAL
+except ImportError:
+    _TOOL_CALLS_TOTAL = None  # type: ignore[assignment]
+
 _W3C_PROPAGATOR = TraceContextTextMapPropagator()
 
 
@@ -103,8 +112,13 @@ class RunnerClient:
             return dict(resp.json())
 
         try:
-            return _do()
+            result = _do()
+            if _TOOL_CALLS_TOTAL is not None:
+                _TOOL_CALLS_TOTAL.labels(tool_name=tool, status="ok").inc()
+            return result
         except httpx.HTTPStatusError as e:
+            if _TOOL_CALLS_TOTAL is not None:
+                _TOOL_CALLS_TOTAL.labels(tool_name=tool, status="error").inc()
             status = e.response.status_code if e.response is not None else 0
             route_payload = self._route_payload(input)
             approval_payload: dict[str, Any] | None = None
@@ -131,6 +145,8 @@ class RunnerClient:
                 **({"route": route_payload} if route_payload is not None else {}),
             }
         except httpx.HTTPError as e:
+            if _TOOL_CALLS_TOTAL is not None:
+                _TOOL_CALLS_TOTAL.labels(tool_name=tool, status="error").inc()
             route_payload = self._route_payload(input)
             return {
                 "tool": tool,
@@ -235,8 +251,19 @@ class RunnerClient:
             return [dict(x) for x in results]
 
         try:
-            return _do()
+            results = _do()
+            if _TOOL_CALLS_TOTAL is not None:
+                for c in calls:
+                    _TOOL_CALLS_TOTAL.labels(
+                        tool_name=str(c.get("tool", "")), status="ok"
+                    ).inc()
+            return results
         except httpx.HTTPStatusError as e:
+            if _TOOL_CALLS_TOTAL is not None:
+                for c in calls:
+                    _TOOL_CALLS_TOTAL.labels(
+                        tool_name=str(c.get("tool", "")), status="error"
+                    ).inc()
             status = e.response.status_code if e.response is not None else 0
             approval_payload: dict[str, Any] | None = None
             if status == 428 and e.response is not None:
@@ -271,6 +298,11 @@ class RunnerClient:
                 for c in calls
             ]
         except httpx.HTTPError as e:
+            if _TOOL_CALLS_TOTAL is not None:
+                for c in calls:
+                    _TOOL_CALLS_TOTAL.labels(
+                        tool_name=str(c.get("tool", "")), status="error"
+                    ).inc()
             return [
                 {
                     "tool": str(c.get("tool", "")),

@@ -172,4 +172,5 @@ the cluster. Use only as a last resort.
 | [`infra/k8s/deployment.yaml`](../infra/k8s/deployment.yaml) | Orchestrator Deployment |
 | [`infra/k8s/runner-deployment.yaml`](../infra/k8s/runner-deployment.yaml) | Runner Deployment |
 | [`infra/k8s/hpa.yaml`](../infra/k8s/hpa.yaml) | HorizontalPodAutoscalers |
+| [`infra/k8s/pdb.yaml`](../infra/k8s/pdb.yaml) | PodDisruptionBudgets (`lula-orch-pdb`, `lula-runner-pdb`) — ensures `minAvailable: 1` pod during voluntary disruptions (node drain, upgrades) |
 | [`infra/k8s/namespace.yaml`](../infra/k8s/namespace.yaml) | `lula-orch` Namespace |

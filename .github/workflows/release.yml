@@ -14,10 +14,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  security-gate:
+    name: "Security Gate (cargo-deny)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked --version "0.14"
+
+      - name: Cargo deny check
+        run: cd rs && cargo deny check
+
   test:
     name: "Tests"
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    needs: security-gate
 
     steps:
       - uses: actions/checkout@v4

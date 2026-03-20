@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import httpx
+import pytest
+
+import lg_orch.tools.runner_client as rc_mod
 from lg_orch.tools.runner_client import RunnerClient
 
 
@@ -148,3 +152,65 @@ def test_execute_tool_forwards_checkpoint_payload() -> None:
     assert payload["checkpoint"]["checkpoint_ns"] == "main"
     assert payload["checkpoint"]["checkpoint_id"] == "cp-1"
     assert payload["checkpoint"]["run_id"] == "run-1"
+
+
+# ---------------------------------------------------------------------------
+# Prometheus metric instrumentation tests
+# ---------------------------------------------------------------------------
+
+
+def test_tool_calls_total_incremented_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LULA_TOOL_CALLS_TOTAL is incremented with status='ok' on successful execute_tool."""
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status.return_value = None
+    mock_resp.json.return_value = {
+        "tool": "exec",
+        "ok": True,
+        "exit_code": 0,
+        "stdout": "done",
+        "stderr": "",
+        "diagnostics": [],
+        "timing_ms": 5,
+        "artifacts": {},
+    }
+    mock_http = MagicMock()
+    mock_http.post.return_value = mock_resp
+    client = RunnerClient(base_url="http://127.0.0.1:8088", _client=mock_http)
+
+    mock_counter = MagicMock()
+    monkeypatch.setattr(rc_mod, "_TOOL_CALLS_TOTAL", mock_counter)
+
+    result = client.execute_tool(tool="exec", input={"cmd": "ls"})
+    assert result["ok"] is True
+
+    mock_counter.labels.assert_called_once_with(tool_name="exec", status="ok")
+    mock_counter.labels.return_value.inc.assert_called_once()
+
+
+def test_tool_calls_total_incremented_on_http_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LULA_TOOL_CALLS_TOTAL is incremented with status='error' on HTTPError."""
+    client = RunnerClient(base_url="http://127.0.0.1:0")
+
+    mock_counter = MagicMock()
+    monkeypatch.setattr(rc_mod, "_TOOL_CALLS_TOTAL", mock_counter)
+
+    result = client.execute_tool(tool="health", input={})
+    assert result["ok"] is False
+
+    label_calls = mock_counter.labels.call_args_list
+    assert any(call.kwargs.get("status") == "error" for call in label_calls)
+
+
+def test_tool_calls_total_none_does_not_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When _TOOL_CALLS_TOTAL is None (ImportError guard), no AttributeError is raised."""
+    client = RunnerClient(base_url="http://127.0.0.1:0")
+    monkeypatch.setattr(rc_mod, "_TOOL_CALLS_TOTAL", None)
+
+    result = client.execute_tool(tool="health", input={})
+    assert result["ok"] is False  # network unreachable, but no crash from None counter

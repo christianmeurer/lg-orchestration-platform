@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -268,3 +268,77 @@ def test_client_singleton_reuses_connection() -> None:
         assert c1._client is c2._client, "expected singleton httpx.Client to be shared"
     finally:
         clear_client_cache()
+
+
+# ---------------------------------------------------------------------------
+# Prometheus metric instrumentation tests
+# ---------------------------------------------------------------------------
+
+
+def test_llm_requests_total_incremented_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LULA_LLM_REQUESTS_TOTAL is incremented with status='ok' on success."""
+    base_url = "http://test-metrics-ok.local"
+    _clear_breaker(base_url)
+    client = _make_client(base_url)
+
+    ok_body = {"choices": [{"message": {"content": "hello"}}], "model": "m"}
+    client._client.post.return_value = _mock_response(status=200, body=ok_body)  # type: ignore[union-attr]
+    monkeypatch.setattr(ic_mod.time, "sleep", lambda s: None)
+
+    mock_counter = MagicMock()
+    mock_histogram = MagicMock()
+    monkeypatch.setattr(ic_mod, "_LLM_REQUESTS_TOTAL", mock_counter)
+    monkeypatch.setattr(ic_mod, "_LLM_DURATION_SECONDS", mock_histogram)
+
+    result = client.chat_completion(
+        model="m", system_prompt="s", user_prompt="u", temperature=0.0
+    )
+    assert result.text == "hello"
+
+    mock_counter.labels.assert_called_once_with(provider="unknown", model="m", status="ok")
+    mock_counter.labels.return_value.inc.assert_called_once()
+    mock_histogram.labels.assert_called_once_with(model="m")
+    mock_histogram.labels.return_value.observe.assert_called_once()
+    _clear_breaker(base_url)
+
+
+def test_llm_requests_total_incremented_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LULA_LLM_REQUESTS_TOTAL is incremented with status='error' on non-retryable HTTP error."""
+    base_url = "http://test-metrics-err.local"
+    _clear_breaker(base_url)
+    client = _make_client(base_url)
+
+    client._client.post.return_value = _mock_response(status=400)  # type: ignore[union-attr]
+    monkeypatch.setattr(ic_mod.time, "sleep", lambda s: None)
+
+    mock_counter = MagicMock()
+    monkeypatch.setattr(ic_mod, "_LLM_REQUESTS_TOTAL", mock_counter)
+    monkeypatch.setattr(ic_mod, "_LLM_DURATION_SECONDS", MagicMock())
+
+    with pytest.raises(httpx.HTTPStatusError):
+        client.chat_completion(
+            model="m", system_prompt="s", user_prompt="u", temperature=0.0
+        )
+
+    label_calls = mock_counter.labels.call_args_list
+    assert any(call.kwargs.get("status") == "error" for call in label_calls)
+    _clear_breaker(base_url)
+
+
+def test_llm_metrics_none_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When _LLM_REQUESTS_TOTAL is None (ImportError guard), no AttributeError is raised."""
+    base_url = "http://test-metrics-none.local"
+    _clear_breaker(base_url)
+    client = _make_client(base_url)
+
+    ok_body = {"choices": [{"message": {"content": "ok"}}], "model": "m"}
+    client._client.post.return_value = _mock_response(status=200, body=ok_body)  # type: ignore[union-attr]
+    monkeypatch.setattr(ic_mod.time, "sleep", lambda s: None)
+    monkeypatch.setattr(ic_mod, "_LLM_REQUESTS_TOTAL", None)
+    monkeypatch.setattr(ic_mod, "_LLM_DURATION_SECONDS", None)
+
+    result = client.chat_completion(
+        model="m", system_prompt="s", user_prompt="u", temperature=0.0
+    )
+    assert result.text == "ok"
+    _clear_breaker(base_url)
