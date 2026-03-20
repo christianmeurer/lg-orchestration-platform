@@ -36,6 +36,27 @@ The agent's thought process is defined as a directed graph in `py/src/lg_orch/gr
 ### Tool Client
 The Python side never executes shell commands or writes files directly. Instead, it uses `RunnerClient` to send requests to the Rust server. It uses `httpx` and `tenacity` for resilient HTTP communication.
 
+## The Python API Layer (`py/src/lg_orch/api/`)
+
+The `remote_api.py` monolith (previously ~2,045 lines) was decomposed in Wave 2 into four focused submodules under `py/src/lg_orch/api/`:
+
+| Module | Responsibility |
+|---|---|
+| `metrics.py` | Prometheus counter and histogram exposition; `/metrics` endpoint handler |
+| `streaming.py` | SSE stream management — per-run event queues, chunk serialisation, client lifecycle |
+| `approvals.py` | Approval suspend/resume API — token issuance, HMAC-SHA256 validation, approve/reject endpoints |
+| `service.py` | Top-level `RemoteAPIService` wiring: mounts the sub-routers, initialises rate-limit middleware, and owns the server lifecycle |
+
+The `remote_api.py` facade in `py/src/lg_orch/remote_api.py` re-exports from these submodules for backward-compatibility.
+
+## Shared Node Utilities (`py/src/lg_orch/nodes/_utils.py`)
+
+A `_utils.py` module under `py/src/lg_orch/nodes/` centralises utilities previously duplicated across executor, verifier, context_builder, router, and planner:
+
+- `validate_base_url(url: str) -> str` — normalises and validates the runner base URL, raising `ConfigError` on malformed input.
+- `extract_json_block(text: str) -> dict` — strips markdown fences and parses the first JSON object from a model response.
+- `resolve_inference_client(config: LulaConfig) -> InferenceClient` — constructs the appropriate `InferenceClient` variant from the active configuration profile.
+
 ## The Rust Runner (`rs/runner/`)
 
 The runner acts as a high-trust execution sandbox.
@@ -44,16 +65,25 @@ The runner acts as a high-trust execution sandbox.
 Defined in `rs/runner/src/main.rs`, it runs an HTTP server using `tokio` and `axum`. It accepts JSON requests containing tool execution instructions (`ToolExecuteRequest`).
 
 ### Security & Config
-The runner uses `RunnerConfig` (`rs/runner/src/config.rs`) to enforce path boundaries (chroot-like behavior) and rate limits. It also verifies API keys.
+The runner uses `RunnerConfig` (`rs/runner/src/config.rs`) to enforce path boundaries (chroot-like behavior) and rate limits. It also verifies API keys. The single source of truth for the exec command allowlist (`ALLOWED_EXEC_COMMANDS`) lives in `rs/runner/src/config.rs`; no other module defines or duplicates this list.
+
+### Per-Request Tool Context
+Each request constructs a `ToolContext` struct that carries the undo pointer for that request's scope. The previous `LAST_UNDO_POINTER` global has been removed; there is no shared mutable state across concurrent batch requests in the tool dispatch path.
+
+### HMAC Approval Protocol
+The Rust runner validates approval tokens in `rs/runner/src/auth.rs` using HMAC-SHA256 with constant-time comparison (`subtle::ConstantTimeEq`) and TTL enforcement. The Python orchestrator (`py/src/lg_orch/auth.py`, `py/src/lg_orch/api/approvals.py`) now issues and verifies tokens using the same HMAC-SHA256 scheme, bringing both layers to parity.
+
+### Supply-Chain Scanning
+`rs/deny.toml` configures `cargo-deny` for the Rust workspace. It enforces license allowlists and advisory database checks. The CI workflow runs `cargo deny check` on every pull request.
 
 ### Available Tools
 The logic for tools is located in `rs/runner/src/tools/`.
-- **FS Tools (`fs.rs`)**: 
+- **FS Tools (`fs.rs`)**:
   - `read_file`: Reads a file if within the allowed root directory. Text files are read as UTF-8, and `.pdf` files are extracted to text before returning output.
   - `list_files`: Lists files recursively or top-level.
   - `apply_patch`: Adds, updates, or deletes files safely.
 - **Exec Tool (`exec.rs`)**:
-  - `exec`: Spawns a subprocess. It uses a strict allowlist (`uv`, `python`, `pytest`, `ruff`, `mypy`, `cargo`, `git`) to prevent arbitrary command execution.
+  - `exec`: Spawns a subprocess. It uses the allowlist defined in `config.rs` (`uv`, `python`, `pytest`, `ruff`, `mypy`, `cargo`, `git`) to prevent arbitrary command execution.
 
 ## Testing & CI
 Both sides of the codebase are heavily tested:

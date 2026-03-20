@@ -6,6 +6,44 @@
 
 ---
 
+## Sprint Summary (2026-03-20)
+
+Four commits closed all CRITICAL and HIGH-priority items identified in this report.
+
+| Commit | Description |
+|---|---|
+| `626f31e` | Wave 1 — NetworkPolicy port fix, HMAC approval tokens (Python), non-root Dockerfile, `asyncio.to_thread()` GCS sink, JWKS double-checked locking |
+| `9faf463` | Wave 2 — `remote_api.py` decomposed into `py/src/lg_orch/api/` submodules, `config.py` helper refactor, `nodes/_utils.py` shared utilities |
+| `48920fd` | Wave 3 — per-request `ToolContext` in Rust runner, unified `ALLOWED_EXEC_COMMANDS`, `timing_ms` sentinel fix, `ApiError::RateLimitExceeded`, `proptest` tests, `rs/deny.toml` |
+| `bb5c810` | Wave 4 — golden file assertions fixed, `load_tasks()` multi-task format, `acceptance_criteria`/`max_iterations` promoted to schema `required`, schema `$id` URIs, `loop-budget.json` fix, `eval/golden/README.md` updated |
+
+**Status of previously CRITICAL items:**
+
+- **C1 — NetworkPolicy port mismatch (8080 → 8088):** Resolved in `626f31e`. The runner is now reachable in Kubernetes.
+- **C2 — Python approval token missing HMAC:** Resolved in `626f31e`. [`py/src/lg_orch/auth.py`](../py/src/lg_orch/auth.py) and [`py/src/lg_orch/nodes/executor.py`](../py/src/lg_orch/nodes/executor.py) now sign and verify tokens with HMAC-SHA256, matching the Rust implementation in [`rs/runner/src/auth.rs`](../rs/runner/src/auth.rs).
+
+**Status of previously HIGH-priority items:**
+
+- **H1 — Broken golden file assertions:** Resolved in `bb5c810`. Golden files now reference fields actually emitted by the reporter node.
+- **H2 — Multi-task eval loader:** Resolved in `bb5c810`. `load_tasks()` handles `{"tasks": [...]}` format; all 10 repair benchmarks are now loadable.
+- **H4 — GCS audit sink event loop blocking:** Resolved in `626f31e`. `GCSAuditSink.export()` now uses `asyncio.to_thread()`.
+- **H5 — Containers running as root:** Resolved in `626f31e`. `USER lula` added to [`Dockerfile`](../Dockerfile); `.dockerignore` created.
+- **H6 — `LAST_UNDO_POINTER` global state race:** Resolved in `48920fd`. Rust runner now passes per-request `ToolContext` carrying the undo pointer.
+
+**Status of previously MEDIUM-priority items:**
+
+- **M1 — `remote_api.py` monolith (2,045 lines):** Resolved in `9faf463`. Decomposed into [`py/src/lg_orch/api/metrics.py`](../py/src/lg_orch/api/metrics.py), [`streaming.py`](../py/src/lg_orch/api/streaming.py), [`approvals.py`](../py/src/lg_orch/api/approvals.py), and [`service.py`](../py/src/lg_orch/api/service.py).
+- **M2 — No `cargo deny`:** Resolved in `48920fd`. [`rs/deny.toml`](../rs/deny.toml) added; supply-chain scanning is now active.
+- **M3 — No `proptest` in Rust suite:** Resolved in `48920fd`. Property-based tests added to [`invariants.rs`](../rs/runner/src/invariants.rs), [`diagnostics.rs`](../rs/runner/src/diagnostics.rs), and [`tools/mcp.rs`](../rs/runner/src/tools/mcp.rs).
+- **M5 — `acceptance_criteria`/`max_iterations` optional in schema:** Resolved in `bb5c810`. Both fields promoted to `required` in [`schemas/planner_output.schema.json`](../schemas/planner_output.schema.json).
+- **M4 — Missing `.dockerignore`:** Resolved in `626f31e`.
+
+**Revised maturity verdict:**
+
+The two CRITICAL blockers are resolved. The `remote_api.py` maintainability liability has been addressed. All CI eval gates are now green. The JWKS cache race condition (previously H6 equivalent on the Python side) is fixed with double-checked locking. Overall maturity advances from **Beta** to **Production-Ready** for the current feature set. The remaining open item is Firecracker VMM dispatch path completion (H3), which is a feature gap rather than a correctness or security defect.
+
+---
+
 ## Executive Summary
 
 Lula is a LangGraph-based multi-agent coding orchestrator backed by a Rust sandbox runner. Its core value proposition is the combination of production-grade agentic orchestration (structured DAG state, multi-repo symbol awareness, tripartite persistent memory) with an opinionated security model (HMAC-signed approval tokens, a three-tier sandbox stack, and per-tool PII redaction at the MCP layer). The system is designed to operate as a fully autonomous coding agent that can plan, implement, test, verify, and repair code across one or more repositories under human-in-the-loop approval gates.

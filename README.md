@@ -13,7 +13,7 @@
 
 ---
 
-**Maturity: Beta (v1.0-rc1)** — All Wave 14–16 debt resolved. Production-ready with the exception of external secrets management (ESO/Vault — operational dependency).
+**Maturity: Production-Ready (v1.0-rc2)** — All Wave 14–16 debt resolved and all CRITICAL/HIGH sprint items closed (2026-03-20). Production-ready with the exception of external secrets management (ESO/Vault — operational dependency) and Firecracker VMM dispatch path completion.
 
 ---
 
@@ -260,7 +260,7 @@ All items from the Wave 14–16 backlog have been implemented as of commit `1324
 
 The following gaps are tracked and scheduled for remediation. They do not affect the correctness of the current orchestration or execution paths but represent engineering debt or documented deviations between specification and runtime behavior.
 
-- **JWKS cache has no TTL.** The JWKS key cache in [`auth.py`](py/src/lg_orch/auth.py) does not expire. Key rotation requires a process restart. Tracked for resolution.
+- **JWKS cache has no TTL.** The JWKS key cache in [`auth.py`](py/src/lg_orch/auth.py) does not expire entries based on age; key rotation requires a process restart. The cache is now thread-safe (double-checked locking added in sprint commit `626f31e`); the remaining limitation is TTL expiry, not thread safety.
 - **Secrets management not yet automated.** No External Secrets Operator, Vault, or SOPS integration. Secrets are managed via manual `kubectl edit`. Requires an operational decision on secrets backend (ESO/Vault/SOPS) — deferred as an external ops dependency.
 
 ---
@@ -270,10 +270,11 @@ The following gaps are tracked and scheduled for remediation. They do not affect
 | Layer | Status | Detail |
 |---|---|---|
 | Rust runner | Hardened | Non-root UID, `readOnlyRootFilesystem`, `CAP_DROP ALL`, `seccompProfile: RuntimeDefault`, gVisor runtimeClass |
-| Python orchestrator | Hardening in progress | `securityContext` fixes and `NetworkPolicy` namespace alignment landed in v0.7; OTel and full RBAC in Wave 10 |
-| Approval gating | Active | All state-mutating operations require HMAC-SHA256 approval tokens with TTL and rotation support |
+| Python orchestrator | Hardened | Dockerfile runs as non-root `lula` user; JWKS cache uses double-checked locking (thread-safe); approval tokens are HMAC-SHA256 signed; GCS audit sink uses `asyncio.to_thread()` (non-blocking) |
+| Approval gating | Active | All state-mutating operations require HMAC-SHA256 approval tokens with TTL and rotation support; Python and Rust layers now at parity |
 | MCP PII redaction | Active | Bidirectional redaction with deterministic reversible tokens; applied on both inbound tool results and outbound tool arguments |
 | Exec environment | Active | `env_clear()` called before all subprocess spawns; minimal allowlist re-injected (`PATH`, `HOME`, `TMPDIR`) |
+| Supply-chain scanning | Active | `rs/deny.toml` configures `cargo-deny` for license and advisory checks on all Rust dependencies |
 
 ---
 
