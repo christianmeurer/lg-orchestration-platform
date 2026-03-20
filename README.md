@@ -13,6 +13,10 @@
 
 ---
 
+**Maturity: Alpha → Beta (v0.7)** — Architecturally ahead of the open-source field in enterprise agentic capabilities; infrastructure hardening in progress.
+
+---
+
 ## What It Is
 
 Lula is a production-grade agentic coding platform that pairs a **Python LangGraph orchestrator** with a **Rust execution runtime** to enable secure, governed, and recoverable autonomous software engineering workflows. The platform is designed for AI engineers building autonomous coding pipelines, platform teams that need auditability and operator control over AI-driven mutations, and research teams evaluating agentic systems against real-world repair benchmarks.
@@ -222,9 +226,33 @@ Full technical detail for each wave is in [`docs/sota_2026_plan.md`](docs/sota_2
 | 8 | Collaborative agents and governed autonomy — coder node, typed handoffs, approval suspend/resume, MetaGraph scheduler, git worktree isolation, multi-path approval policies | ✅ Complete |
 | 9 | Persistent cross-session memory and neurosymbolic verification — tripartite SQLite memory, invariant checker, SCIP cross-repo indexing, self-healing test loop, gVisor/Kata K8s sandboxing | ✅ Complete |
 | 10 | Production hardening — OpenTelemetry span propagation Python/Rust, Prometheus metrics, Redis/Postgres checkpoint store, HPA, JWT RBAC, audit log export, SLA-aware routing | 🚧 In Progress |
-| 11 | Evaluation correctness — runner execution for existing fixtures, pass@k scoring, SWE-bench lite adapter, correctness eval CI job | 📋 Planned |
+| 11 | Evaluation correctness — runner execution for existing fixtures, pass@k scoring, SWE-bench lite adapter, correctness eval CI job | 📋 Planned — golden file assertions are documentation only; not enforced at runtime until Wave 11 runner integration is active |
 | 12 | Streaming completeness — token-level streaming from all nodes to SSE endpoint, SPA chunk rendering, VS Code chunk rendering | 📋 Planned |
-| 13 | Sandbox, tooling, and schema hardening — cgroup v2 resource limits, Firecracker decision, SCIP toolchain script, InferenceClient function calling, schema enforcement at runtime | 📋 Planned |
+| 13 | Sandbox, tooling, and schema hardening — cgroup v2 resource limits, Firecracker decision, SCIP toolchain script, InferenceClient function calling, schema enforcement at runtime | 📋 Planned — Firecracker integration is scaffolding; SafeFallback/LinuxNamespace currently active |
+
+---
+
+## Known Limitations
+
+The following gaps are tracked and scheduled for remediation. They do not affect the correctness of the current orchestration or execution paths but represent engineering debt or documented deviations between specification and runtime behavior.
+
+- **`StateGraph(dict)` — untyped runtime state.** `OrchState` Pydantic schema documents the intended structure but is not enforced at the LangGraph graph boundary. Mutations at graph edges are not validated against the schema. Tracked for resolution in a future wave.
+- **JWKS cache has no TTL.** The JWKS key cache in [`auth.py`](py/src/lg_orch/auth.py) does not expire. Key rotation requires a process restart. Tracked for resolution.
+- **Eval golden file assertions are documentation only.** `post_apply_pytest_pass` and structural assertions in [`eval/golden/`](eval/golden/) are not executed against runner output until Wave 11 runner integration is active.
+- **Firecracker microVM backend is architectural scaffolding.** The [`sandbox.rs`](rs/runner/src/sandbox.rs) Firecracker path is defined but the Firecracker API client is not wired. All environments currently dispatch through LinuxNamespace or SafeFallback isolation.
+- **Healing loop supports pytest only.** [`healing_loop.py`](py/src/lg_orch/healing_loop.py) invokes `pytest` directly. Multi-language test runners (Jest, Cargo test, Go test) are not yet supported.
+
+---
+
+## Security Posture
+
+| Layer | Status | Detail |
+|---|---|---|
+| Rust runner | Hardened | Non-root UID, `readOnlyRootFilesystem`, `CAP_DROP ALL`, `seccompProfile: RuntimeDefault`, gVisor runtimeClass |
+| Python orchestrator | Hardening in progress | `securityContext` fixes and `NetworkPolicy` namespace alignment landed in v0.7; OTel and full RBAC in Wave 10 |
+| Approval gating | Active | All state-mutating operations require HMAC-SHA256 approval tokens with TTL and rotation support |
+| MCP PII redaction | Active | Bidirectional redaction with deterministic reversible tokens; applied on both inbound tool results and outbound tool arguments |
+| Exec environment | Active | `env_clear()` called before all subprocess spawns; minimal allowlist re-injected (`PATH`, `HOME`, `TMPDIR`) |
 
 ---
 

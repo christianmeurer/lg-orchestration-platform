@@ -3,14 +3,9 @@ kind: Service
 metadata:
   name: lula-runner
   namespace: lula-orch
-  annotations:
-    # DigitalOcean Cloud Controller Manager — provision an external load balancer
-    # so the App Platform API service can reach the runner over the public internet.
-    # Remove this annotation and change type to ClusterIP if the API and runner
-    # are in the same cluster.
-    service.beta.kubernetes.io/do-loadbalancer-name: lula-runner
 spec:
-  type: LoadBalancer
+  # ClusterIP: runner is internal-only; access via orchestrator pod only
+  type: ClusterIP
   selector:
     app: lula-runner
   ports:
