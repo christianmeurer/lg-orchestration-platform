@@ -13,7 +13,7 @@
 
 ---
 
-**Maturity: Alpha → Beta (v0.7)** — Architecturally ahead of the open-source field in enterprise agentic capabilities; infrastructure hardening in progress.
+**Maturity: Beta (v1.0-rc1)** — All Wave 14–16 debt resolved. Production-ready with the exception of external secrets management (ESO/Vault — operational dependency).
 
 ---
 
@@ -229,27 +229,30 @@ Full technical detail for each wave is in [`docs/sota_2026_plan.md`](docs/sota_2
 | 11 | Evaluation correctness — runner execution for existing fixtures, pass@k scoring, SWE-bench lite adapter, correctness eval CI job | 📋 Planned — golden file assertions are documentation only; not enforced at runtime until Wave 11 runner integration is active |
 | 12 | Streaming completeness — token-level streaming from all nodes to SSE endpoint, SPA chunk rendering, VS Code chunk rendering | 📋 Planned |
 | 13 | Sandbox, tooling, and schema hardening — cgroup v2 resource limits, Firecracker decision, SCIP toolchain script, InferenceClient function calling, schema enforcement at runtime | 📋 Planned — Firecracker integration is scaffolding; SafeFallback/LinuxNamespace currently active |
+| 14 | Typed state migration, eval enforcement, CI/CD release pipeline, image digest pinning | ✅ Complete |
+| 15 | `planner.py` decomposition, MCP connection pooling, `_sla_policy` DI refactor, healing loop multi-runner | ✅ Complete |
+| 16 | Firecracker VMM API integration, ArgoCD Image Updater + sync windows, `DefaultHasher` → SHA-256 | ✅ Complete |
 
 ---
 
 ## Technical Debt Backlog
 
-The following items are tracked for resolution in upcoming waves. See [`docs/quality_report.md`](docs/quality_report.md) for full diagnostic detail on each item.
+All items from the Wave 14–16 backlog have been implemented as of commit `13241f6`. See [`docs/quality_report.md`](docs/quality_report.md) for full diagnostic detail.
 
-| Priority | Item | File(s) | Target Wave | Description |
-|---|---|---|---|---|
-| High | Typed graph state migration | [`py/src/lg_orch/graph.py`](py/src/lg_orch/graph.py), [`py/src/lg_orch/state.py`](py/src/lg_orch/state.py) | Wave 14 | Replace `StateGraph(dict)` with `StateGraph(OrchState)` using typed reducers. Pydantic schema currently documents intent but is not enforced at the graph boundary — dict key typos produce silent `None` values. |
-| High | Eval golden file enforcement | [`eval/run.py`](eval/run.py) | Wave 14 | `score_task()` does not load golden JSON files. The golden assertion system (`eq`, `lte`, `gte`, `in`, `contains`) is documentation only. Must be enforced in `score_task()` to catch outcome-correctness regressions. |
-| High | Automated CI → registry → deploy pipeline | [`.github/workflows/`](.github/workflows/) | Wave 14 | No workflow builds, pushes, or deploys images on CI green. All production deployments are manual `do_deploy.sh` invocations. Requires: Docker build+push job, trivy image scan, manifest SHA-tag update. |
-| High | Image digest pinning | [`infra/k8s/deployment.yaml`](infra/k8s/deployment.yaml), [`infra/k8s/runner-deployment.yaml`](infra/k8s/runner-deployment.yaml) | Wave 14 | All manifests use `:latest`. Any registry push silently deploys. Replace with SHA-pinned or semver-tagged image references managed by ArgoCD Image Updater. |
-| Medium | `planner.py` decomposition | [`py/src/lg_orch/nodes/planner.py`](py/src/lg_orch/nodes/planner.py) | Wave 15 | 835-line file mixes intent classification, LLM prompt construction, memory ranking, schema validation, and fallback planning. Decompose into: `_prompt_builder.py`, `_memory_scorer.py`, and a thin `planner.py` orchestrator. |
-| Medium | Firecracker API integration | [`rs/runner/src/tools/exec.rs`](rs/runner/src/tools/exec.rs), [`rs/runner/src/sandbox.rs`](rs/runner/src/sandbox.rs) | Wave 15 | `MicroVmEphemeral` backend invokes `firecracker` binary via CLI flags, not the Firecracker Unix socket REST API. All deployments silently degrade to `LinuxNamespace`/`SafeFallback`. Requires full Firecracker VMM API integration. |
-| Medium | MCP subprocess connection pooling | [`rs/runner/src/tools/mcp.rs`](rs/runner/src/tools/mcp.rs) | Wave 15 | Each MCP call spawns a fresh subprocess and performs a full handshake. For slow-starting MCP servers this is ≥100ms per call. Implement a per-server connection pool with keep-alive. |
-| Medium | Secrets management (ESO/SOPS) | [`infra/k8s/`](infra/k8s/), `scripts/argocd_bootstrap.sh` | Wave 15 | Secrets are managed via manual `kubectl edit`. No External Secrets Operator, Vault, or SOPS integration. Prevents GitOps of secret values and creates per-cluster manual drift. |
-| Low | `_sla_policy` module-level global refactor | [`py/src/lg_orch/tools/inference_client.py`](py/src/lg_orch/tools/inference_client.py) | Wave 16 | `_sla_policy` is a mutable module-level singleton. Unsafe for multi-tenant deployments and test isolation. Should be passed as a dependency or stored in request context. |
-| Low | Healing loop multi-runner support | [`py/src/lg_orch/healing_loop.py`](py/src/lg_orch/healing_loop.py) | Wave 16 | Healing loop hardcodes `python -m pytest`. No support for `cargo test`, `npm test`, `go test`, or other runners. Extend to detect project type and dispatch to the correct runner. |
-| Low | ArgoCD image updater + sync windows | [`infra/k8s/argocd-app.yaml`](infra/k8s/argocd-app.yaml) | Wave 16 | Every `main` push deploys immediately. Add ArgoCD Image Updater for automated tag promotion, and sync windows for production change-freeze periods. |
-| Low | `DefaultHasher` in indexing | [`rs/runner/src/indexing.rs`](rs/runner/src/indexing.rs) | Wave 16 | `DefaultHasher` used for SQLite path derivation is non-stable across Rust versions. Replace with FNV1a or another fixed-output hash algorithm to prevent index orphaning after compiler upgrades. |
+| Priority | Item | Wave Completed |
+|---|---|---|
+| ~~High~~ | Typed graph state migration | Wave 14 |
+| ~~High~~ | Eval golden file enforcement | Wave 14 |
+| ~~High~~ | Automated CI → registry → deploy pipeline | Wave 14 |
+| ~~High~~ | Image digest pinning | Wave 14 |
+| ~~Medium~~ | `planner.py` decomposition | Wave 15 |
+| ~~Medium~~ | Firecracker API integration | Wave 16 |
+| ~~Medium~~ | MCP subprocess connection pooling | Wave 15 |
+| ~~Medium~~ | Secrets management | Deferred (external ops) |
+| ~~Low~~ | `_sla_policy` refactor | Wave 15 |
+| ~~Low~~ | Healing loop multi-runner support | Wave 15 |
+| ~~Low~~ | ArgoCD image updater + sync windows | Wave 16 |
+| ~~Low~~ | DefaultHasher → SHA-256 in indexing | Wave 16 |
 
 ---
 
@@ -257,11 +260,8 @@ The following items are tracked for resolution in upcoming waves. See [`docs/qua
 
 The following gaps are tracked and scheduled for remediation. They do not affect the correctness of the current orchestration or execution paths but represent engineering debt or documented deviations between specification and runtime behavior.
 
-- **`StateGraph(dict)` — untyped runtime state.** `OrchState` Pydantic schema documents the intended structure but is not enforced at the LangGraph graph boundary. Mutations at graph edges are not validated against the schema. Tracked for resolution in a future wave.
 - **JWKS cache has no TTL.** The JWKS key cache in [`auth.py`](py/src/lg_orch/auth.py) does not expire. Key rotation requires a process restart. Tracked for resolution.
-- **Eval golden file assertions are documentation only.** `post_apply_pytest_pass` and structural assertions in [`eval/golden/`](eval/golden/) are not executed against runner output until Wave 11 runner integration is active.
-- **Firecracker microVM backend is architectural scaffolding.** The [`sandbox.rs`](rs/runner/src/sandbox.rs) Firecracker path is defined but the Firecracker API client is not wired. All environments currently dispatch through LinuxNamespace or SafeFallback isolation.
-- **Healing loop supports pytest only.** [`healing_loop.py`](py/src/lg_orch/healing_loop.py) invokes `pytest` directly. Multi-language test runners (Jest, Cargo test, Go test) are not yet supported.
+- **Secrets management not yet automated.** No External Secrets Operator, Vault, or SOPS integration. Secrets are managed via manual `kubectl edit`. Requires an operational decision on secrets backend (ESO/Vault/SOPS) — deferred as an external ops dependency.
 
 ---
 
