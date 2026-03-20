@@ -1,8 +1,26 @@
 from __future__ import annotations
 
+import json
 import re
 from hashlib import sha256
+from pathlib import Path
 from typing import Any
+
+import jsonschema
+
+_VERIFIER_SCHEMA_PATH = (
+    Path(__file__).parent.parent.parent.parent.parent / "schemas" / "verifier_report.schema.json"
+)
+
+
+def _load_verifier_schema() -> dict[str, Any]:
+    try:
+        return json.loads(_VERIFIER_SCHEMA_PATH.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+    except Exception:
+        return {}
+
+
+VERIFIER_SCHEMA: dict[str, Any] = _load_verifier_schema()
 
 from lg_orch.logging import get_logger
 from lg_orch.memory import ensure_history_policy, get_compression_summary, prune_post_verification_history
@@ -949,6 +967,37 @@ def verifier(state: dict[str, Any]) -> dict[str, Any]:
             "next_handoff": None,
             "loop_summary": "verifier failed to classify results",
         }
+
+    if VERIFIER_SCHEMA:
+        try:
+            # In JSON Schema draft 2020-12, $ref alongside type:["object","null"]
+            # applies $ref constraints even when the value is null, causing false
+            # failures on nullable object fields. Strip only the three nullable
+            # $ref fields when they are None so they are absent (= valid) from
+            # the schema's perspective. Required scalar fields (retry_target, etc.)
+            # are kept even when null because the schema allows null for those.
+            _nullable_ref_keys = {"recovery", "recovery_packet", "next_handoff"}
+            report_for_validation = {
+                k: v for k, v in report.items()
+                if not (k in _nullable_ref_keys and v is None)
+            }
+            jsonschema.validate(instance=report_for_validation, schema=VERIFIER_SCHEMA)
+        except jsonschema.ValidationError as ve:
+            log.warning("verifier_schema_validation_failed", error=str(ve.message))
+            report = {
+                "ok": False,
+                "checks": [],
+                "acceptance_ok": False,
+                "acceptance_checks": [],
+                "retry_target": "planner",
+                "plan_action": "keep",
+                "failure_class": "schema_validation_failed",
+                "failure_fingerprint": "schema_validation_failed",
+                "recovery": None,
+                "recovery_packet": None,
+                "next_handoff": None,
+                "loop_summary": "schema_validation_failed",
+            }
 
     ok = bool(report.get("ok", False))
     loop_summaries_raw = state.get("loop_summaries", [])

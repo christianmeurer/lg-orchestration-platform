@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,6 +11,32 @@ from typing import Any, Callable
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
+
+
+def pass_at_k(n: int, c: int, k: int) -> float:
+    """Unbiased pass@k estimator.
+
+    Args:
+        n: Total number of samples drawn.
+        c: Number of correct samples.
+        k: Target k value.
+
+    Returns:
+        Probability that at least one of k samples is correct.
+
+    Raises:
+        ValueError: When k > n.
+    """
+    if k > n:
+        raise ValueError(f"k ({k}) must not exceed n ({n})")
+    if c == 0:
+        return 0.0
+    if c >= n:
+        return 1.0
+    denom = math.comb(n, k)
+    if denom == 0:
+        return 0.0
+    return 1.0 - math.comb(n - c, k) / denom
 
 
 def _ensure_py_src_on_path() -> None:
@@ -42,10 +69,32 @@ class EvalTask:
     expected_approval_history_present: bool | None = None
 
 
-def load_tasks(tasks_dir: Path) -> list[EvalTask]:
+def load_tasks(
+    tasks_dir: Path,
+    task_filter: list[str] | None = None,
+) -> list[EvalTask]:
+    """Load eval tasks from *tasks_dir*.
+
+    Args:
+        tasks_dir: Directory containing task JSON files.
+        task_filter: Optional list of task-slug strings (file stems, with
+            underscores normalised to hyphens).  When provided only files
+            whose normalised stem appears in the list are loaded.
+    """
     tasks: list[EvalTask] = []
+
+    def _normalise(stem: str) -> str:
+        return stem.replace("_", "-").lower()
+
+    normalised_filter = {_normalise(f) for f in task_filter} if task_filter else None
+
     for path in sorted(tasks_dir.glob("*.json")):
+        if normalised_filter is not None and _normalise(path.stem) not in normalised_filter:
+            continue
         data = json.loads(path.read_text(encoding="utf-8"))
+        # Multi-task format: top-level "tasks" array (no top-level id/request).
+        if "tasks" in data and isinstance(data["tasks"], list) and "id" not in data:
+            continue
         expected_pending_approval_raw = data.get("expected_pending_approval")
         expected_checkpoint_present_raw = data.get("expected_checkpoint_present")
         expected_approval_history_present_raw = data.get("expected_approval_history_present")
@@ -87,7 +136,13 @@ def load_tasks(tasks_dir: Path) -> list[EvalTask]:
     return tasks
 
 
-def run_task(task: EvalTask, *, repo_root: Path) -> dict[str, Any]:
+def run_task(
+    task: EvalTask,
+    *,
+    repo_root: Path,
+    runner_enabled: bool = False,
+    temperature: float = 0.0,
+) -> dict[str, Any]:
     _ensure_py_src_on_path()
     from lg_orch.graph import build_graph
 
@@ -97,8 +152,9 @@ def run_task(task: EvalTask, *, repo_root: Path) -> dict[str, Any]:
             "request": task.request,
             "_repo_root": str(repo_root),
             "_runner_base_url": "http://127.0.0.1:8088",
-            "_runner_enabled": False,
+            "_runner_enabled": runner_enabled,
             "_budget_max_loops": task.budget_max_loops,
+            "_temperature": temperature,
             "_config_policy": {
                 "network_default": "deny",
                 "require_approval_for_mutations": True,
@@ -264,8 +320,15 @@ def evaluate_tasks(
     *,
     repo_root: Path,
     evaluator: Callable[[EvalTask], dict[str, Any]] | None = None,
+    runner_enabled: bool = False,
+    temperature: float = 0.0,
 ) -> dict[str, Any]:
-    run = evaluator if evaluator is not None else (lambda task: run_task(task, repo_root=repo_root))
+    if evaluator is not None:
+        run = evaluator
+    else:
+        def run(task: EvalTask) -> dict[str, Any]:
+            return run_task(task, repo_root=repo_root, runner_enabled=runner_enabled, temperature=temperature)
+
     results = [score_task(task, run(task)) for task in tasks]
 
     total = len(results)
@@ -387,24 +450,129 @@ def _render_text_report(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _render_pass_at_k_table(rows: list[dict[str, Any]], k: int) -> str:
+    """Render a structured pass@k summary table."""
+    col_task = max(len(str(r["task"])) for r in rows)
+    col_task = max(col_task, len("AGGREGATE"), len("task"))
+    header = f"{'task':<{col_task}} | {'runs':>4} | {'correct':>7} | {'pass@k':>7}"
+    sep = "-" * len(header)
+    lines = [header, sep]
+    for row in rows:
+        lines.append(
+            f"{str(row['task']):<{col_task}} | {int(row['runs']):>4} | "
+            f"{int(row['correct']):>7} | {float(row['pass_at_k']):>7.3f}"
+        )
+    if len(rows) > 1:
+        total_runs = sum(int(r["runs"]) for r in rows)
+        total_correct = sum(int(r["correct"]) for r in rows)
+        agg_pak = pass_at_k(total_runs, total_correct, min(k, total_runs))
+        lines.append(sep)
+        lines.append(
+            f"{'AGGREGATE':<{col_task}} | {total_runs:>4} | "
+            f"{total_correct:>7} | {agg_pak:>7.3f}"
+        )
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="eval-run")
     parser.add_argument("--tasks-dir", default=str(Path(__file__).parent / "tasks"))
     parser.add_argument("--format", choices=["text", "json"], default="text")
+    parser.add_argument(
+        "--tasks",
+        nargs="*",
+        metavar="TASK_SLUG",
+        help="Whitelist of task slugs (file stems) to run. Omit to run all.",
+    )
+    parser.add_argument(
+        "--pass-at-k",
+        dest="pass_at_k",
+        type=int,
+        default=1,
+        metavar="K",
+        help="Run each task K times and compute unbiased pass@k score.",
+    )
+    parser.add_argument(
+        "--runner-enabled",
+        dest="runner_enabled",
+        action="store_true",
+        default=False,
+        help="Override _runner_enabled: false in task definitions to true.",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        metavar="FLOAT",
+        help="Sampling temperature passed to inference. Defaults to 0.8 when --pass-at-k > 1.",
+    )
     args = parser.parse_args(argv)
 
-    tasks = load_tasks(Path(str(args.tasks_dir)))
+    task_filter: list[str] | None = args.tasks if args.tasks else None
+    tasks = load_tasks(Path(str(args.tasks_dir)), task_filter=task_filter)
     if not tasks:
         raise SystemExit("no tasks")
     for task in tasks:
         if not task.id or not task.request or not task.expected_intent:
             raise SystemExit(f"invalid task: {task}")
 
-    report = evaluate_tasks(tasks, repo_root=_repo_root())
-    if str(args.format) == "json":
-        print(json.dumps(report, ensure_ascii=False, indent=2))
+    k: int = int(args.pass_at_k)
+    runner_enabled: bool = bool(args.runner_enabled)
+
+    # Auto-set temperature when pass@k > 1 and user did not explicitly set it.
+    if args.temperature is not None:
+        temperature: float = float(args.temperature)
+    elif k > 1:
+        temperature = 0.8
     else:
-        print(_render_text_report(report))
+        temperature = 0.0
+
+    if k <= 1:
+        # Standard single-run path — preserves all existing behaviour.
+        report = evaluate_tasks(
+            tasks,
+            repo_root=_repo_root(),
+            runner_enabled=runner_enabled,
+            temperature=temperature,
+        )
+        if str(args.format) == "json":
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print(_render_text_report(report))
+        return 0
+
+    # pass@k multi-run path.
+    pak_rows: list[dict[str, Any]] = []
+    all_reports: list[dict[str, Any]] = []
+
+    for task in tasks:
+        run_results: list[dict[str, Any]] = []
+        for _ in range(k):
+            output = run_task(
+                task,
+                repo_root=_repo_root(),
+                runner_enabled=runner_enabled,
+                temperature=temperature,
+            )
+            run_results.append(score_task(task, output))
+
+        n_correct = sum(1 for r in run_results if bool(r.get("passed", False)))
+        pak_score = pass_at_k(k, n_correct, k)
+        pak_rows.append(
+            {
+                "task": task.id,
+                "runs": k,
+                "correct": n_correct,
+                "pass_at_k": pak_score,
+            }
+        )
+        all_reports.extend(run_results)
+
+    if str(args.format) == "json":
+        print(json.dumps({"pass_at_k_rows": pak_rows, "results": all_reports}, ensure_ascii=False, indent=2))
+    else:
+        print(_render_pass_at_k_table(pak_rows, k))
+
     return 0
 
 

@@ -3,8 +3,10 @@ from __future__ import annotations
 import os
 import re as _re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from lg_orch.audit import AuditConfig
 
 _SHA256_RE = _re.compile(r'^[0-9a-f]{64}$')
 _NAMESPACE_RE = _re.compile(r'^[A-Za-z0-9_-]{1,64}$')
@@ -148,6 +150,8 @@ class RemoteAPIConfig:
     rate_limit_rps: int = 0
     procedure_cache_path: str | None = None
     default_namespace: str = ""
+    jwt_secret: str | None = None  # reads JWT_SECRET env
+    jwks_url: str | None = None    # reads JWKS_URL env
 
 
 @dataclass(frozen=True)
@@ -156,6 +160,10 @@ class Checkpoint:
     db_path: str
     namespace: str
     thread_prefix: str
+    backend: str = "sqlite"
+    redis_url: str = "redis://localhost:6379/0"
+    postgres_dsn: str = ""
+    redis_ttl_seconds: int = 86400
 
 
 @dataclass(frozen=True)
@@ -205,6 +213,18 @@ class VericodingConfig:
 
 
 @dataclass(frozen=True)
+class SlaEntry:
+    model_id: str
+    threshold_p95_s: float
+    fallback_model_id: str
+
+
+@dataclass(frozen=True)
+class SlaConfig:
+    entries: list[SlaEntry] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class AppConfig:
     profile: str
     models: Models
@@ -216,6 +236,8 @@ class AppConfig:
     remote_api: RemoteAPIConfig
     checkpoint: Checkpoint
     vericoding: VericodingConfig
+    audit: AuditConfig = field(default_factory=AuditConfig)
+    sla: SlaConfig = field(default_factory=SlaConfig)
 
 
 def _parse_float(value: object, *, default: float) -> float:
@@ -416,6 +438,8 @@ def load_config(*, repo_root: Path) -> AppConfig:
     remote_api_raw = raw.get("remote_api", {})
     checkpoint_raw = raw.get("checkpoint", {})
     vericoding_raw = raw.get("vericoding", {})
+    audit_raw = raw.get("audit", {})
+    sla_raw = raw.get("sla", {})
     if not isinstance(models_raw, dict):
         raise ConfigError("missing/invalid models")
     if not isinstance(budgets_raw, dict):
@@ -434,6 +458,8 @@ def load_config(*, repo_root: Path) -> AppConfig:
         raise ConfigError("missing/invalid checkpoint")
     if not isinstance(vericoding_raw, dict):
         raise ConfigError("missing/invalid vericoding")
+    if not isinstance(audit_raw, dict):
+        raise ConfigError("missing/invalid audit")
 
     budgets = Budgets(
         max_loops=_require_int(budgets_raw, "max_loops"),
@@ -654,6 +680,26 @@ def load_config(*, repo_root: Path) -> AppConfig:
             "remote_api.default_namespace must match [A-Za-z0-9_-]{1,64} or be empty"
         )
 
+    jwt_secret_raw = remote_api_raw.get("jwt_secret")
+    jwt_secret: str | None
+    if jwt_secret_raw is None:
+        env_js = os.environ.get("JWT_SECRET")
+        jwt_secret = env_js.strip() or None if isinstance(env_js, str) else None
+    elif isinstance(jwt_secret_raw, str):
+        jwt_secret = jwt_secret_raw.strip() or None
+    else:
+        raise ConfigError("missing/invalid remote_api.jwt_secret")
+
+    jwks_url_raw = remote_api_raw.get("jwks_url")
+    jwks_url: str | None
+    if jwks_url_raw is None:
+        env_ju = os.environ.get("JWKS_URL")
+        jwks_url = env_ju.strip() or None if isinstance(env_ju, str) else None
+    elif isinstance(jwks_url_raw, str):
+        jwks_url = jwks_url_raw.strip() or None
+    else:
+        raise ConfigError("missing/invalid remote_api.jwks_url")
+
     remote_api = RemoteAPIConfig(
         auth_mode=auth_mode,
         bearer_token=bearer_token,
@@ -676,6 +722,8 @@ def load_config(*, repo_root: Path) -> AppConfig:
         rate_limit_rps=rate_limit_rps,
         procedure_cache_path=procedure_cache_path,
         default_namespace=default_namespace,
+        jwt_secret=jwt_secret,
+        jwks_url=jwks_url,
     )
 
     checkpoint_enabled = checkpoint_raw.get("enabled", True)
@@ -697,17 +745,116 @@ def load_config(*, repo_root: Path) -> AppConfig:
     ):
         raise ConfigError("missing/invalid checkpoint.thread_prefix")
 
+    checkpoint_backend_raw = checkpoint_raw.get("backend", "sqlite")
+    if not isinstance(checkpoint_backend_raw, str):
+        raise ConfigError("missing/invalid checkpoint.backend")
+    checkpoint_backend = checkpoint_backend_raw.strip().lower() or "sqlite"
+    if checkpoint_backend not in {"sqlite", "redis", "postgres"}:
+        raise ConfigError("checkpoint.backend must be one of: sqlite, redis, postgres")
+
+    checkpoint_redis_url_raw = checkpoint_raw.get("redis_url", "redis://localhost:6379/0")
+    if not isinstance(checkpoint_redis_url_raw, str):
+        raise ConfigError("missing/invalid checkpoint.redis_url")
+    checkpoint_redis_url = checkpoint_redis_url_raw.strip() or "redis://localhost:6379/0"
+
+    checkpoint_postgres_dsn_raw = checkpoint_raw.get("postgres_dsn", "")
+    if not isinstance(checkpoint_postgres_dsn_raw, str):
+        raise ConfigError("missing/invalid checkpoint.postgres_dsn")
+    checkpoint_postgres_dsn = checkpoint_postgres_dsn_raw.strip()
+
+    checkpoint_redis_ttl_raw = checkpoint_raw.get("redis_ttl_seconds", 86400)
+    if isinstance(checkpoint_redis_ttl_raw, bool) or not isinstance(checkpoint_redis_ttl_raw, int):
+        raise ConfigError("missing/invalid checkpoint.redis_ttl_seconds")
+    if checkpoint_redis_ttl_raw < 1:
+        raise ConfigError("checkpoint.redis_ttl_seconds must be >= 1")
+
     checkpoint = Checkpoint(
         enabled=checkpoint_enabled,
         db_path=checkpoint_db_path_raw.strip(),
         namespace=checkpoint_namespace_raw.strip(),
         thread_prefix=checkpoint_thread_prefix_raw.strip(),
+        backend=checkpoint_backend,
+        redis_url=checkpoint_redis_url,
+        postgres_dsn=checkpoint_postgres_dsn,
+        redis_ttl_seconds=checkpoint_redis_ttl_raw,
     )
 
     vericoding = VericodingConfig(
         enabled=_get_bool(vericoding_raw, "enabled", default=False),
         extensions=_optional_str_tuple(vericoding_raw, "extensions") or (".rs",),
     )
+
+    audit_log_path_raw = audit_raw.get("log_path", "audit.jsonl")
+    if not isinstance(audit_log_path_raw, str):
+        raise ConfigError("missing/invalid audit.log_path")
+    audit_log_path = audit_log_path_raw.strip() or "audit.jsonl"
+
+    audit_sink_type_raw = audit_raw.get("sink_type")
+    audit_sink_type: str | None
+    if audit_sink_type_raw is None:
+        audit_sink_type = None
+    elif isinstance(audit_sink_type_raw, str):
+        v = audit_sink_type_raw.strip().lower()
+        if v and v not in {"s3", "gcs"}:
+            raise ConfigError("audit.sink_type must be one of: s3, gcs or absent")
+        audit_sink_type = v or None
+    else:
+        raise ConfigError("missing/invalid audit.sink_type")
+
+    def _optional_str(tbl: dict[str, object], key: str, *, default: str = "") -> str | None:
+        raw = tbl.get(key)
+        if raw is None:
+            return None
+        if not isinstance(raw, str):
+            raise ConfigError(f"missing/invalid audit.{key}")
+        return raw.strip() or None
+
+    s3_bucket = _optional_str(audit_raw, "s3_bucket")
+    s3_prefix_raw = audit_raw.get("s3_prefix", "audit")
+    s3_prefix = s3_prefix_raw.strip() if isinstance(s3_prefix_raw, str) else "audit"
+    s3_region_raw = audit_raw.get("s3_region", "us-east-1")
+    s3_region = s3_region_raw.strip() if isinstance(s3_region_raw, str) else "us-east-1"
+    gcs_bucket = _optional_str(audit_raw, "gcs_bucket")
+    gcs_prefix_raw = audit_raw.get("gcs_prefix", "audit")
+    gcs_prefix = gcs_prefix_raw.strip() if isinstance(gcs_prefix_raw, str) else "audit"
+
+    audit = AuditConfig(
+        log_path=audit_log_path,
+        sink_type=audit_sink_type,
+        s3_bucket=s3_bucket,
+        s3_prefix=s3_prefix or "audit",
+        s3_region=s3_region or "us-east-1",
+        gcs_bucket=gcs_bucket,
+        gcs_prefix=gcs_prefix or "audit",
+    )
+
+    # SLA config
+    sla_entries: list[SlaEntry] = []
+    if isinstance(sla_raw, dict):
+        entries_raw = sla_raw.get("entries", [])
+        if not isinstance(entries_raw, list):
+            raise ConfigError("missing/invalid sla.entries")
+        for idx, entry_raw in enumerate(entries_raw):
+            if not isinstance(entry_raw, dict):
+                raise ConfigError(f"missing/invalid sla.entries[{idx}]")
+            model_id_raw = entry_raw.get("model_id")
+            if not isinstance(model_id_raw, str) or not model_id_raw.strip():
+                raise ConfigError(f"missing/invalid sla.entries[{idx}].model_id")
+            threshold_raw = entry_raw.get("threshold_p95_s")
+            threshold_p95_s = _parse_float(threshold_raw, default=-1.0)
+            if threshold_p95_s < 0.0:
+                raise ConfigError(f"missing/invalid sla.entries[{idx}].threshold_p95_s")
+            fallback_raw = entry_raw.get("fallback_model_id")
+            if not isinstance(fallback_raw, str) or not fallback_raw.strip():
+                raise ConfigError(f"missing/invalid sla.entries[{idx}].fallback_model_id")
+            sla_entries.append(
+                SlaEntry(
+                    model_id=model_id_raw.strip(),
+                    threshold_p95_s=threshold_p95_s,
+                    fallback_model_id=fallback_raw.strip(),
+                )
+            )
+    sla = SlaConfig(entries=sla_entries)
 
     return AppConfig(
         profile=profile,
@@ -720,4 +867,6 @@ def load_config(*, repo_root: Path) -> AppConfig:
         remote_api=remote_api,
         checkpoint=checkpoint,
         vericoding=vericoding,
+        audit=audit,
+        sla=sla,
     )

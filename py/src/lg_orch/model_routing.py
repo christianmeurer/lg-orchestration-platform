@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import collections
+import threading
+from dataclasses import dataclass, field
 from typing import Any
 
 from lg_orch.state import ModelRoutingDecision
@@ -371,4 +374,116 @@ def tool_routing_metadata(state: dict[str, Any], *, stage: str) -> dict[str, Any
         "cache_affinity": str(route.get("cache_affinity", latest.get("cache_affinity", ""))),
         "prefix_segment": str(route.get("prefix_segment", latest.get("prefix_segment", "stable_prefix"))),
     }
+
+
+# ---------------------------------------------------------------------------
+# SLA-aware model routing
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SlaEntry:
+    model_id: str
+    threshold_p95_s: float
+    fallback_model_id: str
+
+
+@dataclass
+class SlaConfig:
+    entries: list[SlaEntry] = field(default_factory=list)
+
+
+class LatencyWindow:
+    """Fixed-size circular buffer of wall-clock latency samples (seconds)."""
+
+    def __init__(self, model_id: str, window_size: int = 200) -> None:
+        self._model_id = model_id
+        self._window_size = window_size
+        self._buf: collections.deque[float] = collections.deque(maxlen=window_size)
+        self._lock = threading.Lock()
+
+    @property
+    def model_id(self) -> str:
+        return self._model_id
+
+    def record(self, latency_s: float) -> None:
+        with self._lock:
+            self._buf.append(latency_s)
+
+    def p95(self) -> float | None:
+        with self._lock:
+            samples = list(self._buf)
+        if len(samples) < 5:
+            return None
+        sorted_samples = sorted(samples)
+        idx = int(len(sorted_samples) * 0.95)
+        idx = min(idx, len(sorted_samples) - 1)
+        return sorted_samples[idx]
+
+    def sample_count(self) -> int:
+        with self._lock:
+            return len(self._buf)
+
+
+class SlaRoutingPolicy:
+    """Routes model calls to fallback when a primary model's p95 exceeds threshold."""
+
+    def __init__(
+        self,
+        thresholds: dict[str, float],
+        fallbacks: dict[str, str],
+        windows: dict[str, LatencyWindow] | None = None,
+    ) -> None:
+        self._thresholds = dict(thresholds)
+        self._fallbacks = dict(fallbacks)
+        self._windows: dict[str, LatencyWindow] = dict(windows) if windows is not None else {}
+        self._windows_lock = threading.Lock()
+
+    def record_latency(self, model_id: str, latency_s: float) -> None:
+        with self._windows_lock:
+            if model_id not in self._windows:
+                self._windows[model_id] = LatencyWindow(model_id)
+            window = self._windows[model_id]
+        window.record(latency_s)
+
+    def select_model(self, requested_model: str) -> str:
+        with self._windows_lock:
+            window = self._windows.get(requested_model)
+        if window is None:
+            return requested_model
+        p95 = window.p95()
+        if p95 is None:
+            return requested_model
+        threshold = self._thresholds.get(requested_model)
+        if threshold is None:
+            return requested_model
+        if p95 > threshold:
+            fallback = self._fallbacks.get(requested_model)
+            if fallback is not None:
+                return fallback
+        return requested_model
+
+    def degraded_models(self) -> list[str]:
+        with self._windows_lock:
+            snapshot = dict(self._windows)
+        result: list[str] = []
+        for model_id, window in snapshot.items():
+            p95 = window.p95()
+            if p95 is None:
+                continue
+            threshold = self._thresholds.get(model_id)
+            if threshold is not None and p95 > threshold:
+                result.append(model_id)
+        return result
+
+
+def build_sla_policy(config: SlaConfig) -> SlaRoutingPolicy | None:
+    if not config.entries:
+        return None
+    thresholds: dict[str, float] = {}
+    fallbacks: dict[str, str] = {}
+    for entry in config.entries:
+        thresholds[entry.model_id] = entry.threshold_p95_s
+        fallbacks[entry.model_id] = entry.fallback_model_id
+    return SlaRoutingPolicy(thresholds=thresholds, fallbacks=fallbacks)
 

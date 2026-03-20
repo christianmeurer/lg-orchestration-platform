@@ -1165,3 +1165,46 @@ def test_get_healing_jobs_returns_list(tmp_path: Path, monkeypatch: pytest.Monke
     payload = json.loads(body.decode("utf-8"))
     assert "jobs" in payload
     assert isinstance(payload["jobs"], list)
+
+
+# ---------------------------------------------------------------------------
+# Wave 10.2 — /metrics endpoint tests
+# ---------------------------------------------------------------------------
+
+
+def test_metrics_endpoint_returns_200(tmp_path: Path) -> None:
+    service = RemoteAPIService(repo_root=tmp_path)
+    status, content_type, body = _api_http_response(
+        service,
+        method="GET",
+        request_path="/metrics",
+        request_body=None,
+    )
+    assert status == 200
+    assert "text/plain" in content_type
+
+
+def test_metrics_endpoint_contains_lula_runs_total(tmp_path: Path) -> None:
+    service = RemoteAPIService(repo_root=tmp_path)
+    _, _, body = _api_http_response(
+        service,
+        method="GET",
+        request_path="/metrics",
+        request_body=None,
+    )
+    assert b"lula_runs_total" in body
+
+
+def test_metrics_endpoint_unauthenticated(tmp_path: Path) -> None:
+    """GET /metrics must be accessible without a bearer token even when auth_mode=bearer."""
+    service = RemoteAPIService(repo_root=tmp_path)
+    status, _, _ = _api_http_response(
+        service,
+        method="GET",
+        request_path="/metrics",
+        request_body=None,
+        auth_mode="bearer",
+        expected_bearer_token="secret",
+        authorization_header=None,
+    )
+    assert status == 200

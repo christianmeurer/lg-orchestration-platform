@@ -12,6 +12,10 @@ spec:
     metadata:
       labels:
         app: lula-orch
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8001"
+        prometheus.io/path: "/metrics"
     spec:
       runtimeClassName: gvisor
       nodeSelector:

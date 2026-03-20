@@ -4,6 +4,8 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use opentelemetry::propagation::TextMapPropagator;
+use opentelemetry_sdk::propagation::TraceContextPropagator;
 
 use crate::config::RunnerConfig;
 
@@ -20,6 +22,42 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
+/// A thin adapter so that `axum::http::HeaderMap` can be used as a
+/// `TextMapPropagator` carrier.
+struct HeaderMapCarrier<'a>(&'a axum::http::HeaderMap);
+
+impl opentelemetry::propagation::Extractor for HeaderMapCarrier<'_> {
+    fn get(&self, key: &str) -> Option<&str> {
+        self.0.get(key).and_then(|v| v.to_str().ok())
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        self.0
+            .keys()
+            .map(|k| k.as_str())
+            .collect()
+    }
+}
+
+/// Extract the W3C `traceparent` header (and optional `tracestate`) from
+/// the incoming request and attach the remote span context to the current
+/// `tracing` span via the OTel layer.
+fn propagate_trace_context(headers: &axum::http::HeaderMap) {
+    let propagator = TraceContextPropagator::new();
+    let parent_ctx = propagator.extract(&HeaderMapCarrier(headers));
+    // Attach the extracted context so the tracing-opentelemetry layer can
+    // pick it up when a new span is created for this request.
+    let _guard = opentelemetry::Context::attach(parent_ctx);
+    // The guard is intentionally dropped here; the actual span creation
+    // happens via tower-http's TraceLayer which runs after this middleware.
+    // We record the trace/span IDs into the current tracing span fields so
+    // they are visible in structured logs.
+    use tracing::Span;
+    if let Some(tp) = headers.get("traceparent").and_then(|v| v.to_str().ok()) {
+        Span::current().record("traceparent", tp);
+    }
+}
+
 pub async fn require_api_key(
     axum::extract::State(cfg): axum::extract::State<RunnerConfig>,
     req: Request,
@@ -31,6 +69,9 @@ pub async fn require_api_key(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("")
         .to_string();
+
+    propagate_trace_context(req.headers());
+
     let Some(expected) = cfg.api_key.as_deref() else {
         return Ok(next.run(req).await);
     };
@@ -102,5 +143,25 @@ mod tests {
     #[test]
     fn test_constant_time_eq_empty() {
         assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn test_propagate_trace_context_no_header() {
+        // Should not panic when no traceparent header is present.
+        let headers = axum::http::HeaderMap::new();
+        propagate_trace_context(&headers);
+    }
+
+    #[test]
+    fn test_propagate_trace_context_valid_header() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "traceparent",
+            "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+                .parse()
+                .unwrap(),
+        );
+        // Should not panic with a well-formed traceparent.
+        propagate_trace_context(&headers);
     }
 }

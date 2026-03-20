@@ -19,6 +19,40 @@ from lg_orch.nodes import (
 from lg_orch.visualize import GraphEdge, graph_mermaid
 
 
+def _make_traced_node(node_fn: Any, node_name: str) -> Any:
+    """Wrap a LangGraph node function with an OTel child span.
+
+    The span is named ``node.<node_name>`` and carries three attributes:
+    ``graph.node``, ``graph.run_id``, and ``graph.lane`` (the ``_lane``
+    field in state, when present).
+    """
+
+    def _traced(state: dict[str, Any]) -> Any:
+        try:
+            from opentelemetry import trace as _otel_trace
+
+            tracer = _otel_trace.get_tracer("lg_orch.graph")
+            run_id = str(state.get("_run_id", ""))
+            lane = str(state.get("_lane", ""))
+            with tracer.start_as_current_span(
+                f"node.{node_name}",
+                attributes={
+                    "graph.node": node_name,
+                    "graph.run_id": run_id,
+                    "graph.lane": lane,
+                },
+            ):
+                return node_fn(state)
+        except Exception:  # noqa: BLE001
+            # OTel must never break graph execution.
+            return node_fn(state)
+
+    # Preserve the original callable's identity for LangGraph introspection.
+    _traced.__name__ = getattr(node_fn, "__name__", node_name)
+    _traced.__qualname__ = getattr(node_fn, "__qualname__", node_name)
+    return _traced
+
+
 def route_after_policy_gate(state: dict[str, Any]) -> str:
     halt_reason = str(state.get("halt_reason", "")).strip()
     if halt_reason in {"max_loops_exhausted", "plan_max_iterations_exhausted"}:
@@ -50,15 +84,15 @@ def route_after_verifier(state: dict[str, Any]) -> str:
 
 def build_graph(*, checkpointer: BaseCheckpointSaver[Any] | None = None) -> Any:
     g: StateGraph = StateGraph(dict)
-    g.add_node("ingest", ingest)
-    g.add_node("policy_gate", policy_gate)
-    g.add_node("context_builder", context_builder)
-    g.add_node("router", router)
-    g.add_node("planner", planner)
-    g.add_node("coder", coder)
-    g.add_node("executor", executor)
-    g.add_node("verifier", verifier)
-    g.add_node("reporter", reporter)
+    g.add_node("ingest", _make_traced_node(ingest, "ingest"))
+    g.add_node("policy_gate", _make_traced_node(policy_gate, "policy_gate"))
+    g.add_node("context_builder", _make_traced_node(context_builder, "context_builder"))
+    g.add_node("router", _make_traced_node(router, "router"))
+    g.add_node("planner", _make_traced_node(planner, "planner"))
+    g.add_node("coder", _make_traced_node(coder, "coder"))
+    g.add_node("executor", _make_traced_node(executor, "executor"))
+    g.add_node("verifier", _make_traced_node(verifier, "verifier"))
+    g.add_node("reporter", _make_traced_node(reporter, "reporter"))
 
     g.set_entry_point("ingest")
     g.add_edge("ingest", "policy_gate")

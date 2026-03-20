@@ -5,7 +5,21 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from opentelemetry import trace as _otel_trace
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
+_W3C_PROPAGATOR = TraceContextTextMapPropagator()
+
+
+def _traceparent_headers() -> dict[str, str]:
+    """Return a ``traceparent`` carrier dict for the active span, or empty dict."""
+    carrier: dict[str, str] = {}
+    try:
+        _W3C_PROPAGATOR.inject(carrier)
+    except Exception:  # noqa: BLE001
+        pass
+    return carrier
 
 
 @dataclass(frozen=True)
@@ -82,7 +96,9 @@ class RunnerClient:
             route_payload = self._route_payload(input)
             if route_payload is not None:
                 payload["route"] = route_payload
-            resp = self._client.post("/v1/tools/execute", json=payload)
+            resp = self._client.post(
+                "/v1/tools/execute", json=payload, headers=_traceparent_headers()
+            )
             resp.raise_for_status()
             return dict(resp.json())
 
@@ -206,7 +222,11 @@ class RunnerClient:
                     request_call["route"] = route_payload
                 calls_payload.append(request_call)
 
-            resp = self._client.post("/v1/tools/batch_execute", json={"calls": calls_payload})
+            resp = self._client.post(
+                "/v1/tools/batch_execute",
+                json={"calls": calls_payload},
+                headers=_traceparent_headers(),
+            )
             resp.raise_for_status()
             data = dict(resp.json())
             results = data.get("results")

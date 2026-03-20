@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+from typing import Any
 
 import structlog
 
@@ -18,6 +19,9 @@ _SENSITIVE_KEYS = {
 }
 
 _BEARER_RE = re.compile(r"\bBearer\s+[^\s]+", re.IGNORECASE)
+
+# Guard so init_telemetry is idempotent across multiple calls (e.g. in tests).
+_TELEMETRY_INITIALIZED = False
 
 
 def _redact_event_dict(event_dict: dict[str, object]) -> dict[str, object]:
@@ -50,6 +54,82 @@ def _level_to_int(level: str) -> int:
             return 20
 
 
+def _otel_trace_context_processor(
+    _logger: object, _method: str, event_dict: dict[str, Any]
+) -> dict[str, Any]:
+    """Inject trace_id and span_id from the active OTel span into every log record."""
+    try:
+        from opentelemetry import trace as otel_trace
+
+        span = otel_trace.get_current_span()
+        ctx = span.get_span_context()
+        if ctx is not None and ctx.is_valid:
+            event_dict["trace_id"] = format(ctx.trace_id, "032x")
+            event_dict["span_id"] = format(ctx.span_id, "016x")
+    except Exception:  # noqa: BLE001
+        pass
+    return event_dict
+
+
+def init_telemetry(
+    service_name: str,
+    otlp_endpoint: str | None = None,
+) -> None:
+    """Initialize OpenTelemetry tracing.
+
+    Creates an OTLP gRPC exporter, a BatchSpanProcessor and registers a
+    global TracerProvider.  Falls back to a NoOpTracerProvider when
+    *otlp_endpoint* is ``None`` or when the exporter fails to initialise.
+
+    The function is idempotent — calling it more than once (e.g. in tests)
+    is safe and will not install a second provider.
+    """
+    global _TELEMETRY_INITIALIZED  # noqa: PLW0603
+    if _TELEMETRY_INITIALIZED:
+        return
+    _TELEMETRY_INITIALIZED = True
+
+    from lg_orch import __version__
+
+    resolved_endpoint = (
+        otlp_endpoint
+        or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+        or "http://localhost:4317"
+    )
+    lula_env = os.environ.get("LULA_ENV", "dev")
+
+    try:
+        from opentelemetry import trace as otel_trace
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+            OTLPSpanExporter,
+        )
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        resource = Resource.create(
+            {
+                "service.name": service_name,
+                "service.version": __version__,
+                "deployment.environment": lula_env,
+            }
+        )
+        provider = TracerProvider(resource=resource)
+        exporter = OTLPSpanExporter(endpoint=resolved_endpoint, insecure=True)
+        provider.add_span_processor(BatchSpanProcessor(exporter))
+        otel_trace.set_tracer_provider(provider)
+    except Exception:  # noqa: BLE001
+        # Fall back gracefully: install a no-op provider so downstream code
+        # can still call opentelemetry.trace.get_tracer() without crashing.
+        try:
+            from opentelemetry import trace as otel_trace
+            from opentelemetry.trace import NoOpTracerProvider
+
+            otel_trace.set_tracer_provider(NoOpTracerProvider())
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def configure_logging() -> None:
     level = os.environ.get("LG_LOG_LEVEL", "INFO").upper()
     level_int = _level_to_int(level)
@@ -62,6 +142,7 @@ def configure_logging() -> None:
     structlog.configure(
         processors=[
             redact_processor,  # type: ignore[list-item]
+            _otel_trace_context_processor,  # type: ignore[list-item]
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.JSONRenderer(),

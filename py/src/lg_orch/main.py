@@ -13,13 +13,13 @@ from urllib.parse import urlsplit
 from langchain_core.runnables.config import RunnableConfig
 
 from lg_orch.checkpointing import (
-    SqliteCheckpointSaver,
+    create_checkpoint_saver,
     resolve_checkpoint_db_path,
     stable_checkpoint_thread_id,
 )
 from lg_orch.config import load_config
 from lg_orch.graph import build_graph, export_mermaid
-from lg_orch.logging import configure_logging, get_logger
+from lg_orch.logging import configure_logging, get_logger, init_telemetry
 from lg_orch.trace import write_run_trace
 from lg_orch.visualize import (
     render_run_header,
@@ -294,6 +294,12 @@ def _serve_trace_http(trace_dir: Path, *, host: str, port: int) -> int:
 
 
 def cli(argv: list[str] | None = None) -> int:
+    import os as _os
+
+    init_telemetry(
+        service_name="lula-orchestrator",
+        otlp_endpoint=_os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"),
+    )
     configure_logging()
     log = get_logger()
     args = _build_parser().parse_args(argv)
@@ -515,7 +521,20 @@ def cli(argv: list[str] | None = None) -> int:
     run_config: dict[str, Any] | None = None
     if cfg.checkpoint.enabled:
         db_path = resolve_checkpoint_db_path(repo_root=repo_root, db_path=cfg.checkpoint.db_path)
-        checkpointer = SqliteCheckpointSaver(db_path=db_path)
+        _backend = cfg.checkpoint.backend
+        if _backend == "redis":
+            checkpointer = create_checkpoint_saver(
+                "redis",
+                redis_url=cfg.checkpoint.redis_url,
+                ttl_seconds=cfg.checkpoint.redis_ttl_seconds,
+            )
+        elif _backend == "postgres":
+            checkpointer = create_checkpoint_saver(
+                "postgres",
+                dsn=cfg.checkpoint.postgres_dsn,
+            )
+        else:
+            checkpointer = create_checkpoint_saver("sqlite", db_path=db_path)
         thread_id = stable_checkpoint_thread_id(
             request=str(args.request),
             thread_prefix=cfg.checkpoint.thread_prefix,

@@ -11,12 +11,14 @@ mod snapshots;
 mod tools;
 
 use axum::{routing::get, routing::post, Json, Router};
+use axum::http::header::CONTENT_TYPE;
+use axum::response::IntoResponse;
 use clap::Parser;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 use tracing::Level;
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use crate::config::RunnerConfig;
 use crate::envelope::{
@@ -38,8 +40,22 @@ struct Args {
     rate_limit_rps: u64,
 }
 
+const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
+
 async fn healthz() -> &'static str {
     "ok"
+}
+
+async fn metrics_handler(
+    axum::extract::Extension(handle): axum::extract::Extension<
+        Option<Arc<metrics_exporter_prometheus::PrometheusHandle>>,
+    >,
+) -> impl IntoResponse {
+    let body = handle
+        .as_ref()
+        .map(|h| h.render())
+        .unwrap_or_default();
+    ([(CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)], body)
 }
 
 async fn capabilities() -> Json<serde_json::Value> {
@@ -105,17 +121,107 @@ async fn batch_execute_tool(
     Ok(Json(ToolBatchExecuteResponse { results }))
 }
 
+/// Attempt to initialise an OTLP tracer provider.
+///
+/// Returns `Some(tracer)` on success or `None` if the exporter fails to
+/// build (e.g. the endpoint is unreachable at startup).  The caller logs a
+/// warning in the `None` case and continues without OTLP export.
+fn try_init_otlp(
+    endpoint: &str,
+    service_name: &str,
+) -> Option<opentelemetry_sdk::trace::Tracer> {
+    use opentelemetry::KeyValue;
+    use opentelemetry_otlp::WithExportConfig;
+    use opentelemetry_sdk::runtime;
+
+    let resource = opentelemetry_sdk::Resource::new(vec![
+        KeyValue::new(
+            opentelemetry_semantic_conventions::resource::SERVICE_NAME,
+            service_name.to_string(),
+        ),
+    ]);
+
+    let result = opentelemetry_otlp::new_pipeline()
+        .tracing()
+        .with_exporter(
+            opentelemetry_otlp::new_exporter()
+                .tonic()
+                .with_endpoint(endpoint),
+        )
+        .with_trace_config(opentelemetry_sdk::trace::Config::default().with_resource(resource))
+        .install_batch(runtime::Tokio);
+
+    match result {
+        Ok(tracer) => Some(tracer),
+        Err(e) => {
+            // Cannot use tracing here since the subscriber isn't initialised yet.
+            eprintln!(
+                "{{\"level\":\"warn\",\"msg\":\"otlp_init_failed\",\"error\":\"{e}\",\"endpoint\":\"{endpoint}\"}}"
+            );
+            None
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    fmt()
-        .with_env_filter(
-            EnvFilter::builder()
-                .with_default_directive(Level::INFO.into())
-                .from_env_lossy(),
-        )
-        .json()
+
+    // ------------------------------------------------------------------
+    // Prometheus metrics recorder
+    // ------------------------------------------------------------------
+    let prometheus_handle: Option<Arc<metrics_exporter_prometheus::PrometheusHandle>> =
+        match metrics_exporter_prometheus::PrometheusBuilder::new().install_recorder() {
+            Ok(h) => {
+                metrics::describe_counter!(
+                    "runner_tool_calls_total",
+                    "Total tool calls dispatched by the runner"
+                );
+                metrics::describe_histogram!(
+                    "runner_tool_duration_seconds",
+                    "Wall-clock duration of individual tool calls in seconds"
+                );
+                metrics::describe_counter!(
+                    "runner_sandbox_tier",
+                    "Sandbox backend selections by tier"
+                );
+                Some(Arc::new(h))
+            }
+            Err(e) => {
+                eprintln!(
+                    "{{\"level\":\"warn\",\"msg\":\"prometheus_recorder_init_failed\",\"error\":\"{e}\"}}"
+                );
+                None
+            }
+        };
+
+    // ------------------------------------------------------------------
+    // Subscriber: JSON formatter + optional OTel layer
+    // ------------------------------------------------------------------
+    let otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .unwrap_or_else(|_| "http://localhost:4317".to_string());
+
+    let maybe_tracer = try_init_otlp(&otlp_endpoint, "lula-runner");
+
+    let filter = EnvFilter::builder()
+        .with_default_directive(Level::INFO.into())
+        .from_env_lossy();
+
+    let otel_layer = maybe_tracer.map(|tracer| {
+        tracing_opentelemetry::layer().with_tracer(tracer)
+    });
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt::layer().json())
+        .with(otel_layer)
         .init();
+
+    // Install W3C TraceContext propagator globally so that `traceparent`
+    // headers injected by the Python orchestrator are extracted correctly.
+    opentelemetry::global::set_text_map_propagator(
+        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+    );
 
     let api_key = if args.api_key.trim().is_empty() {
         None
@@ -146,7 +252,10 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/v1/capabilities", get(capabilities))
+        // /metrics is outside the authenticated layer — publicly accessible for K8s scraping
+        .route("/metrics", get(metrics_handler))
         .merge(protected)
+        .layer(axum::Extension(prometheus_handle))
         .layer(TraceLayer::new_for_http())
         .with_state(cfg);
 
@@ -154,5 +263,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(%addr, rate_limit_rps = args.rate_limit_rps, "runner_listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
+
+    opentelemetry::global::shutdown_tracer_provider();
     Ok(())
 }

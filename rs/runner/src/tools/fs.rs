@@ -87,16 +87,33 @@ pub async fn read_file(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope,
     let inp: ReadFileIn =
         serde_json::from_value(input).map_err(|e| ApiError::BadRequest(e.to_string()))?;
     if !cfg.can_read(&inp.path) {
+        metrics::counter!("runner_tool_calls_total", "tool" => "read_file", "status" => "error")
+            .increment(1);
         return Err(ApiError::Forbidden("read denied".to_string()));
     }
     let full = resolve_under_root(cfg, &inp.path)?;
-    let content = read_file_content(&full).await?;
-    Ok(ToolEnvelope::ok(
-        "read_file",
-        content,
-        json!({"path": inp.path}),
-        0,
-    ))
+    let result = read_file_content(&full).await;
+    match result {
+        Ok(content) => {
+            metrics::counter!("runner_tool_calls_total", "tool" => "read_file", "status" => "ok")
+                .increment(1);
+            Ok(ToolEnvelope::ok(
+                "read_file",
+                content,
+                json!({"path": inp.path}),
+                0,
+            ))
+        }
+        Err(e) => {
+            metrics::counter!(
+                "runner_tool_calls_total",
+                "tool" => "read_file",
+                "status" => "error"
+            )
+            .increment(1);
+            Err(e)
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -396,6 +413,10 @@ struct UndoIn {
     snapshot_id: Option<String>,
 }
 
+#[tracing::instrument(
+    skip_all,
+    fields(tool = "apply_patch", challenge_id = tracing::field::Empty)
+)]
 pub async fn apply_patch(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiError> {
     let inp: ApplyPatchIn =
         serde_json::from_value(input).map_err(|e| ApiError::BadRequest(e.to_string()))?;
@@ -403,7 +424,10 @@ pub async fn apply_patch(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelop
         return Err(ApiError::BadRequest("no changes".to_string()));
     }
 
-    let approval = require_approval(inp.approval, "apply_patch", "approval:apply_patch")?;
+    if let Some(ref a) = inp.approval {
+        tracing::Span::current().record("challenge_id", &*a.challenge_id);
+    }
+    let approval = require_approval(inp.approval, "apply_patch", "approval:apply_patch", cfg.approval_token_ttl_secs)?;
     let snapshot = snapshot_for_operation(cfg, "apply_patch").await?;
 
     // Collect temp paths so they can be cleaned up if an error occurs mid-batch.
@@ -419,6 +443,8 @@ pub async fn apply_patch(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelop
 
     let diffs = result?;
 
+    metrics::counter!("runner_tool_calls_total", "tool" => "apply_patch", "status" => "ok")
+        .increment(1);
     Ok(
         ToolEnvelope::ok("apply_patch", "ok", json!({"changes": diffs}), 0)
             .with_approval(approval)
@@ -789,13 +815,18 @@ mod tests {
 
     // --- apply_patch tests ---
 
+    fn signed_patch_token() -> String {
+        crate::approval::generate_token("approval:apply_patch")
+    }
+
     #[tokio::test]
     async fn test_apply_patch_add() {
         let (td, cfg) = test_cfg();
         init_git_repo(td.path());
+        let token = signed_patch_token();
         let input = json!({
             "changes": [{"path": "py/new.txt", "op": "add", "content": "hello"}],
-            "approval": {"challenge_id": "approval:apply_patch", "token": "approve:approval:apply_patch"}
+            "approval": {"challenge_id": "approval:apply_patch", "token": token}
         });
         let result = apply_patch(&cfg, input).await;
         assert!(result.is_ok());
@@ -809,9 +840,10 @@ mod tests {
         let (td, cfg) = test_cfg();
         init_git_repo(td.path());
         stdfs::write(td.path().join("py/exists.txt"), "old").unwrap();
+        let token = signed_patch_token();
         let input = json!({
             "changes": [{"path": "py/exists.txt", "op": "add", "content": "new"}],
-            "approval": {"challenge_id": "approval:apply_patch", "token": "approve:approval:apply_patch"}
+            "approval": {"challenge_id": "approval:apply_patch", "token": token}
         });
         let result = apply_patch(&cfg, input).await;
         assert!(result.is_err());
@@ -822,9 +854,10 @@ mod tests {
         let (td, cfg) = test_cfg();
         init_git_repo(td.path());
         stdfs::write(td.path().join("py/update.txt"), "old content").unwrap();
+        let token = signed_patch_token();
         let input = json!({
             "changes": [{"path": "py/update.txt", "op": "update", "content": "new content"}],
-            "approval": {"challenge_id": "approval:apply_patch", "token": "approve:approval:apply_patch"}
+            "approval": {"challenge_id": "approval:apply_patch", "token": token}
         });
         let result = apply_patch(&cfg, input).await;
         assert!(result.is_ok());
@@ -836,9 +869,10 @@ mod tests {
     async fn test_apply_patch_update_missing_fails() {
         let (td, cfg) = test_cfg();
         init_git_repo(td.path());
+        let token = signed_patch_token();
         let input = json!({
             "changes": [{"path": "py/missing.txt", "op": "update", "content": "x"}],
-            "approval": {"challenge_id": "approval:apply_patch", "token": "approve:approval:apply_patch"}
+            "approval": {"challenge_id": "approval:apply_patch", "token": token}
         });
         let result = apply_patch(&cfg, input).await;
         assert!(result.is_err());
@@ -849,9 +883,10 @@ mod tests {
         let (td, cfg) = test_cfg();
         init_git_repo(td.path());
         stdfs::write(td.path().join("py/delete_me.txt"), "bye").unwrap();
+        let token = signed_patch_token();
         let input = json!({
             "changes": [{"path": "py/delete_me.txt", "op": "delete"}],
-            "approval": {"challenge_id": "approval:apply_patch", "token": "approve:approval:apply_patch"}
+            "approval": {"challenge_id": "approval:apply_patch", "token": token}
         });
         let result = apply_patch(&cfg, input).await;
         assert!(result.is_ok());
@@ -862,9 +897,10 @@ mod tests {
     async fn test_apply_patch_empty_changes_fails() {
         let (td, cfg) = test_cfg();
         init_git_repo(td.path());
+        let token = signed_patch_token();
         let input = json!({
             "changes": [],
-            "approval": {"challenge_id": "approval:apply_patch", "token": "approve:approval:apply_patch"}
+            "approval": {"challenge_id": "approval:apply_patch", "token": token}
         });
         let result = apply_patch(&cfg, input).await;
         assert!(result.is_err());
@@ -887,9 +923,10 @@ mod tests {
         init_git_repo(td.path());
         let new_file = td.path().join("py/atomic_new.txt");
         let tmp_file = td.path().join("py/atomic_new.tmp_lula_add");
+        let token = signed_patch_token();
         let input = json!({
             "changes": [{"path": "py/atomic_new.txt", "op": "add", "content": "atomic content"}],
-            "approval": {"challenge_id": "approval:apply_patch", "token": "approve:approval:apply_patch"}
+            "approval": {"challenge_id": "approval:apply_patch", "token": token}
         });
         let result = apply_patch(&cfg, input).await;
         assert!(result.is_ok());

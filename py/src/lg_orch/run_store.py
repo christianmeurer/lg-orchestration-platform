@@ -240,12 +240,28 @@ class RunStore:
             self._conn.execute("INSERT INTO semantic_memories_fts(semantic_memories_fts) VALUES('rebuild')")
             self._conn.commit()
 
-    def search_runs(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
+    def search_runs(
+        self,
+        query: str,
+        limit: int = 50,
+        namespace: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Search runs using FTS5 full-text search (BM25 ranking).
 
         Falls back to a LIKE scan if FTS5 is unavailable.
         Invalid FTS5 syntax is caught and an empty list is returned.
+
+        Parameters
+        ----------
+        query:
+            Full-text search query string.
+        limit:
+            Maximum number of results to return.
+        namespace:
+            Optional namespace override. Defaults to the store's configured
+            namespace when ``None``.
         """
+        ns = namespace if namespace is not None else self._namespace
         query_text = query.strip()
         if not query_text:
             return []
@@ -258,7 +274,7 @@ class RunStore:
                         "JOIN runs r ON r.rowid = runs_fts.rowid "
                         "WHERE runs_fts MATCH ? AND r.namespace = ? "
                         "ORDER BY rank LIMIT ?",
-                        (query_text, self._namespace, limit),
+                        (query_text, ns, limit),
                     )
                     return [dict(row) for row in cursor.fetchall()]
             except sqlite3.OperationalError as exc:
@@ -275,7 +291,7 @@ class RunStore:
                 "AND (run_id LIKE ? OR request LIKE ? OR status LIKE ? "
                 "OR pending_approval_summary LIKE ?) "
                 "ORDER BY created_at DESC LIMIT ?",
-                (self._namespace, like, like, like, like, limit),
+                (ns, like, like, like, like, limit),
             )
             return [dict(row) for row in cursor.fetchall()]
 
@@ -292,19 +308,39 @@ class RunStore:
             self._conn.execute(sql, list(data.values()))
             self._conn.commit()
 
-    def list_runs(self) -> list[dict[str, Any]]:
+    def list_runs(self, namespace: str | None = None) -> list[dict[str, Any]]:
+        """Return all runs for a namespace, ordered by created_at DESC.
+
+        Parameters
+        ----------
+        namespace:
+            Optional namespace override. Defaults to the store's configured
+            namespace when ``None``.
+        """
+        ns = namespace if namespace is not None else self._namespace
         with self._lock:
             cursor = self._conn.execute(
                 "SELECT * FROM runs WHERE namespace = ? ORDER BY created_at DESC",
-                (self._namespace,),
+                (ns,),
             )
             return [dict(row) for row in cursor.fetchall()]
 
-    def get_run(self, run_id: str) -> dict[str, Any] | None:
+    def get_run(self, run_id: str, namespace: str | None = None) -> dict[str, Any] | None:
+        """Fetch a single run by ID within a namespace.
+
+        Parameters
+        ----------
+        run_id:
+            The run identifier to look up.
+        namespace:
+            Optional namespace override. Defaults to the store's configured
+            namespace when ``None``.
+        """
+        ns = namespace if namespace is not None else self._namespace
         with self._lock:
             cursor = self._conn.execute(
                 "SELECT * FROM runs WHERE run_id = ? AND namespace = ?",
-                (run_id, self._namespace),
+                (run_id, ns),
             )
             row = cursor.fetchone()
             return dict(row) if row is not None else None

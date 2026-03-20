@@ -94,7 +94,7 @@ def test_main_json_output_uses_scored_report(tmp_path: Path, capsys: object) -> 
     )
 
     original_run_task = module.run_task
-    module.run_task = lambda task, repo_root: {
+    module.run_task = lambda task, repo_root, **kwargs: {
         "intent": "analysis",
         "halt_reason": "",
         "final": "done",

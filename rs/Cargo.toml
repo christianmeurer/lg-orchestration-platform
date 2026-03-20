@@ -24,9 +24,19 @@ tree-sitter-rust = "0.24"
 tokio = { version = "1.36", features = ["macros", "rt-multi-thread", "process", "time", "fs", "io-util"] }
 tower-http = { version = "0.5", features = ["trace"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "registry"] }
+tracing-opentelemetry = "0.24"
+opentelemetry = { version = "0.23", features = ["trace"] }
+opentelemetry_sdk = { version = "0.23", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.16", features = ["tonic", "grpc-tonic"] }
+opentelemetry-semantic-conventions = "0.15"
 uuid = { version = "1.8", features = ["v4", "fast-rng"] }
 walkdir = "2.5"
 regex = "1.10"
 sha2 = "0.10"
+hmac = { version = "0.12", features = ["std"] }
+hex = "0.4"
+rand = "0.8"
 pdf-extract = "0.7"
+metrics = "0.22"
+metrics-exporter-prometheus = "0.13"

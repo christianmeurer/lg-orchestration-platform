@@ -7,10 +7,24 @@ import threading
 import time
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
+if TYPE_CHECKING:
+    from lg_orch.model_routing import SlaRoutingPolicy
+
+# ---------------------------------------------------------------------------
+# Module-level SLA policy (injected at startup)
+# ---------------------------------------------------------------------------
+
+_sla_policy: SlaRoutingPolicy | None = None
+
+
+def set_sla_policy(policy: SlaRoutingPolicy | None) -> None:
+    global _sla_policy
+    _sla_policy = policy
 
 # ---------------------------------------------------------------------------
 # Circuit-breaker
@@ -102,6 +116,25 @@ def _get_breaker(base_url: str) -> _CircuitBreaker:
 
 
 # ---------------------------------------------------------------------------
+# Function-calling dataclasses
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ToolDefinition:
+    name: str
+    description: str
+    parameters: dict[str, Any]  # JSON Schema object
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    id: str
+    name: str
+    arguments: dict[str, Any]  # parsed from JSON string
+
+
+# ---------------------------------------------------------------------------
 # Response dataclass
 # ---------------------------------------------------------------------------
 
@@ -115,6 +148,7 @@ class InferenceResponse:
     usage: dict[str, Any] | None = None
     cache_metadata: dict[str, Any] | None = None
     headers: dict[str, str] | None = None
+    tool_calls: list[ToolCall] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +183,12 @@ class InferenceClient:
         user_prompt: str,
         temperature: float,
         max_tokens: int = 1200,
+        tools: list[ToolDefinition] | None = None,
+        tool_choice: str | None = None,
     ) -> InferenceResponse:
+        policy = _sla_policy
+        effective_model = policy.select_model(model) if policy is not None else model
+
         breaker = _get_breaker(self.base_url)
         if not breaker.allow_request():
             raise RuntimeError("circuit_open")
@@ -162,11 +201,13 @@ class InferenceClient:
         )
         def _do_transport() -> InferenceResponse:
             return self._execute_request(
-                model=model,
+                model=effective_model,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                tools=tools,
+                tool_choice=tool_choice,
             )
 
         # Outer retry for HTTP 429/5xx (up to 4 attempts).
@@ -175,6 +216,8 @@ class InferenceClient:
             try:
                 result = _do_transport()
                 breaker.record_success()
+                if policy is not None:
+                    policy.record_latency(effective_model, result.latency_ms / 1000.0)
                 return result
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
@@ -206,6 +249,8 @@ class InferenceClient:
         user_prompt: str,
         temperature: float,
         max_tokens: int,
+        tools: list[ToolDefinition] | None = None,
+        tool_choice: str | None = None,
     ) -> InferenceResponse:
         if self._client is None:
             raise RuntimeError("client not initialized")
@@ -219,6 +264,21 @@ class InferenceClient:
             "temperature": temperature,
             "max_tokens": max(1, int(max_tokens)),
         }
+        if tools is not None:
+            payload["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters,
+                    },
+                }
+                for t in tools
+            ]
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+
         started = time.perf_counter()
         resp = self._client.post("/chat/completions", json=payload)
         latency_ms = int((time.perf_counter() - started) * 1000)
@@ -236,9 +296,41 @@ class InferenceClient:
         message = first.get("message")
         if not isinstance(message, dict):
             raise RuntimeError("missing message")
+
+        # Parse tool_calls if present
+        parsed_tool_calls: list[ToolCall] = []
+        raw_tool_calls = message.get("tool_calls")
+        if isinstance(raw_tool_calls, list) and raw_tool_calls:
+            for tc in raw_tool_calls:
+                if not isinstance(tc, dict):
+                    continue
+                tc_id = str(tc.get("id", "")).strip()
+                fn = tc.get("function", {})
+                if not isinstance(fn, dict):
+                    continue
+                tc_name = str(fn.get("name", "")).strip()
+                tc_args_raw = fn.get("arguments", "{}")
+                if isinstance(tc_args_raw, str):
+                    try:
+                        tc_args = json.loads(tc_args_raw)
+                    except (json.JSONDecodeError, ValueError):
+                        tc_args = {}
+                elif isinstance(tc_args_raw, dict):
+                    tc_args = tc_args_raw
+                else:
+                    tc_args = {}
+                if tc_name:
+                    parsed_tool_calls.append(ToolCall(id=tc_id, name=tc_name, arguments=tc_args))
+
         content = message.get("content")
-        if not isinstance(content, str) or not content.strip():
-            raise RuntimeError("missing content")
+        if parsed_tool_calls:
+            # tool_calls response — content may be absent or null
+            text = content if isinstance(content, str) else ""
+        else:
+            if not isinstance(content, str) or not content.strip():
+                raise RuntimeError("missing content")
+            text = content
+
         usage_raw = body.get("usage")
         usage = dict(usage_raw) if isinstance(usage_raw, dict) else {}
 
@@ -254,13 +346,14 @@ class InferenceClient:
         provider = str(body.get("provider", "")).strip() or headers.get("x-model-provider", "")
         model_used = str(body.get("model", "")).strip() or model
         return InferenceResponse(
-            text=content,
+            text=text,
             latency_ms=latency_ms,
             provider=provider,
             model=model_used,
             usage=usage,
             cache_metadata=cache_metadata,
             headers=headers,
+            tool_calls=parsed_tool_calls,
         )
 
 
@@ -280,6 +373,9 @@ class InferenceClient:
         have a running event loop (e.g. LangGraph internal thread).  Falls back to
         chat_completion if streaming fails.
         """
+        policy = _sla_policy
+        effective_model = policy.select_model(model) if policy is not None else model
+
         started = time.perf_counter()
         breaker = _get_breaker(self.base_url)
         if not breaker.allow_request():
@@ -288,7 +384,7 @@ class InferenceClient:
         async def _run() -> str:
             tokens: list[str] = []
             async for token in self.chat_completion_stream(
-                model=model,
+                model=effective_model,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 temperature=temperature,
@@ -309,11 +405,13 @@ class InferenceClient:
             raise
 
         latency_ms = int((time.perf_counter() - started) * 1000)
+        if policy is not None:
+            policy.record_latency(effective_model, latency_ms / 1000.0)
         return InferenceResponse(
             text=text,
             latency_ms=latency_ms,
             provider="",
-            model=model,
+            model=effective_model,
             usage=None,
             cache_metadata=None,
             headers=None,
@@ -328,12 +426,15 @@ class InferenceClient:
         temperature: float,
         max_tokens: int = 1200,
     ) -> AsyncGenerator[str, None]:
+        policy = _sla_policy
+        effective_model = policy.select_model(model) if policy is not None else model
+
         breaker = _get_breaker(self.base_url)
         if not breaker.allow_request():
             raise RuntimeError("circuit_open")
 
         payload: dict[str, Any] = {
-            "model": model,
+            "model": effective_model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -368,6 +469,7 @@ class InferenceClient:
                 breaker.record_failure()
                 raise
 
+            _stream_started = time.perf_counter()
             try:
                 async for line in resp.aiter_lines():
                     if not line.startswith("data: "):
@@ -380,6 +482,9 @@ class InferenceClient:
                     if isinstance(delta, str) and delta:
                         yield delta
                 breaker.record_success()
+                if policy is not None:
+                    _stream_latency_s = time.perf_counter() - _stream_started
+                    policy.record_latency(effective_model, _stream_latency_s)
             except Exception:
                 breaker.record_failure()
                 raise

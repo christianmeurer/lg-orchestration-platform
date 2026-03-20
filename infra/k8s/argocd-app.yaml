@@ -1,0 +1,41 @@
+# ArgoCD Application manifest for the Lula platform.
+# set REPO_URL before applying — or use scripts/argocd_bootstrap.sh which substitutes it automatically.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: lula
+  namespace: argocd
+  annotations:
+    # Substitute REPLACE_WITH_REPO_URL with the actual Git remote before kubectl apply.
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+
+  source:
+    repoURL: REPLACE_WITH_REPO_URL
+    targetRevision: main
+    path: infra/k8s
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: lula-orch
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+
+  # Prevent ArgoCD from treating managed-field / status drift as an out-of-sync condition.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /status
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+      jsonPointers:
+        - /status
+        - /spec/metrics

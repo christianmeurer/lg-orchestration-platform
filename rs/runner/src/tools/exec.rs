@@ -11,7 +11,9 @@ use crate::config::{RunnerConfig, ALLOWED_EXEC_COMMANDS};
 use crate::diagnostics::parse_structured_diagnostics;
 use crate::envelope::{Diagnostic, ToolEnvelope};
 use crate::errors::ApiError;
-use crate::sandbox::{pre_validate_exec, SandboxBackend};
+use crate::sandbox::{
+    apply_cgroup_v2_limits, cleanup_cgroup, pre_validate_exec, CgroupLimits, SandboxBackend,
+};
 use crate::tools::snapshot_for_operation;
 
 const STDERR_ARTIFACT_MAX_CHARS: usize = 8_000;
@@ -54,10 +56,18 @@ fn diagnostics_to_artifact_value(diagnostics: &[Diagnostic]) -> Value {
     )
 }
 
+#[tracing::instrument(
+    skip_all,
+    fields(tool = "exec", challenge_id = tracing::field::Empty)
+)]
 pub async fn exec(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiError> {
     let inp: ExecIn =
         serde_json::from_value(input).map_err(|e| ApiError::BadRequest(e.to_string()))?;
     let cmd = inp.cmd.trim();
+    // Record challenge_id when an approval token is attached.
+    if let Some(ref approval) = inp.approval {
+        tracing::Span::current().record("challenge_id", &*approval.challenge_id);
+    }
 
     // Invariant pre-validation layer (neurosymbolic vericoding check).
     // Runs before the existing per-tool checks; does NOT replace them.
@@ -97,6 +107,7 @@ pub async fn exec(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiE
             inp.approval.clone(),
             operation_class,
             "approval:exec:state_modifying",
+            cfg.approval_token_ttl_secs,
         )?)
     } else {
         None
@@ -110,6 +121,13 @@ pub async fn exec(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiE
 
     let sandbox_resolution = cfg.sandbox_policy.resolve_backend();
     let isolation = sandbox_resolution.to_isolation_metadata();
+    // Increment sandbox tier metric
+    let sandbox_tier_label = match sandbox_resolution.backend {
+        crate::sandbox::SandboxBackend::MicroVmEphemeral => "micro_vm",
+        crate::sandbox::SandboxBackend::LinuxNamespace => "linux_namespace",
+        crate::sandbox::SandboxBackend::SafeFallback => "safe_fallback",
+    };
+    metrics::counter!("runner_sandbox_tier", "tier" => sandbox_tier_label).increment(1);
 
     let cwd = inp
         .cwd
@@ -205,15 +223,40 @@ pub async fn exec(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiE
     let t = Duration::from_secs(inp.timeout_s.unwrap_or(600));
     let child = c.spawn().map_err(|e| ApiError::Other(e.into()))?;
 
+    // Apply cgroup v2 resource limits for the LinuxNamespace backend.
+    // Gracefully no-ops when not running as root or cgroup v2 is not mounted.
+    let cgroup_name = if sandbox_resolution.backend == SandboxBackend::LinuxNamespace {
+        if let Some(pid) = child.id() {
+            let name = format!("run-{pid}");
+            if let Err(e) =
+                apply_cgroup_v2_limits(&name, &CgroupLimits::default(), pid)
+            {
+                tracing::warn!(error = %e, "cgroup v2 limit application failed; continuing without limits");
+            }
+            Some(name)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let out = timeout(t, child.wait_with_output())
         .await
         .map_err(|_| ApiError::Other(anyhow::anyhow!("timeout")))?
         .map_err(|e| ApiError::Other(e.into()))?;
 
+    // Best-effort cgroup cleanup after the child exits.
+    if let Some(ref name) = cgroup_name {
+        let _ = cleanup_cgroup(name);
+    }
+
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     let code = out.status.code().unwrap_or(1);
     if code == 0 {
+        metrics::counter!("runner_tool_calls_total", "tool" => "exec", "status" => "ok")
+            .increment(1);
         let mut env = ToolEnvelope::ok(
             "exec",
             stdout,
@@ -238,6 +281,8 @@ pub async fn exec(cfg: &RunnerConfig, input: Value) -> Result<ToolEnvelope, ApiE
         }
         Ok(env)
     } else {
+        metrics::counter!("runner_tool_calls_total", "tool" => "exec", "status" => "error")
+            .increment(1);
         let diagnostics = parse_structured_diagnostics(&stderr);
         let (stderr_excerpt, stderr_truncated) = truncate_chars(&stderr, STDERR_ARTIFACT_MAX_CHARS);
         let stderr_chars = stderr.chars().count();

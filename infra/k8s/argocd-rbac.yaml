@@ -1,0 +1,84 @@
+# RBAC granting the argocd-application-controller ServiceAccount the permissions
+# it needs to reconcile all Lula platform resources in the lula-orch namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: argocd-lula-manager
+rules:
+  # Core workload resources
+  - apiGroups: [""]
+    resources:
+      - namespaces
+      - pods
+      - services
+      - endpoints
+      - configmaps
+      - secrets
+      - serviceaccounts
+      - persistentvolumeclaims
+      - events
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Deployments and ReplicaSets
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - replicasets
+      - statefulsets
+      - daemonsets
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Horizontal Pod Autoscalers
+  - apiGroups: ["autoscaling"]
+    resources:
+      - horizontalpodautoscalers
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Ingress and NetworkPolicy
+  - apiGroups: ["networking.k8s.io"]
+    resources:
+      - ingresses
+      - networkpolicies
+      - ingressclasses
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # RuntimeClasses (gVisor / Kata)
+  - apiGroups: ["node.k8s.io"]
+    resources:
+      - runtimeclasses
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # PodDisruptionBudgets
+  - apiGroups: ["policy"]
+    resources:
+      - poddisruptionbudgets
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # RBAC (so ArgoCD can manage its own bindings if needed)
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources:
+      - roles
+      - rolebindings
+      - clusterroles
+      - clusterrolebindings
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Status subresource access (required by server-side apply)
+  - apiGroups: ["apps", "autoscaling"]
+    resources:
+      - deployments/status
+      - horizontalpodautoscalers/status
+    verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: argocd-lula-manager-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: argocd-lula-manager
+subjects:
+  - kind: ServiceAccount
+    name: argocd-application-controller
+    namespace: argocd

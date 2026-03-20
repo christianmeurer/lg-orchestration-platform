@@ -56,6 +56,10 @@ enabled = true
 db_path = "artifacts/checkpoints/langgraph.sqlite"
 namespace = "main"
 thread_prefix = "lg-orch"
+backend = "redis"
+redis_url = "redis://localhost:6379/0"
+postgres_dsn = ""
+redis_ttl_seconds = 86400
 
 [remote_api]
 auth_mode = "bearer"

@@ -19,6 +19,41 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+import prometheus_client
+from prometheus_client import Counter, Gauge, Histogram
+
+# ---------------------------------------------------------------------------
+# Prometheus metrics — defined at module level (single-process, no multiprocess)
+# ---------------------------------------------------------------------------
+_LULA_RUNS_TOTAL: Counter = Counter(
+    "lula_runs_total",
+    "Total number of completed runs",
+    ["lane", "status"],
+)
+_LULA_RUN_DURATION_SECONDS: Histogram = Histogram(
+    "lula_run_duration_seconds",
+    "Wall-clock duration of runs in seconds",
+    ["lane"],
+)
+_LULA_ACTIVE_RUNS: Gauge = Gauge(
+    "lula_active_runs",
+    "Number of currently active runs",
+)
+# Placeholder — wired to LLM calls in Wave 13
+_LULA_LLM_REQUESTS_TOTAL: Counter = Counter(
+    "lula_llm_requests_total",
+    "Total number of LLM requests",
+    ["provider", "model", "status"],
+)
+# Placeholder — wired to tool calls in Wave 13
+_LULA_TOOL_CALLS_TOTAL: Counter = Counter(
+    "lula_tool_calls_total",
+    "Total number of tool calls",
+    ["tool_name", "status"],
+)
+
+_PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
+
 from lg_orch.approval_policy import (
     ApprovalDecision,
     ApprovalEngine,
@@ -28,8 +63,17 @@ from lg_orch.approval_policy import (
     RoleApprovalPolicy,
     TimedApprovalPolicy,
 )
+from lg_orch.audit import AuditEvent, AuditLogger, build_sink, utc_now_iso
+from lg_orch.auth import (
+    AuthError,
+    JWTSettings,
+    _OPEN,
+    _route_policy,
+    authorize_stdlib,
+    jwt_settings_from_config,
+)
 from lg_orch.config import load_config
-from lg_orch.logging import get_logger
+from lg_orch.logging import get_logger, init_telemetry
 from lg_orch.procedure_cache import ProcedureCache, _canonical_procedure_name
 from lg_orch.run_store import RunStore
 
@@ -357,6 +401,54 @@ def _json_response(status: int, payload: dict[str, Any]) -> tuple[int, str, byte
     return status, _JSON_CONTENT_TYPE, body
 
 
+def _audit_action_and_resource(
+    *,
+    method: str,
+    route: str,
+    path_parts: list[str],
+    status: int,
+) -> tuple[str, str | None]:
+    """Derive (action, resource_id) for an audit event from request metadata."""
+    # run.create
+    if method == "POST" and route in {"/v1/runs", "/runs", "/runs/"}:
+        return "run.create", None
+
+    # run.list
+    if method == "GET" and route in {"/v1/runs", "/runs", "/runs/"}:
+        return "run.list", None
+
+    # run.search
+    if route == "/runs/search" and method == "GET":
+        return "run.search", None
+
+    # GET /v1/runs/{run_id} or /runs/{run_id}
+    if method == "GET" and len(path_parts) == 3 and path_parts[:2] == ["v1", "runs"]:
+        return "run.read", path_parts[2]
+    if method == "GET" and len(path_parts) == 2 and path_parts[0] == "runs":
+        return "run.read", path_parts[1]
+
+    # cancel
+    if len(path_parts) == 4 and path_parts[:2] == ["v1", "runs"] and path_parts[3] == "cancel":
+        return "run.cancel", path_parts[2]
+    if method == "POST" and len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] == "cancel":
+        return "run.cancel", path_parts[1]
+
+    # approve / reject
+    if len(path_parts) == 4 and path_parts[:2] == ["v1", "runs"] and path_parts[3] == "approve":
+        return "run.approve", path_parts[2]
+    if len(path_parts) == 4 and path_parts[:2] == ["v1", "runs"] and path_parts[3] == "reject":
+        return "run.approve", path_parts[2]
+    if method == "POST" and len(path_parts) == 3 and path_parts[0] == "runs" and path_parts[2] in {"approve", "reject"}:
+        return "run.approve", path_parts[1]
+
+    # logs / stream
+    if len(path_parts) >= 3 and path_parts[-1] in {"logs", "stream"}:
+        rid = path_parts[-2] if len(path_parts) >= 3 else None
+        return "run.read", rid
+
+    return "api.request", None
+
+
 def _spawn_run_subprocess(
     *, argv: list[str], cwd: Path, env: dict[str, str] | None = None
 ) -> subprocess.Popen[str]:
@@ -416,6 +508,9 @@ def _authorize_request(
     allow_unauthenticated_healthz: bool,
 ) -> tuple[str, tuple[int, str, bytes] | None]:
     if route == "/healthz" and allow_unauthenticated_healthz:
+        return "", None
+    # /metrics is always public — required for K8s Prometheus scraping
+    if route == "/metrics":
         return "", None
     if auth_mode == "off":
         return "", None
@@ -608,6 +703,8 @@ class RemoteAPIService:
         # healing loop background tasks: loop_id -> asyncio.Task
         self._healing_tasks: dict[str, "asyncio.Task[None]"] = {}
         self._healing_loops: dict[str, "Any"] = {}  # loop_id -> HealingLoop instance
+        # Monotonic start times for run duration tracking
+        self._run_start_times: dict[str, float] = {}
 
     def create_run(
         self,
@@ -705,6 +802,9 @@ class RemoteAPIService:
                 _record = self._runs.get(run_id)
                 if _record is not None:
                     self._run_store.upsert(self._summary_payload_locked(_record))
+        _LULA_ACTIVE_RUNS.inc()
+        with self._lock:
+            self._run_start_times[run_id] = time.monotonic()
         _start_daemon_thread(
             target=lambda: self._capture_process_output(run_id),
             name=f"lg-orch-run-{run_id}",
@@ -1068,8 +1168,16 @@ class RemoteAPIService:
                 record.status = "cancelled"
             else:
                 record.status = "succeeded" if exit_code == 0 else "failed"
+            _final_status = record.status
+            _start_time = self._run_start_times.pop(run_id, None)
             trace_path = record.trace_path
             approval_history = list(record.approval_history)
+
+        _LULA_ACTIVE_RUNS.dec()
+        _lane = "default"
+        _LULA_RUNS_TOTAL.labels(lane=_lane, status=_final_status).inc()
+        if _start_time is not None:
+            _LULA_RUN_DURATION_SECONDS.labels(lane=_lane).observe(time.monotonic() - _start_time)
 
         trace_raw = self._load_trace(trace_path)
         approval_state = _approval_state_from_trace(trace_raw)
@@ -1322,7 +1430,13 @@ class RemoteAPIService:
         return {"jobs": jobs}
 
 
-def _api_http_response(
+# ---------------------------------------------------------------------------
+# Module-level audit logger (set by serve_remote_api; None when not running in server mode)
+# ---------------------------------------------------------------------------
+_audit_logger: AuditLogger | None = None
+
+
+def _api_http_dispatch(
     service: RemoteAPIService,
     *,
     method: str,
@@ -1334,6 +1448,7 @@ def _api_http_response(
     expected_bearer_token: str | None = None,
     authorization_header: str | None = None,
     allow_unauthenticated_healthz: bool = True,
+    jwt_settings: JWTSettings | None = None,
 ) -> tuple[int, str, bytes]:
     route = urlsplit(request_path).path.rstrip("/") or "/"
     auth_subject, auth_error = _authorize_request(
@@ -1344,10 +1459,79 @@ def _api_http_response(
         allow_unauthenticated_healthz=allow_unauthenticated_healthz,
     )
     if auth_error is not None:
+        _path_parts_early = [p for p in route.split("/") if p]
+        _action_early, _rid_early = _audit_action_and_resource(
+            method=method,
+            route=route,
+            path_parts=_path_parts_early,
+            status=auth_error[0],
+        )
+        if _audit_logger is not None:
+            _audit_logger.log(
+                AuditEvent(
+                    ts=utc_now_iso(),
+                    subject="anonymous",
+                    roles=[],
+                    action=_action_early,
+                    resource_id=_rid_early,
+                    outcome="denied",
+                    detail="bearer_auth_failed",
+                )
+            )
         return auth_error
 
     if service._rate_limiter is not None and not service._rate_limiter.acquire():
         return _json_response(429, {"error": "rate_limit_exceeded"})
+
+    # JWT/RBAC enforcement — runs after the existing static-bearer check.
+    _jwt = jwt_settings or JWTSettings(jwt_secret=None, jwks_url=None)
+    _early_path_parts = [part for part in route.split("/") if part]
+    _required_roles = _route_policy(
+        route=route,
+        method=method,
+        path_parts=_early_path_parts,
+        jwt_enabled=_jwt.enabled,
+    )
+    # Only enforce when the route has required roles; open routes (_OPEN == ())
+    # are never gated regardless of whether JWT is configured.
+    _jwt_claims_roles: list[str] = []
+    if _required_roles:
+        try:
+            _claims = authorize_stdlib(
+                authorization=authorization_header,
+                settings=_jwt,
+                required_roles=_required_roles,
+            )
+            if _claims.sub and _claims.sub != "anonymous":
+                auth_subject = _claims.sub
+            _jwt_claims_roles = list(_claims.roles)
+        except AuthError as _auth_exc:
+            _path_parts_jwt = [p for p in route.split("/") if p]
+            _action_jwt, _rid_jwt = _audit_action_and_resource(
+                method=method,
+                route=route,
+                path_parts=_path_parts_jwt,
+                status=_auth_exc.status_code,
+            )
+            if _audit_logger is not None:
+                _audit_logger.log(
+                    AuditEvent(
+                        ts=utc_now_iso(),
+                        subject="anonymous",
+                        roles=[],
+                        action=_action_jwt,
+                        resource_id=_rid_jwt,
+                        outcome="denied",
+                        detail=_auth_exc.detail,
+                    )
+                )
+            return _json_response(_auth_exc.status_code, {"error": _auth_exc.detail})
+
+    if route == "/metrics":
+        if method != "GET":
+            return _json_response(405, {"error": "method_not_allowed"})
+        body = prometheus_client.generate_latest()
+        return 200, _PROMETHEUS_CONTENT_TYPE, body
 
     if route in {"/", "/ui"}:
         if method != "GET":
@@ -1643,7 +1827,66 @@ def _api_http_response(
     return _json_response(404, {"error": "not_found"})
 
 
+def _api_http_response(
+    service: RemoteAPIService,
+    *,
+    method: str,
+    request_path: str,
+    request_body: bytes | None,
+    request_id: str = "",
+    client_ip: str = "",
+    auth_mode: str = "off",
+    expected_bearer_token: str | None = None,
+    authorization_header: str | None = None,
+    allow_unauthenticated_healthz: bool = True,
+    jwt_settings: JWTSettings | None = None,
+) -> tuple[int, str, bytes]:
+    """Public entry point: wraps :func:`_api_http_dispatch` with audit emission."""
+    status, content_type, body = _api_http_dispatch(
+        service,
+        method=method,
+        request_path=request_path,
+        request_body=request_body,
+        request_id=request_id,
+        client_ip=client_ip,
+        auth_mode=auth_mode,
+        expected_bearer_token=expected_bearer_token,
+        authorization_header=authorization_header,
+        allow_unauthenticated_healthz=allow_unauthenticated_healthz,
+        jwt_settings=jwt_settings,
+    )
+
+    # Auth denials (401/403) are emitted inside _api_http_dispatch; skip here.
+    if _audit_logger is not None and status not in {401, 403}:
+        _route = urlsplit(request_path).path.rstrip("/") or "/"
+        _pp = [p for p in _route.split("/") if p]
+        _action, _rid = _audit_action_and_resource(
+            method=method,
+            route=_route,
+            path_parts=_pp,
+            status=status,
+        )
+        _outcome: str = "error" if status >= 500 else "ok"
+        _audit_logger.log(
+            AuditEvent(
+                ts=utc_now_iso(),
+                subject=auth_mode if auth_mode != "off" else "anonymous",
+                roles=[],
+                action=_action,
+                resource_id=_rid,
+                outcome=_outcome,
+                detail=None,
+            )
+        )
+
+    return status, content_type, body
+
+
 def serve_remote_api(*, repo_root: Path, host: str, port: int) -> int:
+    init_telemetry(
+        service_name="lula-orchestrator",
+        otlp_endpoint=os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"),
+    )
     log = get_logger()
     try:
         cfg = load_config(repo_root=repo_root)
@@ -1669,6 +1912,11 @@ def serve_remote_api(*, repo_root: Path, host: str, port: int) -> int:
         rate_limiter=rate_limiter,
         procedure_cache=procedure_cache,
         namespace=_namespace,
+    )
+
+    _jwt_settings = jwt_settings_from_config(
+        jwt_secret=remote_api_cfg.jwt_secret,
+        jwks_url=remote_api_cfg.jwks_url,
     )
 
     class RemoteAPIRequestHandler(BaseHTTPRequestHandler):
@@ -1708,6 +1956,7 @@ def serve_remote_api(*, repo_root: Path, host: str, port: int) -> int:
                     expected_bearer_token=remote_api_cfg.bearer_token,
                     authorization_header=self.headers.get("Authorization"),
                     allow_unauthenticated_healthz=remote_api_cfg.allow_unauthenticated_healthz,
+                    jwt_settings=_jwt_settings,
                 )
             except Exception as exc:
                 log.error(
@@ -1769,6 +2018,14 @@ def serve_remote_api(*, repo_root: Path, host: str, port: int) -> int:
         def log_message(self, format: str, *args: object) -> None:
             return
 
+    global _audit_logger
+    audit_cfg = cfg.audit
+    _audit_sink = build_sink(audit_cfg)
+    _audit_logger = AuditLogger(
+        log_path=Path(audit_cfg.log_path),
+        sink=_audit_sink,
+    )
+
     try:
         with ThreadingHTTPServer((host, port), RemoteAPIRequestHandler) as server:
             log.info(
@@ -1786,4 +2043,8 @@ def serve_remote_api(*, repo_root: Path, host: str, port: int) -> int:
         return 2
     except KeyboardInterrupt:
         return 0
+    finally:
+        if _audit_logger is not None:
+            _audit_logger.close()
+            _audit_logger = None
     return 0

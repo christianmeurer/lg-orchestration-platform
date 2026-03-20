@@ -55,6 +55,9 @@ let _completedNodes = new Set();
 let _activeNode = null;
 let _listTimer = null;
 
+/** Per-node llm-stream <pre> elements: node name → HTMLElement */
+let _llmStreamEls = {};
+
 /** Per-node state: 'idle' | 'active' | 'done' | 'error' */
 let _nodeStates = {};
 
@@ -186,7 +189,9 @@ function selectRun(runId) {
 
   _completedNodes = new Set();
   _activeNode = null;
+  _llmStreamEls = {};
   clearEventLog();
+  clearLlmStreams();
   resetNodeGraph();
   hideBanner();
   hideCompleteBanner();
@@ -232,6 +237,7 @@ function handleSSEEvent(event) {
     }
     showSpinner(false);
     showCompleteBanner();
+    markLlmStreamsComplete();
     if (_activeNode) {
       setNodeState(_activeNode, 'done');
       _activeNode = null;
@@ -247,6 +253,7 @@ function handleSSEEvent(event) {
       data: { message: event.error },
     });
     showSpinner(false);
+    markLlmStreamsComplete();
     return;
   }
 
@@ -256,6 +263,11 @@ function handleSSEEvent(event) {
       (event.data && event.data.summary) ||
       'Approval required';
     showApprovalBanner(summary);
+    return;
+  }
+
+  if (event.type === 'llm_chunk') {
+    handleLlmChunk(event);
     return;
   }
 
@@ -275,6 +287,72 @@ function handleSSEEvent(event) {
     showSpinner(true);
     updateStatusBadge('running');
   }
+}
+
+// ── LLM streaming chunks ──────────────────────────────────────
+
+/**
+ * Find or create a <pre class="llm-stream"> element for a given node name.
+ * Inserts it into #event-log so it appears inline with other events.
+ * @param {string} nodeName
+ * @returns {HTMLElement}
+ */
+function _getOrCreateLlmStreamEl(nodeName) {
+  if (_llmStreamEls[nodeName]) {
+    return _llmStreamEls[nodeName];
+  }
+  const log = document.getElementById('event-log');
+  if (!log) {
+    const fallback = document.createElement('pre');
+    _llmStreamEls[nodeName] = fallback;
+    return fallback;
+  }
+  const pre = document.createElement('pre');
+  pre.className = 'llm-stream';
+  pre.setAttribute('data-node', nodeName);
+  log.appendChild(pre);
+  _llmStreamEls[nodeName] = pre;
+  return pre;
+}
+
+/**
+ * Handle a parsed llm_chunk SSE event: append delta to the node's stream area.
+ * @param {object} event  Object with `node` and `delta` fields.
+ */
+function handleLlmChunk(event) {
+  const nodeName = String(event.node || '');
+  const delta = String(event.delta || '');
+  if (!nodeName || !delta) return;
+
+  const el = _getOrCreateLlmStreamEl(nodeName);
+  if (el.getAttribute('data-complete') === 'true') return;
+
+  el.textContent += delta;
+  el.scrollTop = el.scrollHeight;
+}
+
+/** Mark all active llm-stream elements as complete (run finished/errored). */
+function markLlmStreamsComplete() {
+  const log = document.getElementById('event-log');
+  if (!log) return;
+  const streamEls = log.querySelectorAll('.llm-stream:not([data-complete="true"])');
+  streamEls.forEach((el) => {
+    el.setAttribute('data-complete', 'true');
+  });
+  // Also update any tracked refs
+  Object.values(_llmStreamEls).forEach((el) => {
+    el.setAttribute('data-complete', 'true');
+  });
+}
+
+/** Remove all llm-stream elements from the log (called on run change). */
+function clearLlmStreams() {
+  const log = document.getElementById('event-log');
+  if (log) {
+    const streamEls = log.querySelectorAll('.llm-stream');
+    streamEls.forEach((el) => el.remove());
+  }
+  _llmStreamEls = {};
 }
 
 // ── Event log ─────────────────────────────────────────────────

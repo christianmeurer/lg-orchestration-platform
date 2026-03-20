@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import os
+import time
 from typing import Any
 
 from lg_orch.logging import get_logger
+from lg_orch.remote_api import push_run_event
 from lg_orch.tools import InferenceClient
+from lg_orch.tools.inference_client import InferenceResponse
 from lg_orch.trace import append_event
 
 _SYSTEM_PROMPT = (
@@ -128,6 +133,53 @@ def _get_inference_config(
     return (model, api_key, base_url, timeout_s)
 
 
+def _stream_llm_with_events(
+    client: InferenceClient,
+    *,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float,
+    max_tokens: int,
+    run_id: str,
+    node: str,
+) -> InferenceResponse:
+    """Run streaming LLM call, emitting llm_chunk SSE events per token.
+
+    Runs the async generator in a thread pool to remain safe in sync graph nodes
+    that may already have a running event loop (e.g. LangGraph internals).
+    """
+    started = time.perf_counter()
+    chunks: list[str] = []
+
+    async def _run() -> str:
+        async for token in client.chat_completion_stream(
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        ):
+            chunks.append(token)
+            push_run_event(run_id, {"type": "llm_chunk", "node": node, "delta": token})
+        return "".join(chunks)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(asyncio.run, _run())
+        text = future.result()
+
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    return InferenceResponse(
+        text=text,
+        latency_ms=latency_ms,
+        provider="",
+        model=model,
+        usage=None,
+        cache_metadata=None,
+        headers=None,
+    )
+
+
 def _llm_synthesis(state: dict[str, Any]) -> str | None:
     cfg = _get_inference_config(state)
     if cfg is None:
@@ -145,15 +197,39 @@ def _llm_synthesis(state: dict[str, Any]) -> str | None:
         "Produce the final answer."
     )
 
+    run_id_raw = state.get("run_id")
+    run_id = str(run_id_raw).strip() if isinstance(run_id_raw, str) and run_id_raw.strip() else None
+
     client = InferenceClient(base_url=base_url, api_key=api_key, timeout_s=timeout_s)
     try:
-        response = client.chat_completion(
-            model=model,
-            system_prompt=_SYSTEM_PROMPT,
-            user_prompt=user_prompt,
-            temperature=0.3,
-            max_tokens=800,
-        )
+        if run_id is not None:
+            try:
+                response = _stream_llm_with_events(
+                    client,
+                    model=model,
+                    system_prompt=_SYSTEM_PROMPT,
+                    user_prompt=user_prompt,
+                    temperature=0.3,
+                    max_tokens=800,
+                    run_id=run_id,
+                    node="reporter",
+                )
+            except Exception:
+                response = client.chat_completion(
+                    model=model,
+                    system_prompt=_SYSTEM_PROMPT,
+                    user_prompt=user_prompt,
+                    temperature=0.3,
+                    max_tokens=800,
+                )
+        else:
+            response = client.chat_completion(
+                model=model,
+                system_prompt=_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                temperature=0.3,
+                max_tokens=800,
+            )
     finally:
         client.close()
 

@@ -6,6 +6,7 @@
     {"field": "verifier_status", "op": "eq", "value": "pass"},
     {"field": "patch_applied", "op": "eq", "value": true},
     {"field": "tests_passed", "op": "eq", "value": true},
+    {"field": "post_apply_pytest_pass", "op": "eq", "value": true},
     {"field": "loop_count", "op": "lte", "value": 3}
   ]
 }

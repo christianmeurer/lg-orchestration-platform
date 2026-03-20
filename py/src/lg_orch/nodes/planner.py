@@ -6,12 +6,25 @@ import re
 from pathlib import Path
 from typing import Any
 
+import jsonschema
+
 from lg_orch.logging import get_logger
 from lg_orch.memory import ensure_history_policy, get_compression_summary, prune_pre_verification_history
 from lg_orch.model_routing import latest_model_route, record_inference_telemetry, record_model_route
 from lg_orch.state import AgentHandoff, HandoffEvidence, PlannerOutput, PlanStep, ToolCall
 from lg_orch.tools import InferenceClient
 from lg_orch.trace import append_event
+
+_SCHEMA_PATH = Path(__file__).parent.parent.parent.parent.parent / "schemas" / "planner_output.schema.json"
+
+def _load_planner_schema() -> dict[str, Any]:
+    try:
+        return json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+    except Exception:
+        return {}
+
+
+PLANNER_SCHEMA: dict[str, Any] = _load_planner_schema()
 
 _WORD_RE = re.compile(r"[a-z0-9']+")
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL | re.IGNORECASE)
@@ -690,6 +703,13 @@ def _planner_model_output(
     parsed = json.loads(_extract_json_block(raw))
     if not isinstance(parsed, dict):
         raise ValueError("planner completion did not return an object")
+    if PLANNER_SCHEMA:
+        try:
+            jsonschema.validate(instance=parsed, schema=PLANNER_SCHEMA)
+        except jsonschema.ValidationError as ve:
+            log = get_logger()
+            log.warning("planner_schema_validation_failed", error=str(ve.message))
+            return None, None
     return PlannerOutput.model_validate(parsed), response
 
 

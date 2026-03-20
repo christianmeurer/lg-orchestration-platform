@@ -1,4 +1,6 @@
 use std::path::{Path, PathBuf};
+
+use crate::approval::DEFAULT_TOKEN_TTL_SECS;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -122,6 +124,12 @@ pub struct RunnerConfig {
     pub sandbox_policy: SandboxPolicy,
     pub sandbox: SandboxConfig,
     pub invariant_checker: Arc<InvariantChecker>,
+    /// Maximum age (in seconds) for which an approval token is considered valid.
+    ///
+    /// Defaults to [`crate::approval::DEFAULT_TOKEN_TTL_SECS`] (300 s).
+    /// Override via `LG_RUNNER_APPROVAL_TOKEN_TTL_SECS` or pass explicitly
+    /// through [`RunnerConfig::with_rate_limit`].
+    pub approval_token_ttl_secs: u64,
 }
 
 impl std::fmt::Debug for RunnerConfig {
@@ -175,6 +183,11 @@ impl RunnerConfig {
             "sandbox configuration loaded"
         );
 
+        let approval_token_ttl_secs = std::env::var("LG_RUNNER_APPROVAL_TOKEN_TTL_SECS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(DEFAULT_TOKEN_TTL_SECS);
+
         Ok(Self {
             root_dir,
             allow_read,
@@ -185,6 +198,7 @@ impl RunnerConfig {
             sandbox_policy,
             sandbox,
             invariant_checker,
+            approval_token_ttl_secs,
         })
     }
 

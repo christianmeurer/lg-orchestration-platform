@@ -419,6 +419,28 @@ body {
   font-size: 14px;
 }
 
+/* ── LLM streaming output blocks ────────────────────────────── */
+.llm-stream {
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  white-space: pre-wrap;
+  background: #1a1a2e;
+  color: #e0e0e0;
+  padding: 0.75rem;
+  border-radius: 4px;
+  max-height: 400px;
+  overflow-y: auto;
+  margin-bottom: 0.5rem;
+  transition: border-color 0.2s;
+  border-left: 3px solid #2196f3;
+  font-size: 11px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.llm-stream[data-complete="true"] {
+  border-left-color: #4caf50;
+}
+
 /* ── Scrollbars ──────────────────────────────────────────────── */
 ::-webkit-scrollbar {
   width: 5px;

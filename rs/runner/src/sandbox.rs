@@ -1,13 +1,125 @@
 use std::env;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use regex::Regex;
+use thiserror::Error;
 
 use crate::config::SandboxConfig;
 use crate::envelope::IsolationMetadata;
 use crate::errors::ApiError;
 use crate::invariants::{InvariantChecker, InvariantRequest};
+
+// ---------------------------------------------------------------------------
+// Cgroup v2 resource limits
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Error)]
+pub enum SandboxError {
+    #[error("cgroup error: {0}")]
+    CgroupError(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct CgroupLimits {
+    /// `memory.max` — hard memory limit in bytes.
+    pub memory_bytes: Option<u64>,
+    /// `cpu.max` quota in microseconds.
+    pub cpu_quota_us: Option<u64>,
+    /// `cpu.max` period in microseconds (denominator).
+    pub cpu_period_us: u64,
+    /// `pids.max` — maximum number of tasks in the cgroup.
+    pub pids_max: Option<u32>,
+}
+
+impl Default for CgroupLimits {
+    fn default() -> Self {
+        Self {
+            memory_bytes: Some(512 * 1024 * 1024), // 512 MiB
+            cpu_quota_us: Some(50_000),             // 50% of one core
+            cpu_period_us: 100_000,
+            pids_max: Some(256),
+        }
+    }
+}
+
+/// Write `value` to `path`, treating `NotFound` and `PermissionDenied` as
+/// graceful no-ops (cgroup v2 not mounted or not running as root).
+fn write_cgroup_file(path: &str, value: &str) -> Result<(), SandboxError> {
+    match std::fs::write(path, value) {
+        Ok(()) => Ok(()),
+        Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::PermissionDenied) => {
+            tracing::warn!(path = %path, kind = ?e.kind(), "cgroup file write skipped (not root or cgroup v2 not mounted)");
+            Ok(())
+        }
+        Err(e) => Err(SandboxError::CgroupError(format!(
+            "write {path}: {e}"
+        ))),
+    }
+}
+
+/// Create cgroup v2 resource limits for `cgroup_name` and move `pid` into it.
+///
+/// The cgroup is created under `/sys/fs/cgroup/lula-runner/{cgroup_name}/`.
+/// When the cgroup filesystem is not accessible (not root, not mounted) the
+/// function logs a warning and returns `Ok(())` — execution continues without
+/// resource limits applied.
+pub fn apply_cgroup_v2_limits(
+    cgroup_name: &str,
+    limits: &CgroupLimits,
+    pid: u32,
+) -> Result<(), SandboxError> {
+    let cgroup_dir = format!("/sys/fs/cgroup/lula-runner/{cgroup_name}");
+
+    match std::fs::create_dir_all(&cgroup_dir) {
+        Ok(()) => {}
+        Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::PermissionDenied) => {
+            tracing::warn!(
+                cgroup_dir = %cgroup_dir,
+                kind = ?e.kind(),
+                "cgroup v2 dir creation skipped (not root or cgroup v2 not mounted)"
+            );
+            return Ok(());
+        }
+        Err(e) => {
+            return Err(SandboxError::CgroupError(format!(
+                "create_dir_all {cgroup_dir}: {e}"
+            )));
+        }
+    }
+
+    if let Some(mem) = limits.memory_bytes {
+        write_cgroup_file(&format!("{cgroup_dir}/memory.max"), &mem.to_string())?;
+    }
+
+    if let Some(quota) = limits.cpu_quota_us {
+        write_cgroup_file(
+            &format!("{cgroup_dir}/cpu.max"),
+            &format!("{quota} {}", limits.cpu_period_us),
+        )?;
+    }
+
+    if let Some(pids) = limits.pids_max {
+        write_cgroup_file(&format!("{cgroup_dir}/pids.max"), &pids.to_string())?;
+    }
+
+    write_cgroup_file(&format!("{cgroup_dir}/cgroup.procs"), &pid.to_string())?;
+
+    Ok(())
+}
+
+/// Remove the cgroup directory created by [`apply_cgroup_v2_limits`].
+///
+/// This is best-effort: all errors are swallowed so that a missing or
+/// already-removed cgroup does not abort the response path.
+pub fn cleanup_cgroup(cgroup_name: &str) -> Result<(), SandboxError> {
+    let cgroup_dir = format!("/sys/fs/cgroup/lula-runner/{cgroup_name}");
+    // remove_dir only removes an empty directory; the kernel clears cgroup
+    // entries automatically once all tasks exit, so the dir should be empty.
+    let _ = std::fs::remove_dir(&cgroup_dir);
+    Ok(())
+}
 
 // Verus specification annotations.
 // These are no-ops when compiled without `--features verify`.
@@ -727,5 +839,35 @@ mod tests {
         let result = detect_prompt_injection(&input);
         assert!(result.is_some());
         assert!(result.unwrap().contains("U+200F"));
+    }
+
+    // --- cgroup v2 tests ---
+
+    #[test]
+    fn test_cgroup_limits_default() {
+        let limits = CgroupLimits::default();
+        assert_eq!(limits.memory_bytes, Some(512 * 1024 * 1024));
+        assert_eq!(limits.cpu_quota_us, Some(50_000));
+        assert_eq!(limits.cpu_period_us, 100_000);
+        assert_eq!(limits.pids_max, Some(256));
+    }
+
+    #[test]
+    fn test_apply_cgroup_graceful_no_op() {
+        // On non-root / no-cgroup environments create_dir_all will fail with
+        // NotFound or PermissionDenied; apply_cgroup_v2_limits must return Ok.
+        let result = apply_cgroup_v2_limits(
+            "test-graceful-noop",
+            &CgroupLimits::default(),
+            std::process::id(),
+        );
+        assert!(result.is_ok(), "expected Ok(()), got {result:?}");
+    }
+
+    #[test]
+    fn test_cleanup_cgroup_nonexistent() {
+        // cleanup_cgroup swallows all errors; a nonexistent path must be Ok.
+        let result = cleanup_cgroup("test-nonexistent-cgroup-xyzzy");
+        assert!(result.is_ok(), "expected Ok(()), got {result:?}");
     }
 }

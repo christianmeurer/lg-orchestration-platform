@@ -1,0 +1,65 @@
+name: Eval Correctness
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      pass_k:
+        description: "pass@k value (number of samples per task)"
+        required: false
+        default: "1"
+
+jobs:
+  eval-correctness:
+    name: "Eval Correctness (pass@k)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        working-directory: py
+        run: uv sync
+
+      - name: Run eval
+        id: eval
+        working-directory: eval
+        env:
+          LG_RUNNER_URL: ${{ secrets.LG_RUNNER_URL }}
+          LG_API_KEY: ${{ secrets.LG_API_KEY }}
+          LG_MODEL: ${{ secrets.LG_MODEL }}
+        run: |
+          uv run --project ../py python run.py \
+            --pass-at-k ${{ inputs.pass_k || '1' }} \
+            --tasks canary test-repair real-world-repair \
+            --format json \
+            | tee ../eval-results-raw.json
+          python - <<'EOF'
+          import json, sys
+          with open("../eval-results-raw.json") as fh:
+              data = json.load(fh)
+          rows = data.get("pass_at_k_rows")
+          if rows:
+              total_runs = sum(r["runs"] for r in rows)
+              total_correct = sum(r["correct"] for r in rows)
+              agg = total_correct / total_runs if total_runs else 0.0
+          else:
+              summary = data.get("summary", {})
+              agg = summary.get("pass_rate", 0.0)
+          print(f"Aggregate pass rate: {agg:.3f}")
+          if agg < 0.5:
+              print(f"ERROR: aggregate pass rate {agg:.3f} is below threshold 0.5", file=sys.stderr)
+              sys.exit(1)
+          EOF
+
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: eval/results/
+          if-no-files-found: ignore

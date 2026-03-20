@@ -53,13 +53,22 @@ impl Invariant for PathConfinementInvariant {
             return Ok(());
         };
 
+        // Canonicalize the allowed root so that comparisons against a
+        // canonical path work even when the root was constructed without
+        // going through `canonicalize` (e.g., in tests that use the raw
+        // tempdir path).
+        let canonical_root = req
+            .allowed_root
+            .canonicalize()
+            .unwrap_or_else(|_| req.allowed_root.clone());
+
         // Prefer canonical resolution (resolves symlinks); fall back to
         // lexical normalization when the path does not yet exist on disk.
         let resolved = path
             .canonicalize()
-            .unwrap_or_else(|_| lexical_normalize(&req.allowed_root, path));
+            .unwrap_or_else(|_| lexical_normalize(&canonical_root, path));
 
-        if !resolved.starts_with(&req.allowed_root) {
+        if !resolved.starts_with(&canonical_root) {
             return Err(format!(
                 "path '{}' escapes allowed root '{}'",
                 path.display(),
@@ -70,18 +79,30 @@ impl Invariant for PathConfinementInvariant {
     }
 }
 
-/// Lexically resolve `path` relative to `base` without touching the filesystem.
-/// Mirrors the same logic used in `tools/fs.rs::normalize_path`.
+/// Lexically resolve `path` without touching the filesystem.
+///
+/// When `path` is absolute the result is a normalized form of that absolute
+/// path (Prefix + RootDir components are pushed onto an empty `PathBuf` so
+/// that Windows drive letters are handled correctly). When `path` is relative
+/// it is resolved against `base`.
 fn lexical_normalize(base: &std::path::Path, path: &std::path::Path) -> PathBuf {
-    let mut result = base.to_path_buf();
+    // For absolute paths start from an empty PathBuf so that we do not
+    // accidentally mix in `base` components.
+    let mut result = if path.is_absolute() {
+        PathBuf::new()
+    } else {
+        base.to_path_buf()
+    };
     for component in path.components() {
         match component {
             Component::ParentDir => {
                 result.pop();
             }
-            Component::Normal(c) => result.push(c),
-            Component::RootDir => result = PathBuf::from("/"),
-            Component::Prefix(p) => result = PathBuf::from(p.as_os_str()),
+            Component::Normal(_) | Component::RootDir | Component::Prefix(_) => {
+                // `PathBuf::push` understands all of these component types and
+                // preserves Windows drive-letter prefixes correctly.
+                result.push(component);
+            }
             Component::CurDir => {}
         }
     }
