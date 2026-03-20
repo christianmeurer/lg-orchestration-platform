@@ -416,10 +416,18 @@ impl SandboxPolicy {
             .filter(|v| !v.is_empty())
             .map(PathBuf::from);
 
-        let ns_enabled = env::var("LG_RUNNER_LINUX_NAMESPACE_ENABLED")
-            .ok()
-            .map(|v| parse_bool(&v))
-            .unwrap_or(false);
+        // When the env var is not set at all, probe for the `unshare` binary
+        // on well-known paths so that Auto preference selects LinuxNamespace
+        // instead of SafeFallback on any standard Linux host.
+        let ns_enabled = match env::var("LG_RUNNER_LINUX_NAMESPACE_ENABLED") {
+            Ok(v) => parse_bool(&v),
+            Err(_) => {
+                // Not explicitly configured: check common unshare locations.
+                ["/usr/bin/unshare", "/bin/unshare"]
+                    .iter()
+                    .any(|p| std::path::Path::new(p).exists())
+            }
+        };
         let unshare_bin = env::var("LG_RUNNER_UNSHARE_BIN")
             .ok()
             .map(|v| v.trim().to_string())
@@ -529,6 +537,10 @@ impl SandboxPolicy {
         }
 
         if let Some(ns_reason) = self.namespace_unavailable_reason() {
+            tracing::warn!(
+                reason = %ns_reason,
+                "sandbox_auto_degraded: unshare unavailable; falling back to SafeFallback with no kernel-level isolation"
+            );
             policy_constraints.push("backend=safe_fallback_degraded".to_string());
             return SandboxResolution {
                 backend: SandboxBackend::SafeFallback,
