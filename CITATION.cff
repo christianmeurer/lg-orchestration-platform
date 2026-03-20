@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata in this file."
+type: software
+authors:
+  - family-names: Meurer
+    given-names: Christian
+    alias: christianmeurer
+    url: "https://github.com/christianmeurer"
+title: "Lula — Production-grade multi-agent coding assistant"
+abstract: >
+  Lula is a production-ready LangGraph-based multi-agent coding assistant with a
+  sandboxed Rust execution engine. It features a 9-node DAG orchestrator, tripartite
+  persistent memory, HMAC-SHA256 approval gates, cross-repo SCIP symbol indexing,
+  Firecracker MicroVM isolation, and a structured eval framework with SWE-bench support.
+version: "1.0.0-rc4"
+date-released: "2026-03-20"
+license: MIT
+repository-code: "https://github.com/christianmeurer/Lula"
+keywords:
+  - agentic-coding
+  - multi-agent
+  - langgraph
+  - rust
+  - firecracker
+  - code-generation
+  - eval-framework

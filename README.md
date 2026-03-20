@@ -295,3 +295,23 @@ New features must include a `pytest` unit test in [`py/tests/`](py/tests/). Logi
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+---
+
+## Attribution
+
+Created and maintained by [Christian Meurer](https://github.com/christianmeurer).
+
+If you use Lula in your research or work, please cite it:
+
+```bibtex
+@software{meurer2026lula,
+  author = {Meurer, Christian},
+  title = {Lula — Production-grade multi-agent coding assistant},
+  year = {2026},
+  url = {https://github.com/christianmeurer/Lula},
+  version = {1.0.0-rc4}
+}
+```
+
+[![CITATION.cff](https://img.shields.io/badge/citation-CITATION.cff-blue)](CITATION.cff)

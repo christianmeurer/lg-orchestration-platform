@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 //! Lula guest agent — runs inside the Firecracker microVM.
 //!
 //! Listens for newline-delimited JSON command requests, executes them with

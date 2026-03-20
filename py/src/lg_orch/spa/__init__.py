@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 """Standalone SPA served from the RemoteAPI.
 
 The SPA provides a live-streaming operator console backed by Server-Sent Events.

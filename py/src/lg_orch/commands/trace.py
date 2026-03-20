@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 """trace_command — trace site generation and trace HTTP server.
 
 Extracted from ``lg_orch.main.cli`` so the dispatcher stays under 200 lines.

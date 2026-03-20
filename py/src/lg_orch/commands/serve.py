@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 """serve_command — HTTP API server startup.
 
 Thin wrapper that delegates to :func:`lg_orch.remote_api.serve_remote_api`.

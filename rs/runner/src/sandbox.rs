@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 use std::env;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 """run_command — core graph invocation, checkpoint resumption, output reporting.
 
 Extracted from ``lg_orch.main.cli`` so the monolithic CLI dispatcher stays
