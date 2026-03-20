@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import sqlite3
@@ -529,9 +530,11 @@ class SqliteCheckpointSaver(BaseCheckpointSaver[Any]):
             conn.execute("DELETE FROM checkpoint_blobs WHERE thread_id = ?", (thread_id,))
             conn.execute("DELETE FROM checkpoint_writes WHERE thread_id = ?", (thread_id,))
 
+    # Offloaded to thread to avoid blocking the asyncio event loop.
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
-        return self.get_tuple(config)
+        return await asyncio.to_thread(self.get_tuple, config)
 
+    # Offloaded to thread to avoid blocking the asyncio event loop.
     async def alist(
         self,
         config: RunnableConfig | None,
@@ -540,9 +543,13 @@ class SqliteCheckpointSaver(BaseCheckpointSaver[Any]):
         before: RunnableConfig | None = None,
         limit: int | None = None,
     ) -> AsyncIterator[CheckpointTuple]:
-        for value in self.list(config, filter=filter, before=before, limit=limit):
+        results = await asyncio.to_thread(
+            lambda: list(self.list(config, filter=filter, before=before, limit=limit))
+        )
+        for value in results:
             yield value
 
+    # Offloaded to thread to avoid blocking the asyncio event loop.
     async def aput(
         self,
         config: RunnableConfig,
@@ -550,8 +557,9 @@ class SqliteCheckpointSaver(BaseCheckpointSaver[Any]):
         metadata: CheckpointMetadata,
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
-        return self.put(config, checkpoint, metadata, new_versions)
+        return await asyncio.to_thread(self.put, config, checkpoint, metadata, new_versions)
 
+    # Offloaded to thread to avoid blocking the asyncio event loop.
     async def aput_writes(
         self,
         config: RunnableConfig,
@@ -559,10 +567,10 @@ class SqliteCheckpointSaver(BaseCheckpointSaver[Any]):
         task_id: str,
         task_path: str = "",
     ) -> None:
-        self.put_writes(config, writes, task_id, task_path)
+        await asyncio.to_thread(self.put_writes, config, writes, task_id, task_path)
 
     async def adelete_thread(self, thread_id: str) -> None:
-        self.delete_thread(thread_id)
+        await asyncio.to_thread(self.delete_thread, thread_id)
 
 
 # ---------------------------------------------------------------------------

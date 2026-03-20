@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -63,18 +64,25 @@ class TokenClaims:
 # JWKS cache (module-level, simple in-memory)
 # ---------------------------------------------------------------------------
 
-_jwks_cache: dict[str, Any] = {}
+# 5-minute TTL; refresh on expiry to handle JWKS key rotation
+_JWKS_CACHE_TTL_SECONDS: int = 300
+_jwks_cache: dict[str, tuple[Any, float]] = {}
 
 
 def _fetch_jwks(url: str) -> dict[str, Any]:
     import json
     import urllib.request
 
-    if url in _jwks_cache:
-        return _jwks_cache[url]  # type: ignore[no-any-return]
+    cached = _jwks_cache.get(url)
+    if cached is not None:
+        jwks_data, fetched_at = cached
+        if time.monotonic() - fetched_at < _JWKS_CACHE_TTL_SECONDS:
+            return jwks_data  # type: ignore[return-value]
+        del _jwks_cache[url]
+
     with urllib.request.urlopen(url, timeout=10) as resp:
         data: dict[str, Any] = json.loads(resp.read().decode("utf-8"))
-    _jwks_cache[url] = data
+    _jwks_cache[url] = (data, time.monotonic())
     return data
 
 

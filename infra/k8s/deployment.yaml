@@ -27,6 +27,13 @@ spec:
           effect: NoSchedule
       imagePullSecrets:
         - name: docr-secret
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: lula-orch
           image: registry.digitalocean.com/lula-orch/lula-orch:latest
@@ -81,6 +88,16 @@ spec:
               cpu: 2000m
               memory: 2Gi
           securityContext:
-            runAsNonRoot: false
-            readOnlyRootFilesystem: false
+            runAsNonRoot: true
+            runAsUser: 1000
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp-dir
+              mountPath: /tmp
+      volumes:
+        - name: tmp-dir
+          emptyDir: {}

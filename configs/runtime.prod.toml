@@ -41,7 +41,7 @@ require_approval_for_mutations = true
 allowed_write_paths = ["py/**", "rs/**", "docs/**", "prompts/**", "schemas/**", "configs/**", "eval/**", "scripts/**", ".github/**"]
 
 [runner]
-base_url = "http://127.0.0.1:8088"
+base_url = "http://runner:8088"
 root_dir = "."
 
 [mcp]
@@ -57,7 +57,7 @@ db_path = "artifacts/checkpoints/langgraph.sqlite"
 namespace = "main"
 thread_prefix = "lg-orch"
 backend = "redis"
-redis_url = "redis://localhost:6379/0"
+redis_url = "redis://redis:6379/0"  # override via LG_CHECKPOINT_REDIS_URL env var for custom endpoints
 postgres_dsn = ""
 redis_ttl_seconds = 86400
 

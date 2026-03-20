@@ -128,6 +128,17 @@ impl McpStdioClient {
             ));
         }
 
+        // Security: MCP server commands must pass the same allowlist as exec tool calls.
+        let bin_name = std::path::Path::new(command)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(command);
+        if !crate::config::ALLOWED_EXEC_COMMANDS.contains(&bin_name) {
+            return Err(ApiError::Forbidden(
+                "mcp server command not in allowlist".to_string(),
+            ));
+        }
+
         let mut cmd = Command::new(command);
         cmd.args(&server.args)
             .stdin(std::process::Stdio::piped())
