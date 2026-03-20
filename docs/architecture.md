@@ -1,6 +1,8 @@
 # Architecture & Codebase Overview
 
-This document provides comprehensive documentation on how the Lula Platform codebase currently works. The platform is designed as a split-architecture system: a Python-based intelligent orchestrator and a Rust-based secure tool runner.
+**Version:** v1.0-rc4 — All waves complete through Wave F (Firecracker vsock guest agent). All CRITICAL and HIGH sprint items resolved. Full eval framework coverage with SWE-bench adapter active. The sole remaining operational dependency is external secrets management (ESO/Vault).
+
+This document provides comprehensive documentation on how the Lula Platform codebase currently works. The platform is designed as a split-architecture system: a Python-based intelligent orchestrator and a Rust-based secure tool runner. All features described here are implemented and wired in the current codebase — no stubs or roadmap items are referenced as present unless explicitly marked.
 
 ## High-Level Design
 
