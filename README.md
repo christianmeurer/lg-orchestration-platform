@@ -232,6 +232,27 @@ Full technical detail for each wave is in [`docs/sota_2026_plan.md`](docs/sota_2
 
 ---
 
+## Technical Debt Backlog
+
+The following items are tracked for resolution in upcoming waves. See [`docs/quality_report.md`](docs/quality_report.md) for full diagnostic detail on each item.
+
+| Priority | Item | File(s) | Target Wave | Description |
+|---|---|---|---|---|
+| High | Typed graph state migration | [`py/src/lg_orch/graph.py`](py/src/lg_orch/graph.py), [`py/src/lg_orch/state.py`](py/src/lg_orch/state.py) | Wave 14 | Replace `StateGraph(dict)` with `StateGraph(OrchState)` using typed reducers. Pydantic schema currently documents intent but is not enforced at the graph boundary — dict key typos produce silent `None` values. |
+| High | Eval golden file enforcement | [`eval/run.py`](eval/run.py) | Wave 14 | `score_task()` does not load golden JSON files. The golden assertion system (`eq`, `lte`, `gte`, `in`, `contains`) is documentation only. Must be enforced in `score_task()` to catch outcome-correctness regressions. |
+| High | Automated CI → registry → deploy pipeline | [`.github/workflows/`](.github/workflows/) | Wave 14 | No workflow builds, pushes, or deploys images on CI green. All production deployments are manual `do_deploy.sh` invocations. Requires: Docker build+push job, trivy image scan, manifest SHA-tag update. |
+| High | Image digest pinning | [`infra/k8s/deployment.yaml`](infra/k8s/deployment.yaml), [`infra/k8s/runner-deployment.yaml`](infra/k8s/runner-deployment.yaml) | Wave 14 | All manifests use `:latest`. Any registry push silently deploys. Replace with SHA-pinned or semver-tagged image references managed by ArgoCD Image Updater. |
+| Medium | `planner.py` decomposition | [`py/src/lg_orch/nodes/planner.py`](py/src/lg_orch/nodes/planner.py) | Wave 15 | 835-line file mixes intent classification, LLM prompt construction, memory ranking, schema validation, and fallback planning. Decompose into: `_prompt_builder.py`, `_memory_scorer.py`, and a thin `planner.py` orchestrator. |
+| Medium | Firecracker API integration | [`rs/runner/src/tools/exec.rs`](rs/runner/src/tools/exec.rs), [`rs/runner/src/sandbox.rs`](rs/runner/src/sandbox.rs) | Wave 15 | `MicroVmEphemeral` backend invokes `firecracker` binary via CLI flags, not the Firecracker Unix socket REST API. All deployments silently degrade to `LinuxNamespace`/`SafeFallback`. Requires full Firecracker VMM API integration. |
+| Medium | MCP subprocess connection pooling | [`rs/runner/src/tools/mcp.rs`](rs/runner/src/tools/mcp.rs) | Wave 15 | Each MCP call spawns a fresh subprocess and performs a full handshake. For slow-starting MCP servers this is ≥100ms per call. Implement a per-server connection pool with keep-alive. |
+| Medium | Secrets management (ESO/SOPS) | [`infra/k8s/`](infra/k8s/), `scripts/argocd_bootstrap.sh` | Wave 15 | Secrets are managed via manual `kubectl edit`. No External Secrets Operator, Vault, or SOPS integration. Prevents GitOps of secret values and creates per-cluster manual drift. |
+| Low | `_sla_policy` module-level global refactor | [`py/src/lg_orch/tools/inference_client.py`](py/src/lg_orch/tools/inference_client.py) | Wave 16 | `_sla_policy` is a mutable module-level singleton. Unsafe for multi-tenant deployments and test isolation. Should be passed as a dependency or stored in request context. |
+| Low | Healing loop multi-runner support | [`py/src/lg_orch/healing_loop.py`](py/src/lg_orch/healing_loop.py) | Wave 16 | Healing loop hardcodes `python -m pytest`. No support for `cargo test`, `npm test`, `go test`, or other runners. Extend to detect project type and dispatch to the correct runner. |
+| Low | ArgoCD image updater + sync windows | [`infra/k8s/argocd-app.yaml`](infra/k8s/argocd-app.yaml) | Wave 16 | Every `main` push deploys immediately. Add ArgoCD Image Updater for automated tag promotion, and sync windows for production change-freeze periods. |
+| Low | `DefaultHasher` in indexing | [`rs/runner/src/indexing.rs`](rs/runner/src/indexing.rs) | Wave 16 | `DefaultHasher` used for SQLite path derivation is non-stable across Rust versions. Replace with FNV1a or another fixed-output hash algorithm to prevent index orphaning after compiler upgrades. |
+
+---
+
 ## Known Limitations
 
 The following gaps are tracked and scheduled for remediation. They do not affect the correctness of the current orchestration or execution paths but represent engineering debt or documented deviations between specification and runtime behavior.
