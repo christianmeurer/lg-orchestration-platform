@@ -6,8 +6,10 @@ import fnmatch
 import json
 from typing import Any
 
+from pydantic import BaseModel
+
 from lg_orch.logging import get_logger
-from lg_orch.memory import ensure_history_policy, prune_pre_verification_history
+from lg_orch.memory import _state_to_dict, ensure_history_policy, prune_pre_verification_history
 from lg_orch.model_routing import tool_routing_metadata
 from lg_orch.nodes._utils import validate_base_url as _validate_base_url_fn
 from lg_orch.tools import RunnerClient
@@ -164,7 +166,9 @@ def _path_matches_allowlist(path: str, allowed_write_paths: tuple[str, ...]) -> 
     return any(fnmatch.fnmatch(normalized, pattern) for pattern in allowed_write_paths)
 
 
-def executor(state: dict[str, Any]) -> dict[str, Any]:
+def executor(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
+    if isinstance(state, BaseModel):
+        state = _state_to_dict(state)
     log = get_logger()
     if bool(state.get("_runner_enabled", True)) is False:
         return state

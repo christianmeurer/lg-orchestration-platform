@@ -8,7 +8,10 @@ import os
 import time
 from typing import Any
 
+from pydantic import BaseModel
+
 from lg_orch.logging import get_logger
+from lg_orch.memory import _state_to_dict
 from lg_orch.remote_api import push_run_event
 from lg_orch.tools import InferenceClient
 from lg_orch.tools.inference_client import InferenceResponse
@@ -239,7 +242,9 @@ def _llm_synthesis(state: dict[str, Any]) -> str | None:
     return response if isinstance(response, str) else response.text
 
 
-def reporter(state: dict[str, Any]) -> dict[str, Any]:
+def reporter(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
+    if isinstance(state, BaseModel):
+        state = _state_to_dict(state)
     log = get_logger()
     state = append_event(state, kind="node", data={"name": "reporter", "phase": "start"})
     try:

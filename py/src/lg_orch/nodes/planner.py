@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import jsonschema  # type: ignore[import-untyped]
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from lg_orch.logging import get_logger
 from lg_orch.memory import (
@@ -147,7 +147,9 @@ def _planner_model_output(
     return PlannerOutput.model_validate(parsed), response
 
 
-def planner(state: dict[str, Any]) -> dict[str, Any]:
+def planner(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
+    if isinstance(state, BaseModel):
+        state = _state_to_dict(state)
     log = get_logger()
     # Typed boundary validation — best-effort; does not change behaviour.
     try:

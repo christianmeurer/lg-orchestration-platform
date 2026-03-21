@@ -6,8 +6,11 @@ import re
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
+
 from lg_orch.logging import get_logger
 from lg_orch.memory import (
+    _state_to_dict,
     build_context_layers,
     ensure_history_policy,
     get_compression_summary,
@@ -307,7 +310,9 @@ def _load_semantic_context(state: dict[str, Any]) -> list[dict[str, Any]]:
         return []
 
 
-def context_builder(state: dict[str, Any]) -> dict[str, Any]:
+def context_builder(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
+    if isinstance(state, BaseModel):
+        state = _state_to_dict(state)
     state = ensure_history_policy(state)
     state = record_model_route(
         state,

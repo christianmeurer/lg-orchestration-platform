@@ -9,9 +9,11 @@ from pathlib import Path
 from typing import Any
 
 import jsonschema  # type: ignore[import-untyped]
+from pydantic import BaseModel
 
 from lg_orch.logging import get_logger
 from lg_orch.memory import (
+    _state_to_dict,
     ensure_history_policy,
     get_compression_summary,
     prune_post_verification_history,
@@ -881,7 +883,9 @@ def _run_verification_calls(
     return [*tool_results, *batch_results], budgets
 
 
-def verifier(state: dict[str, Any]) -> dict[str, Any]:
+def verifier(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
+    if isinstance(state, BaseModel):
+        state = _state_to_dict(state)
     log = get_logger()
     state = ensure_history_policy(state)
     state = record_model_route(

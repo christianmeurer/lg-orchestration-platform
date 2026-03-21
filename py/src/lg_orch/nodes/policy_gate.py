@@ -4,12 +4,17 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel
+
 from lg_orch.logging import get_logger
+from lg_orch.memory import _state_to_dict
 from lg_orch.policy import decide_policy, enforce_loop_budget
 from lg_orch.trace import append_event
 
 
-def policy_gate(state: dict[str, Any]) -> dict[str, Any]:
+def policy_gate(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
+    if isinstance(state, BaseModel):
+        state = _state_to_dict(state)
     log = get_logger()
     state = append_event(state, kind="node", data={"name": "policy_gate", "phase": "start"})
     budgets = dict(state.get("budgets", {}))
