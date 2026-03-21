@@ -166,7 +166,7 @@ def planner(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
     state = record_model_route(
         state,
         node_name="planner",
-        task_class=str(state.get("route", {}).get("task_class", "context_condensation")),
+        task_class=str((state.get("route") or {}).get("task_class", "context_condensation")),
         model_slot="planner",
     )
     state = append_event(state, kind="node", data={"name": "planner", "phase": "start"})
@@ -238,7 +238,7 @@ def planner(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
         telemetry = dict(telemetry_raw) if isinstance(telemetry_raw, dict) else {}
         telemetry["compression_summary"] = get_compression_summary(out)
         out = {**out, "telemetry": telemetry}
-        step_count = len(out.get("plan", {}).get("steps", []))
+        step_count = len((out.get("plan") or {}).get("steps", []))
         out = append_event(
             out,
             kind="node",
@@ -266,7 +266,7 @@ def planner(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
             "plan": fallback_plan,
             "active_handoff": _first_step_handoff(fallback_plan),
         }
-        step_count = len(out.get("plan", {}).get("steps", []))
+        step_count = len((out.get("plan") or {}).get("steps", []))
         out = append_event(
             out,
             kind="node",
