@@ -34,7 +34,7 @@ from urllib.parse import parse_qs, urlsplit
 # ---------------------------------------------------------------------------
 from lg_orch.api.admin import register_admin_routes
 from lg_orch.api.approvals import (
-    approval_token_for_challenge as _approval_token_for_challenge,  # noqa: F401
+    approval_token_for_challenge as _approval_token_for_challenge,
 )
 from lg_orch.api.metrics import LULA_RUNS_TOTAL  # noqa: F401
 from lg_orch.api.metrics import handle_metrics as _handle_metrics
@@ -47,7 +47,7 @@ from lg_orch.api.service import (  # noqa: F401
     _RateLimiter,
     _utc_now,
 )
-from lg_orch.api.streaming import (  # noqa: F401
+from lg_orch.api.streaming import (
     _run_streams,
     _run_streams_lock,
     push_run_event,
@@ -1010,8 +1010,8 @@ __all__ = [
     "_run_streams",
     "_run_streams_lock",
     "_stream_new_sse",
-    "create_app",
     "build_app",
+    "create_app",
     "push_run_event",
     "serve_remote_api",
 ]

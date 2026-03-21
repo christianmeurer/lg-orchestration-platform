@@ -135,7 +135,9 @@ class GCSAuditSink(AuditSink):
 
     async def export(self, event: AuditEvent) -> None:
         try:
-            from google.cloud import storage as gcs  # type: ignore[import-untyped]  # noqa: F401 — import-check only
+            from google.cloud import (
+                storage as gcs,  # type: ignore[import-untyped]  # noqa: F401 — import-check only
+            )
         except ImportError:
             return
 
