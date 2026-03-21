@@ -1,9 +1,8 @@
 [advisories]
-db-urls = ["https://github.com/rustsec/advisory-db"]
-vulnerability = "deny"
-unmaintained = "warn"
-yanked = "deny"
-notice = "warn"
+version = 2
+# All advisories without an explicit ignore entry are denied by default in v2.
+# Add RUSTSEC IDs here only to suppress known false-positives.
+ignore = []
 
 [licenses]
 allow = [
@@ -18,7 +17,9 @@ allow = [
     "CC0-1.0",
     "Zlib",
 ]
-copyleft = "warn"
+# Any license not in the allow list above is denied.
+# Copyleft licenses (GPL, LGPL, AGPL, MPL, etc.) are therefore blocked.
+deny = []
 confidence-threshold = 0.8
 
 [bans]
