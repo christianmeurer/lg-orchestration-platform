@@ -259,8 +259,8 @@ pub fn build_checker(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
     use proptest::prelude::*;
+    use std::path::Path;
 
     // ---------------------------------------------------------------------------
     // Property-based tests
