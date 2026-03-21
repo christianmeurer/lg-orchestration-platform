@@ -21,14 +21,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --version "^0.16"
-
-      - name: Cargo deny check
-        run: cd rs && cargo deny check
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: rs/Cargo.toml
 
   test:
     name: "Tests"
