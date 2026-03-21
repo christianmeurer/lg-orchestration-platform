@@ -31,12 +31,22 @@ RUN apk add --no-cache \
     bash coreutils util-linux e2fsprogs \
     python3 cargo git make
 
+# Minimal directory structure — must come before any COPY into /rootfs
+RUN mkdir -p /rootfs/bin \
+             /rootfs/sbin \
+             /rootfs/lib \
+             /rootfs/lib64 \
+             /rootfs/dev \
+             /rootfs/proc \
+             /rootfs/sys \
+             /rootfs/tmp \
+             /rootfs/etc \
+             /rootfs/var/run \
+             /rootfs/root
+
 # Copy the statically-linked guest agent
 COPY --from=builder /src/target/x86_64-unknown-linux-musl/release/lula-guest-agent /rootfs/sbin/lula-guest-agent
 RUN chmod +x /rootfs/sbin/lula-guest-agent
-
-# Minimal directory structure
-RUN mkdir -p /rootfs/{bin,sbin,lib,lib64,dev,proc,sys,tmp,etc,var/run,root}
 
 # Copy busybox for a minimal shell environment
 RUN cp /bin/busybox /rootfs/bin/busybox
