@@ -28,7 +28,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from lg_orch.logging import get_logger
-from lg_orch.memory import approx_token_count
+from lg_orch.memory import _state_to_dict, approx_token_count
 from lg_orch.model_routing import latest_model_route, record_inference_telemetry, record_model_route
 from lg_orch.nodes._utils import extract_json_block as _extract_json_block_fn
 from lg_orch.nodes._utils import resolve_inference_client
@@ -290,7 +290,8 @@ def router(state: dict[str, Any]) -> dict[str, Any]:
     log = get_logger()
     # Typed boundary validation — best-effort; does not change behaviour.
     try:
-        _validated = OrchState.model_validate({k: v for k, v in state.items() if v is not None})
+        _state_dict = _state_to_dict(state)
+        _validated = OrchState.model_validate({k: v for k, v in _state_dict.items() if v is not None})
     except ValidationError as exc:
         log.warning("router_node received invalid state", validation_errors=str(exc))
         _validated = None

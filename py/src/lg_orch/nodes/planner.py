@@ -29,6 +29,7 @@ from pydantic import ValidationError
 
 from lg_orch.logging import get_logger
 from lg_orch.memory import (
+    _state_to_dict,
     ensure_history_policy,
     get_compression_summary,
     prune_pre_verification_history,
@@ -150,7 +151,8 @@ def planner(state: dict[str, Any]) -> dict[str, Any]:
     log = get_logger()
     # Typed boundary validation — best-effort; does not change behaviour.
     try:
-        _validated = OrchState.model_validate({k: v for k, v in state.items() if v is not None})
+        _state_dict = _state_to_dict(state)
+        _validated = OrchState.model_validate({k: v for k, v in _state_dict.items() if v is not None})
     except ValidationError as exc:
         log.warning("planner_node received invalid state", validation_errors=str(exc))
         _validated = None

@@ -45,7 +45,7 @@ def _state_to_dict(state: object) -> dict[str, Any]:
     """Convert a Pydantic model or dict to a plain dict."""
     if isinstance(state, BaseModel):
         d: dict[str, Any] = {}
-        for field in state.model_fields:
+        for field in type(state).model_fields:
             d[field] = getattr(state, field, None)
         if hasattr(state, "model_extra") and state.model_extra:
             d.update(state.model_extra)
