@@ -6,6 +6,8 @@ import json
 from hashlib import sha256
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel
+
 if TYPE_CHECKING:
     from lg_orch.long_term_memory import LongTermMemoryStore
 
@@ -26,6 +28,31 @@ _CONTEXT_BUDGET_DEFAULTS: dict[str, int] = {
 _COMPRESSION_PROVENANCE_VERSION = 1
 
 HistoryPolicy = dict[str, int]
+
+
+def _state_get(state: object, key: str, default: object = None) -> object:
+    """Safely access a field from either a Pydantic BaseModel or a plain dict."""
+    if isinstance(state, BaseModel):
+        if hasattr(state, "model_extra") and state.model_extra and key in state.model_extra:
+            return state.model_extra[key]
+        return getattr(state, key, default)
+    if isinstance(state, dict):
+        return state.get(key, default)
+    return default
+
+
+def _state_to_dict(state: object) -> dict[str, Any]:
+    """Convert a Pydantic model or dict to a plain dict."""
+    if isinstance(state, BaseModel):
+        d: dict[str, Any] = {}
+        for field in state.model_fields:
+            d[field] = getattr(state, field, None)
+        if hasattr(state, "model_extra") and state.model_extra:
+            d.update(state.model_extra)
+        return d
+    if isinstance(state, dict):
+        return dict(state)
+    return {}
 
 
 def _as_int(value: object, *, default: int, minimum: int, maximum: int) -> int:
@@ -69,15 +96,15 @@ def _normalize_history_policy(raw: dict[str, Any]) -> HistoryPolicy:
     }
 
 
-def _tool_results(state: dict[str, Any]) -> list[dict[str, Any]]:
-    raw = state.get("tool_results", [])
+def _tool_results(state: object) -> list[dict[str, Any]]:
+    raw = _state_get(state, "tool_results", [])
     if not isinstance(raw, list):
         return []
     return [entry for entry in raw if isinstance(entry, dict)]
 
 
-def _provenance(state: dict[str, Any]) -> list[dict[str, Any]]:
-    raw = state.get("provenance", [])
+def _provenance(state: object) -> list[dict[str, Any]]:
+    raw = _state_get(state, "provenance", [])
     if not isinstance(raw, list):
         return []
     return [entry for entry in raw if isinstance(entry, dict)]
@@ -89,8 +116,8 @@ def approx_token_count(text: str) -> int:
     return max(1, (len(text) + 3) // 4)
 
 
-def context_budget_settings(state: dict[str, Any]) -> dict[str, int]:
-    raw = state.get("_budget_context", {})
+def context_budget_settings(state: object) -> dict[str, int]:
+    raw = _state_get(state, "_budget_context", {})
     src = raw if isinstance(raw, dict) else {}
     return {
         "stable_prefix_tokens": _as_int(
@@ -338,7 +365,9 @@ def build_context_layers(
 
     # --- long-term memory injection ---
     if long_term is not None:
-        task_text = str(state.get("task", state.get("request", ""))).strip()
+        task_text = str(
+            _state_get(state, "task", _state_get(state, "request", ""))
+        ).strip()
         if task_text:
             lt_content = long_term.retrieve_for_context(task_text, max_tokens=1000)
             if lt_content.strip():
@@ -368,10 +397,10 @@ def build_context_layers(
 
     # Store episodes for any finalized loop summaries when long_term is provided
     if long_term is not None:
-        run_id_raw = state.get("run_id", "")
+        run_id_raw = _state_get(state, "run_id", "")
         run_id = str(run_id_raw).strip() if run_id_raw else ""
         if run_id:
-            loop_summaries_raw = state.get("loop_summaries", [])
+            loop_summaries_raw = _state_get(state, "loop_summaries", [])
             loop_summaries_list = loop_summaries_raw if isinstance(loop_summaries_raw, list) else []
             for entry in loop_summaries_list:
                 if not isinstance(entry, dict):
@@ -421,16 +450,16 @@ def build_context_layers(
     if mcp_recovery_hints:
         stable_segments.append(("mcp_recovery_hints", mcp_recovery_hints))
 
-    verification_raw = state.get("verification", {})
+    verification_raw = _state_get(state, "verification", {})
     verification = dict(verification_raw) if isinstance(verification_raw, dict) else {}
-    recovery_packet_raw = state.get("recovery_packet", verification.get("recovery_packet", {}))
+    recovery_packet_raw = _state_get(state, "recovery_packet", verification.get("recovery_packet", {}))
     recovery_packet = dict(recovery_packet_raw) if isinstance(recovery_packet_raw, dict) else {}
-    plan_raw = state.get("plan", {})
+    plan_raw = _state_get(state, "plan", {})
     plan = dict(plan_raw) if isinstance(plan_raw, dict) else {}
-    facts_raw = state.get("facts", [])
+    facts_raw = _state_get(state, "facts", [])
     facts = facts_raw if isinstance(facts_raw, list) else []
     fact_pack = _fact_pack([fact for fact in facts if isinstance(fact, dict)])
-    loop_summaries_raw = state.get("loop_summaries", [])
+    loop_summaries_raw = _state_get(state, "loop_summaries", [])
     loop_summaries = loop_summaries_raw if isinstance(loop_summaries_raw, list) else []
 
     recent_tool_summaries = [
@@ -614,7 +643,7 @@ def record_compression_provenance(
             "working_set_decisions": working_decisions[:5],
         }
     )
-    return {**state, "provenance": provenance[-20:]}
+    return {**_state_to_dict(state), "provenance": provenance[-20:]}
 
 
 def get_compression_summary(state: dict[str, Any]) -> dict[str, Any]:
@@ -644,18 +673,19 @@ def get_compression_summary(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def ensure_history_policy(state: dict[str, Any]) -> dict[str, Any]:
-    policy_raw = state.get("history_policy", {})
+def ensure_history_policy(state: object) -> dict[str, Any]:
+    policy_raw = _state_get(state, "history_policy", {})
     policy_src = policy_raw if isinstance(policy_raw, dict) else {}
     normalized = _normalize_history_policy(policy_src)
+    state_dict = _state_to_dict(state)
     if policy_src == normalized:
-        return state
-    return {**state, "history_policy": normalized}
+        return state_dict
+    return {**state_dict, "history_policy": normalized}
 
 
-def prune_pre_verification_history(state: dict[str, Any]) -> dict[str, Any]:
-    state = ensure_history_policy(state)
-    policy = state.get("history_policy", {})
+def prune_pre_verification_history(state: object) -> dict[str, Any]:
+    state_dict: dict[str, Any] = ensure_history_policy(state)
+    policy = state_dict.get("history_policy", {})
     if not isinstance(policy, dict):
         return state
 
@@ -666,13 +696,13 @@ def prune_pre_verification_history(state: dict[str, Any]) -> dict[str, Any]:
         maximum=500,
     )
 
-    tool_results = _tool_results(state)
+    tool_results = _tool_results(state_dict)
     if len(tool_results) <= retain_recent:
-        return state
+        return state_dict
 
     dropped = len(tool_results) - retain_recent
     kept = tool_results[-retain_recent:]
-    provenance = _provenance(state)
+    provenance = _provenance(state_dict)
     provenance.append(
         {
             "event": "tool_result_window_trim",
@@ -681,28 +711,28 @@ def prune_pre_verification_history(state: dict[str, Any]) -> dict[str, Any]:
             "kept": retain_recent,
         }
     )
-    return {**state, "tool_results": kept, "provenance": provenance}
+    return {**state_dict, "tool_results": kept, "provenance": provenance}
 
 
-def prune_post_verification_history(state: dict[str, Any]) -> dict[str, Any]:
-    state = ensure_history_policy(state)
-    verification = state.get("verification", {})
+def prune_post_verification_history(state: object) -> dict[str, Any]:
+    state_dict: dict[str, Any] = ensure_history_policy(state)
+    verification = state_dict.get("verification", {})
     if not isinstance(verification, dict):
-        return state
+        return state_dict
     if bool(verification.get("ok", False)) is not True:
-        return state
+        return state_dict
 
-    tool_results = _tool_results(state)
+    tool_results = _tool_results(state_dict)
     has_verified_apply_patch = any(
         str(result.get("tool", "")).strip() == "apply_patch" and bool(result.get("ok", False))
         for result in tool_results
     )
     if not has_verified_apply_patch:
-        return state
+        return state_dict
 
-    policy = state.get("history_policy", {})
+    policy = state_dict.get("history_policy", {})
     if not isinstance(policy, dict):
-        return state
+        return state_dict
     threshold = _as_int(
         policy.get("read_file_prune_threshold_chars"),
         default=_HISTORY_POLICY_DEFAULTS["read_file_prune_threshold_chars"],
@@ -711,7 +741,7 @@ def prune_post_verification_history(state: dict[str, Any]) -> dict[str, Any]:
     )
 
     updated: list[dict[str, Any]] = []
-    provenance = _provenance(state)
+    provenance = _provenance(state_dict)
     pruned_any = False
 
     for index, result in enumerate(tool_results):
@@ -755,8 +785,8 @@ def prune_post_verification_history(state: dict[str, Any]) -> dict[str, Any]:
         updated.append(result)
 
     if not pruned_any:
-        return state
-    return {**state, "tool_results": updated, "provenance": provenance}
+        return state_dict
+    return {**state_dict, "tool_results": updated, "provenance": provenance}
 
 
 __all__ = [
