@@ -261,6 +261,8 @@ def test_planner_schema_real_valid_plan_passes() -> None:
         ],
         "verification": [],
         "rollback": "No changes made.",
+        "acceptance_criteria": ["The task completes successfully."],
+        "max_iterations": 3,
     }
     # Must not raise
     jsonschema.validate(instance=valid_plan, schema=PLANNER_SCHEMA)
