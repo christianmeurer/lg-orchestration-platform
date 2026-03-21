@@ -344,7 +344,7 @@ mod tests {
         std::fs::create_dir_all(inner.parent().unwrap()).unwrap();
         std::fs::write(&inner, "x").unwrap();
 
-        let mut req = make_req(&td.path().to_path_buf());
+        let mut req = make_req(td.path());
         req.path = Some(inner);
         assert!(PathConfinementInvariant.check(&req).is_ok());
     }
@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn test_path_confinement_rejects_traversal() {
         let td = tempfile::tempdir().unwrap();
-        let mut req = make_req(&td.path().to_path_buf());
+        let mut req = make_req(td.path());
         // Constructed path that lexically escapes root
         req.path = Some(td.path().join("../../etc/passwd"));
         assert!(PathConfinementInvariant.check(&req).is_err());
