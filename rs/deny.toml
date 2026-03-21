@@ -19,7 +19,6 @@ allow = [
 ]
 # Any license not in the allow list above is denied.
 # Copyleft licenses (GPL, LGPL, AGPL, MPL, etc.) are therefore blocked.
-deny = []
 confidence-threshold = 0.8
 
 [bans]
