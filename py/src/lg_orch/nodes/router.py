@@ -25,7 +25,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from lg_orch.logging import get_logger
 from lg_orch.memory import _state_to_dict, approx_token_count
@@ -58,8 +58,6 @@ def _classify_intent(request: str) -> str:
 
 
 def _default_route(state: dict[str, Any]) -> RouterDecision:
-    if isinstance(state, BaseModel):
-        state = _state_to_dict(state)
     request = str(state.get("request", "")).strip()
     intent = _classify_intent(request)
     verification_raw = state.get("verification", {})
@@ -290,8 +288,6 @@ def _router_model_output(
 
 def router(state: dict[str, Any]) -> dict[str, Any]:
     log = get_logger()
-    if isinstance(state, BaseModel):
-        state = _state_to_dict(state)
     # Typed boundary validation — best-effort; does not change behaviour.
     try:
         _state_dict = _state_to_dict(state)
