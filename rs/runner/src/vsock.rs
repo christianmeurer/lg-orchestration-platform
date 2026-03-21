@@ -128,14 +128,13 @@ pub async fn send_guest_command(
         )));
     }
 
-    let addr = libc::sockaddr_vm {
-        svm_family: libc::AF_VSOCK as libc::sa_family_t,
-        svm_reserved1: 0,
-        svm_port: port,
-        svm_cid: cid,
-        svm_flags: 0,
-        svm_zero: [0u8; 4],
-    };
+    // SAFETY: sockaddr_vm is a plain C struct; zeroing all bytes is valid.
+    // Using mem::zeroed() + field assignment avoids struct-literal breakage
+    // across libc versions where svm_flags may or may not exist.
+    let mut addr: libc::sockaddr_vm = unsafe { std::mem::zeroed() };
+    addr.svm_family = libc::AF_VSOCK as libc::sa_family_t;
+    addr.svm_port = port;
+    addr.svm_cid = cid;
 
     let ret = unsafe {
         libc::connect(
