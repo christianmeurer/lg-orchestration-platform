@@ -49,9 +49,9 @@ class PlanStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
-    description: str
+    description: str = ""
     tools: list[ToolCall] = Field(default_factory=list)
-    expected_outcome: str
+    expected_outcome: str = ""
     files_touched: list[str] = Field(default_factory=list)
     handoff: AgentHandoff | None = None
 

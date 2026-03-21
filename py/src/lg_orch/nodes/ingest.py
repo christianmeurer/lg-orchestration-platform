@@ -59,8 +59,10 @@ def ingest(state: OrchState | dict[str, Any]) -> dict[str, Any]:
         raw = dict(state)
 
     # Preserve any LangGraph/caller-supplied underscore-prefixed internal keys.
+    # ensure_run_id returns a *partial* dict (either {} or {"_run_id": ...}).
+    # Merge it into internal rather than replacing internal with the partial.
     internal: dict[str, Any] = {k: v for k, v in raw.items() if str(k).startswith("_")}
-    internal = ensure_run_id(internal)
+    internal = {**internal, **ensure_run_id(internal)}
     req = str(raw.get("request", "")).strip()
 
     try:

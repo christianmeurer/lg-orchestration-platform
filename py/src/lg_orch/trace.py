@@ -36,14 +36,20 @@ def _state_get(state: Any, key: str, default: Any = None) -> Any:
 def _state_as_dict(state: Any) -> dict[str, Any]:
     """Convert *state* to a plain dict, preserving extra/model_extra fields.
 
-    Uses ``model_dump()`` rather than ``dict()`` because Pydantic v2's
-    ``dict()`` omits fields stored in ``model_extra``.
+    Uses ``model_dump()`` plus ``model_extra`` so that Pydantic v2 models
+    with ``extra="allow"`` (e.g. :class:`~lg_orch.state.OrchState`) do not
+    silently drop the underscore-prefixed internal keys stored in
+    ``model_extra``.
     """
     try:
         from pydantic import BaseModel  # local import — avoids circular deps
 
         if isinstance(state, BaseModel):
-            return state.model_dump()
+            base = state.model_dump()
+            extra = getattr(state, "model_extra", None)
+            if extra:
+                base.update(extra)
+            return base
     except ImportError:
         pass
     if isinstance(state, dict):
@@ -54,25 +60,37 @@ def _state_as_dict(state: Any) -> dict[str, Any]:
 def ensure_run_id(state: Any) -> dict[str, Any]:
     """Return a partial state update that guarantees ``_run_id`` is set.
 
-    If ``_run_id`` is already present in *state* this returns an empty dict
-    (no update needed).  LangGraph merges partial dicts returned by nodes.
+    Always returns ``{"_run_id": <value>}`` so callers can merge the result
+    unconditionally.  When ``_run_id`` is already present the existing value
+    is returned unchanged; otherwise a fresh UUID hex is generated.
     """
-    if _state_get(state, "_run_id"):
-        return {}
+    existing = _state_get(state, "_run_id")
+    if existing:
+        return {"_run_id": existing}
     return {"_run_id": uuid.uuid4().hex}
 
 
 def append_event(state: Any, *, kind: str, data: dict[str, Any]) -> dict[str, Any]:
-    """Append a trace event and return a *partial* state update for LangGraph.
+    """Append a trace event and return the **full** state dict with the event
+    appended to ``_trace_events``.
 
-    Works whether *state* is an :class:`~lg_orch.state.OrchState` Pydantic
-    model or a plain ``dict``.  Returns only the changed field so LangGraph
-    can merge it without clobbering unrelated state fields.
+    Previously this returned only ``{"_trace_events": events}`` (a partial
+    update).  LangGraph *does* merge partial dicts returned by nodes, but node
+    implementations that do::
+
+        state = append_event(state, ...)
+
+    and then continue to mutate ``state`` would lose all other fields if this
+    function returned a partial dict.  Returning the complete state is safe for
+    both patterns: LangGraph-level merges work on the full dict, and
+    call-site reassignments keep the full state intact.
     """
     existing = _state_get(state, "_trace_events", []) or []
     events = list(existing)
     events.append({"ts_ms": now_ms(), "kind": kind, "data": data})
-    return {"_trace_events": events}
+    full = _state_as_dict(state)
+    full["_trace_events"] = events
+    return full
 
 
 def write_run_trace(*, repo_root: Path, out_dir: Path, state: Any) -> Path:
