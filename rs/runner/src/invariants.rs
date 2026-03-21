@@ -308,7 +308,7 @@ mod tests {
 
     fn root() -> PathBuf {
         let td = tempfile::tempdir().unwrap();
-        td.keep().expect("tempdir keep").1
+        td.keep()
     }
 
     fn make_req(root: &Path) -> InvariantRequest {
