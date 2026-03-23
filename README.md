@@ -1,6 +1,8 @@
 <!-- keywords: agentic coding, LangGraph, Rust, multi-agent, MCP, sandboxed AI, human-in-the-loop, autonomous coding agent, AI code repair, SWE-bench -->
 
-# Lula
+<p align="center">
+  <img src="docs/logo.svg" alt="Lula" width="400">
+</p>
 
 **Production-grade multi-agent coding assistant with a sandboxed Rust execution engine**
 
