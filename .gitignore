@@ -38,3 +38,20 @@ infra/k8s/secrets.yaml
 [.]rooignore
 [.]roomodes
 
+# cache & generated
+*.pyc
+*.pyo
+htmlcov/
+.coverage
+coverage.xml
+*.egg-info/
+dist/
+build/
+py/test_out.txt
+py/test_stderr.txt
+py/test_stdout.txt
+py/mypy_out.txt
+py/mypy_results.txt
+py/_commit_msg.txt
+deploy_output.log
+docs/demo.gif
