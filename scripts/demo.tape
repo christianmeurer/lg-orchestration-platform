@@ -23,14 +23,13 @@ Sleep 1500ms
 # Orchestrator startup
 Type ""
 Sleep 300ms
-Output docs/demo.gif
 
 # Simulated orchestrator output
 Type ""
 Sleep 200ms
 
 # -- Ingest phase --
-SetTypingSpeed 0
+Set TypingSpeed 0ms
 Type "▶ [ingest] Loading repository ../demo-app"
 Enter
 Sleep 400ms
@@ -145,7 +144,7 @@ Type "  └───────────────────────
 Enter
 Sleep 1500ms
 
-SetTypingSpeed 40ms
+Set TypingSpeed 40ms
 Type ""
 Enter
 Sleep 500ms
