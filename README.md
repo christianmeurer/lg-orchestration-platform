@@ -18,6 +18,14 @@ Lula is a LangGraph-based multi-agent coding orchestrator paired with a native R
 
 ---
 
+![Architecture](docs/arch-diagram.svg)
+
+![Isolation Layers](docs/isolation-layers.svg)
+
+> Terminal demo: run `vhs scripts/demo.tape` to generate `docs/demo.gif`
+
+---
+
 ## 📐 Architecture Overview
 
 The system enforces a strict split between reasoning and execution. The Python LangGraph orchestrator drives the full plan/execute/verify/recover loop and never touches the filesystem or spawns subprocesses directly. All tool calls are dispatched over HTTP to the Rust runner, which enforces path boundaries, command allowlists, sandbox isolation, and approval gates before performing any action.

@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 500" width="700" height="500" font-family="'JetBrains Mono','Fira Code',monospace">
+
+  <!-- Layer 1: Node Kernel (outermost) -->
+  <rect x="10" y="10" width="680" height="480" rx="12" fill="#0d1117" stroke="#30363d" stroke-width="2"/>
+  <text x="30" y="40" fill="#e6edf3" font-size="14" font-weight="bold">Node Kernel</text>
+  <text x="30" y="58" fill="#8b949e" font-size="10">host OS, full syscall surface</text>
+
+  <!-- Layer 2: gVisor pod / runsc -->
+  <rect x="40" y="75" width="620" height="395" rx="10" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+  <text x="60" y="102" fill="#e6edf3" font-size="13" font-weight="bold">gVisor pod / runsc</text>
+  <text x="60" y="120" fill="#8b949e" font-size="10">user-space kernel, intercepts all syscalls</text>
+
+  <!-- Layer 3: Firecracker microVM -->
+  <rect x="70" y="140" width="560" height="310" rx="10" fill="#1c2128" stroke="#30363d" stroke-width="1.5"/>
+  <text x="90" y="168" fill="#e6edf3" font-size="13" font-weight="bold">Firecracker microVM</text>
+  <text x="90" y="186" fill="#8b949e" font-size="10">dedicated kernel, virtio-vsock, 128 MB RAM cap</text>
+
+  <!-- Layer 4: Guest Agent allowlist -->
+  <rect x="100" y="205" width="500" height="225" rx="10" fill="#21262d" stroke="#30363d" stroke-width="1.5"/>
+  <text x="120" y="233" fill="#e6edf3" font-size="13" font-weight="bold">Guest Agent allowlist</text>
+  <text x="120" y="251" fill="#8b949e" font-size="10">binary allowlist: uv, python, pytest, cargo, git</text>
+  <text x="120" y="267" fill="#8b949e" font-size="10">path confinement, env_clear(), HMAC validation</text>
+
+  <!-- Layer 5: Tool Execution (innermost) -->
+  <rect x="150" y="290" width="400" height="115" rx="10" fill="#238636" stroke="#3fb950" stroke-width="2"/>
+  <text x="350" y="338" fill="#3fb950" font-size="16" font-weight="bold" text-anchor="middle">Tool Execution</text>
+  <text x="350" y="362" fill="#e6edf3" font-size="11" text-anchor="middle">read_file | write_file | exec | apply_patch</text>
+  <text x="350" y="380" fill="#e6edf3" font-size="11" text-anchor="middle">sandboxed, audited, reversible</text>
+
+</svg>
