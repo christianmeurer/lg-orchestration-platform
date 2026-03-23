@@ -48,12 +48,26 @@ impl Default for CgroupLimits {
     }
 }
 
-/// Write `value` to `path`, treating `NotFound` and `PermissionDenied` as
-/// graceful no-ops (cgroup v2 not mounted or not running as root).
+/// Write `value` to a cgroup v2 control file at `path`.
+///
+/// `NotFound` and `PermissionDenied` are treated as **graceful no-ops** so
+/// that the same compiled binary works unchanged across three environments:
+///
+/// - **dev laptops** — cgroupfs is typically not mounted (or is v1),
+///   resulting in `NotFound`.
+/// - **restricted CI** — the runner process is unprivileged, resulting in
+///   `PermissionDenied`.
+/// - **prod** — the process runs as root inside a cgroup v2 hierarchy and
+///   writes succeed normally.
+///
+/// This avoids the need for compile-time feature flags or a separate
+/// configuration toggle to opt out of cgroup enforcement.
 fn write_cgroup_file(path: &str, value: &str) -> Result<(), SandboxError> {
     match std::fs::write(path, value) {
         Ok(()) => Ok(()),
         Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::PermissionDenied) => {
+            // Silently succeed — the caller treats missing/unwritable control
+            // files as "limits not enforced" rather than a fatal condition.
             tracing::warn!(path = %path, kind = ?e.kind(), "cgroup file write skipped (not root or cgroup v2 not mounted)");
             Ok(())
         }
@@ -61,12 +75,31 @@ fn write_cgroup_file(path: &str, value: &str) -> Result<(), SandboxError> {
     }
 }
 
-/// Create cgroup v2 resource limits for `cgroup_name` and move `pid` into it.
+/// Apply cgroup v2 resource limits for a sandboxed task.
 ///
-/// The cgroup is created under `/sys/fs/cgroup/lula-runner/{cgroup_name}/`.
-/// When the cgroup filesystem is not accessible (not root, not mounted) the
-/// function logs a warning and returns `Ok(())` — execution continues without
-/// resource limits applied.
+/// Creates a dedicated cgroup under `/sys/fs/cgroup/lula-runner/{cgroup_name}/`,
+/// writes resource-control knobs, and migrates `pid` into the new cgroup.
+///
+/// # Graceful no-op behaviour
+///
+/// The function is intentionally **best-effort**: if the cgroup v2 filesystem
+/// is not mounted (`NotFound`) or the process lacks privileges
+/// (`PermissionDenied`), each failing step logs a warning and the function
+/// returns `Ok(())`.  This design lets the exact same binary run in three
+/// very different environments without compile-time feature flags or a
+/// runtime configuration switch:
+///
+/// | Environment    | Outcome                                      |
+/// |----------------|----------------------------------------------|
+/// | Dev laptop     | cgroupfs absent — limits silently skipped     |
+/// | Restricted CI  | unprivileged user — limits silently skipped   |
+/// | Production     | root + cgroupfs v2 — limits fully applied     |
+///
+/// Returning `Ok(())` on write failure (rather than propagating the error)
+/// ensures the runner can still execute the task without resource isolation
+/// instead of aborting the entire request.  The tracing warning emitted by
+/// [`write_cgroup_file`] allows operators to detect the degraded state in
+/// logs without treating it as fatal.
 pub fn apply_cgroup_v2_limits(
     cgroup_name: &str,
     limits: &CgroupLimits,
@@ -74,6 +107,9 @@ pub fn apply_cgroup_v2_limits(
 ) -> Result<(), SandboxError> {
     let cgroup_dir = format!("/sys/fs/cgroup/lula-runner/{cgroup_name}");
 
+    // Attempt to create the cgroup directory.  If cgroupfs is not mounted
+    // or the process is not root, bail out early with Ok(()) — the task
+    // will run without kernel-enforced resource limits.
     match std::fs::create_dir_all(&cgroup_dir) {
         Ok(()) => {}
         Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::PermissionDenied) => {
@@ -89,10 +125,19 @@ pub fn apply_cgroup_v2_limits(
         }
     }
 
+    // memory.max — hard memory ceiling in bytes.  The kernel OOM-kills the
+    // heaviest task in the cgroup when RSS + page-cache exceeds this value.
+    // Default: 512 MiB — enough for most build / test workloads while
+    // preventing a single runaway process from exhausting host memory.
     if let Some(mem) = limits.memory_bytes {
         write_cgroup_file(&format!("{cgroup_dir}/memory.max"), &mem.to_string())?;
     }
 
+    // cpu.max — CFS bandwidth control, written as "$QUOTA $PERIOD" in
+    // microseconds.  The cgroup may consume at most `quota` us of CPU time
+    // in every `period` us window.  Default: "50000 100000" = 50 ms per
+    // 100 ms period, i.e. 50 % of one core.  This prevents a tight loop
+    // from starving the host scheduler while still allowing bursty builds.
     if let Some(quota) = limits.cpu_quota_us {
         write_cgroup_file(
             &format!("{cgroup_dir}/cpu.max"),
@@ -100,10 +145,17 @@ pub fn apply_cgroup_v2_limits(
         )?;
     }
 
+    // pids.max — caps the total number of tasks (threads + processes) the
+    // cgroup may create.  Default: 256.  This mitigates fork-bombs and
+    // runaway thread pools without being so low that a normal `cargo test`
+    // run is blocked.
     if let Some(pids) = limits.pids_max {
         write_cgroup_file(&format!("{cgroup_dir}/pids.max"), &pids.to_string())?;
     }
 
+    // Migrate the target process into the new cgroup by writing its PID to
+    // `cgroup.procs`.  All future children of this process inherit the
+    // cgroup membership and its resource limits.
     write_cgroup_file(&format!("{cgroup_dir}/cgroup.procs"), &pid.to_string())?;
 
     Ok(())

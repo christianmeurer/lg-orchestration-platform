@@ -91,6 +91,26 @@ where
 // ---------------------------------------------------------------------------
 // Linux vsock transport
 // ---------------------------------------------------------------------------
+//
+// # Why raw `libc` fd instead of tokio's built-in stream types?
+//
+// `AF_VSOCK` is a Linux-specific address family for hypervisor ↔ guest
+// communication.  Neither `tokio::net::TcpStream` (AF_INET/AF_INET6) nor
+// `tokio::net::UnixStream` (AF_UNIX) support it — tokio has no native
+// AF_VSOCK abstraction (as of tokio 1.x).  We therefore:
+//
+//   1. Create the socket with `libc::socket(AF_VSOCK, SOCK_STREAM, 0)`.
+//   2. Perform the non-blocking connect dance manually.
+//   3. Wrap the resulting fd into `tokio::net::UnixStream` for async I/O
+//      (see the SAFETY comment at the `from_raw_fd` call for why
+//      `UnixStream` — not `TcpStream` — is the correct wrapper type).
+//
+// # `#[cfg(target_os = "linux")]` gate
+//
+// `AF_VSOCK` only exists on Linux (added in kernel 3.9).  The entire
+// function is gated behind `#[cfg(target_os = "linux")]`; non-Linux
+// targets get a compile-time stub that returns `ApiError::BadRequest`.
+// ---------------------------------------------------------------------------
 
 /// Send a command to the guest agent over an `AF_VSOCK` socket.
 ///
@@ -109,7 +129,10 @@ pub async fn send_guest_command(
 ) -> Result<GuestCommandResponse, ApiError> {
     use std::os::unix::io::{AsRawFd, FromRawFd};
 
-    // Create an AF_VSOCK stream socket.
+    // Create a raw AF_VSOCK stream socket via libc.  We must go through libc
+    // because tokio (and the Rust stdlib) have no AF_VSOCK-aware socket
+    // constructor.  SOCK_CLOEXEC ensures the fd is not leaked to child
+    // processes spawned by the runner.
     let fd = unsafe { libc::socket(libc::AF_VSOCK, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
     if fd < 0 {
         return Err(ApiError::Other(anyhow::anyhow!(
@@ -118,7 +141,11 @@ pub async fn send_guest_command(
         )));
     }
 
-    // Set non-blocking before connect so tokio can await it.
+    // The fd MUST be set to O_NONBLOCK *before* calling connect().  On a
+    // non-blocking socket, connect() returns immediately with errno
+    // EINPROGRESS while the kernel completes the three-way handshake in the
+    // background.  This is essential because we are inside a tokio async
+    // task — a blocking connect() would stall the entire executor thread.
     let ret = unsafe { libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK) };
     if ret < 0 {
         unsafe { libc::close(fd) };
@@ -144,7 +171,10 @@ pub async fn send_guest_command(
         )
     };
 
-    // EINPROGRESS is expected for non-blocking connect.
+    // EINPROGRESS is the *expected* return for a non-blocking connect: it
+    // means the kernel accepted the request and is completing the handshake
+    // asynchronously.  Any other errno is a real failure (e.g. ENODEV when
+    // the vsock transport is not loaded).
     if ret < 0 {
         let errno = unsafe { *libc::__errno_location() };
         if errno != libc::EINPROGRESS {
@@ -156,16 +186,27 @@ pub async fn send_guest_command(
         }
     }
 
-    // SAFETY: fd is a valid AF_VSOCK SOCK_STREAM socket in non-blocking mode.
-    // We use std::os::unix::net::UnixStream (not std::net::TcpStream) so that
-    // the wrapper type contract is honoured — both are SOCK_STREAM fds and
-    // tokio drives them identically via epoll.  Wrapping an AF_VSOCK fd in
-    // TcpStream is UB per TcpStream's documented type contract (AF_INET/6 only).
+    // Convert the raw fd into a tokio-managed async stream.
+    //
+    // SAFETY invariants for `FromRawFd::from_raw_fd` + `from_std`:
+    //   1. `fd` is a valid, open, non-blocking SOCK_STREAM file descriptor.
+    //   2. Ownership is transferred — no other code will close this fd.
+    //   3. The fd has not yet been registered with any other async reactor.
+    //
+    // We wrap the fd in `std::os::unix::net::UnixStream` (AF_UNIX wrapper)
+    // rather than `std::net::TcpStream` (AF_INET/6 wrapper) because:
+    //   - `TcpStream`'s type contract explicitly requires an AF_INET or
+    //     AF_INET6 fd; violating it is undefined behaviour.
+    //   - `UnixStream` wraps a generic SOCK_STREAM fd and tokio drives it
+    //     via epoll readiness — the kernel address family is irrelevant to
+    //     epoll, so AF_VSOCK fds work correctly through this path.
     let std_stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(fd) };
     let stream = tokio::net::UnixStream::from_std(std_stream)
         .map_err(|e| ApiError::Other(anyhow::anyhow!("vsock tokio wrap: {e}")))?;
 
-    // Wait for the non-blocking connect to complete.
+    // Wait for the non-blocking connect to complete.  `writable()` resolves
+    // once epoll signals the fd is write-ready, which coincides with the
+    // connect handshake finishing (successfully or not).
     stream
         .writable()
         .await
@@ -173,6 +214,8 @@ pub async fn send_guest_command(
 
     // Check for connect error via SO_ERROR.  tokio::net::UnixStream does not
     // expose take_error(), so we call getsockopt(SO_ERROR) directly.
+    // A non-zero SO_ERROR means the connect handshake failed (e.g. the guest
+    // agent is not listening on the requested CID:port).
     let mut so_err: libc::c_int = 0;
     let mut so_err_len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
     let gso_ret = unsafe {
@@ -205,6 +248,10 @@ pub async fn send_guest_command(
 }
 
 /// Non-Linux stub — always returns a [`ApiError::BadRequest`].
+///
+/// `AF_VSOCK` is a Linux-only address family (kernel 3.9+); there is no
+/// equivalent on macOS or Windows.  This stub lets the crate compile on all
+/// platforms while clearly signalling that vsock communication requires Linux.
 #[cfg(not(target_os = "linux"))]
 #[allow(dead_code)]
 pub async fn send_guest_command(
