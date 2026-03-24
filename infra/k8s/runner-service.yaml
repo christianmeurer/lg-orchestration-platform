@@ -4,8 +4,8 @@ metadata:
   name: lula-runner
   namespace: lula-orch
 spec:
-  # ClusterIP: runner is internal-only; access via orchestrator pod only
-  type: ClusterIP
+  # LoadBalancer: App Platform uses the external runner URL via LG_RUNNER_BASE_URL.
+  type: LoadBalancer
   selector:
     app: lula-runner
   ports:
