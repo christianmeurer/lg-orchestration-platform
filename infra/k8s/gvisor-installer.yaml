@@ -25,17 +25,8 @@ spec:
           securityContext:
             privileged: true
           volumeMounts:
-            - name: host-usr-local-sbin
-              mountPath: /usr/local/sbin
-            - name: host-etc-containerd
-              mountPath: /etc/containerd
-            - name: host-proc
-              mountPath: /host/proc
-              readOnly: true
-            - name: host-run-systemd
-              mountPath: /run/systemd
-            - name: host-var-run-dbus
-              mountPath: /var/run/dbus
+            - name: host-root
+              mountPath: /host
           command:
             - bash
             - -c
@@ -43,45 +34,32 @@ spec:
               set -euo pipefail
               apt-get update -qq && apt-get install -y -qq curl
               curl -fsSL https://storage.googleapis.com/gvisor/releases/release/latest/x86_64/runsc \
-                -o /usr/local/sbin/runsc
-              chmod 755 /usr/local/sbin/runsc
-              if ! grep -q 'io.containerd.runsc.v1' /etc/containerd/config.toml 2>/dev/null; then
-                cat >> /etc/containerd/config.toml <<'EOF'
+                -o /host/usr/local/sbin/runsc
+              chmod 755 /host/usr/local/sbin/runsc
+              if ! grep -q 'io.containerd.runsc.v1' /host/etc/containerd/config.toml 2>/dev/null; then
+                cat >> /host/etc/containerd/config.toml <<'EOF'
 
                 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
                   runtime_type = "io.containerd.runsc.v1"
               EOF
               fi
-              nsenter --mount=/host/proc/1/ns/mnt -- \
-                chroot /host/proc/1/root /bin/sh -c '
-                  set -eu
-                  if command -v systemctl >/dev/null 2>&1; then
-                    systemctl restart containerd
-                  elif command -v service >/dev/null 2>&1; then
-                    service containerd restart
-                  else
-                    echo "containerd restart requires systemctl or service on the host" >&2
-                    exit 1
-                  fi
-                '
+              chroot /host /bin/sh -c '
+                set -eu
+                if command -v systemctl >/dev/null 2>&1; then
+                  systemctl restart containerd
+                elif command -v service >/dev/null 2>&1; then
+                  service containerd restart
+                else
+                  echo "containerd restart requires systemctl or service on the host" >&2
+                  exit 1
+                fi
+              '
       containers:
         - name: pause
           image: gcr.io/pause:3.9
           command: ["/pause"]
       volumes:
-        - name: host-usr-local-sbin
+        - name: host-root
           hostPath:
-            path: /usr/local/sbin
-        - name: host-etc-containerd
-          hostPath:
-            path: /etc/containerd
-        - name: host-proc
-          hostPath:
-            path: /proc
+            path: /
             type: Directory
-        - name: host-run-systemd
-          hostPath:
-            path: /run/systemd
-        - name: host-var-run-dbus
-          hostPath:
-            path: /var/run/dbus
