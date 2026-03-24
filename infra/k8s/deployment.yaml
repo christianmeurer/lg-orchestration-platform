@@ -39,7 +39,7 @@ spec:
         - name: lula-orch
           # Image tag is managed by .github/workflows/release.yml on every v* tag push.
           # To manually override: kubectl set image deployment/lula-orch lula-orch=<image>@<digest>
-          image: registry.digitalocean.com/lula-registry/lula:latest
+          image: registry.digitalocean.com/lula-orch/lula-orch:latest
           ports:
             - containerPort: 8001
           env:
