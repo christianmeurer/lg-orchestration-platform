@@ -37,6 +37,9 @@ services:
       - key: MODEL_ACCESS_KEY
         scope: RUN_TIME
         type: SECRET
+      - key: LG_CHECKPOINT_REDIS_URL
+        scope: RUN_TIME
+        type: SECRET
       # Model routing — combined image starts runner internally at 127.0.0.1:8088.
       # For an external k8s runner set LG_RUNNER_BASE_URL to the service URL.
       - key: LG_PLANNER_PROVIDER

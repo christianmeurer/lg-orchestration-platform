@@ -120,7 +120,7 @@ DOKS cluster with two node pools:
 All pods in [`infra/k8s/deployment.yaml`](../infra/k8s/deployment.yaml) and [`infra/k8s/runner-deployment.yaml`](../infra/k8s/runner-deployment.yaml) carry `runtimeClassName: gvisor` and are scheduled onto gVisor nodes.
 
 Persistent services:
-- **DO Managed Redis** — LangGraph checkpoint backend (`[checkpoint] backend = "redis"`, `redis://redis:6379/0`)
+- **DO Managed Valkey** — LangGraph checkpoint backend (keep [`backend = "redis"`](../configs/runtime.prod.toml:59) and [`LG_CHECKPOINT_REDIS_URL`](../README.md:151); Valkey is used as the managed Redis-compatible service)
 - **DO Managed PostgreSQL** — Optional audit trail backend (can use S3 JSONL instead)
 - **DO Load Balancer** — Provisioned automatically by NGINX Ingress Controller
 
@@ -145,7 +145,7 @@ See [Section 7](#7-firecracker-setup-tier-3-addendum) for full Firecracker node 
 | Component | Spec | Cost/mo |
 |---|---|---|
 | Combined image (orch + runner) | `apps-s-1vcpu-1gb` or `s-4vcpu-8gb` Droplet | $5–$48 |
-| Redis | SQLite file checkpoint (dev) or DO Managed Redis 1-node | $0–$15 |
+| Valkey | SQLite file checkpoint (dev) or DO Managed Valkey 1-node | $0–$15 |
 | PostgreSQL | None (SQLite run store) | $0 |
 | **Total** | | **~$5–$63** |
 
@@ -155,7 +155,7 @@ See [Section 7](#7-firecracker-setup-tier-3-addendum) for full Firecracker node 
 |---|---|---|---|---|
 | Orchestrator (`lula-orch`) | 1× `s-2vcpu-4gb` | 2× `s-2vcpu-4gb` | 10 pods via HPA | $24–$240 |
 | Runner (`lula-runner`) | 1× `s-4vcpu-8gb` | 2× `s-4vcpu-8gb` | 20 pods via HPA | $48–$960 |
-| Redis (checkpoint) | `db-s-1vcpu-1gb` | `db-s-1vcpu-1gb` | Single node (AOF+RDB) | $15 |
+| Valkey (checkpoint) | `db-s-1vcpu-1gb` | `db-s-1vcpu-1gb` | Single node (Redis-compatible) | $15 |
 | PostgreSQL (audit) | `db-s-1vcpu-1gb` | `db-s-1vcpu-1gb` | Optional (S3 cheaper) | $15 |
 | DO Load Balancer | 1 LB | 1 LB | — | $12 |
 | DOCR (container registry) | Starter (500 MB) | Basic (5 GB) | — | $0–$5 |
@@ -164,7 +164,7 @@ See [Section 7](#7-firecracker-setup-tier-3-addendum) for full Firecracker node 
 Baseline node cost breakdown:
 - 2× orchestrator nodes `s-2vcpu-4gb` = 2 × $24 = $48/mo
 - 2× runner nodes `s-4vcpu-8gb` = 2 × $48 = $96/mo
-- Redis + PostgreSQL + LB = $42/mo
+- Valkey + PostgreSQL + LB = $42/mo
 - **Baseline: ~$186/mo** (before autoscale)
 
 Pod resource requests (from manifests):
@@ -217,7 +217,7 @@ lula-runner Pods (up to 20 via HPA)
 
 lula-orch Pods
     │  [NetworkPolicy allows egress]
-    ├──▶ Redis :6379 (DO Managed Redis — checkpoint store)
+    ├──▶ Valkey :6379 (DO Managed Valkey — checkpoint store)
     ├──▶ PostgreSQL :5432 (DO Managed PG — audit trail, optional)
     ├──▶ inference.do-ai.run :443 (DO GenAI API)
     ├──▶ api.openai.com :443 (OpenAI fallback)
@@ -248,7 +248,7 @@ lula-runner Pods
 | Egress | To `app: lula-orch` pods (approval back-channel) | TCP 8765 |
 | All other egress | DENIED | — |
 
-The orchestrator has no restrictive NetworkPolicy applied — it uses the cluster default (allow all). For hardened deployments, apply an explicit NetworkPolicy permitting egress to Redis, PostgreSQL, the inference APIs, DNS, and the runner only.
+The orchestrator has no restrictive NetworkPolicy applied — it uses the cluster default (allow all). For hardened deployments, apply an explicit NetworkPolicy permitting egress to Valkey/Redis-compatible checkpoint storage, PostgreSQL, the inference APIs, DNS, and the runner only.
 
 ### TLS
 
@@ -367,7 +367,7 @@ Apply the gVisor installer DaemonSet. It runs a privileged init container on eve
 1. Downloads `runsc` from the official gVisor GCS bucket
 2. Installs it to `/usr/local/sbin/runsc`
 3. Patches `/etc/containerd/config.toml` to register the `runsc` runtime handler
-4. Restarts containerd via `nsenter`
+4. Leaves containerd restart as an out-of-band node operation after init completes
 
 ```bash
 kubectl apply -f infra/k8s/gvisor-installer.yaml
@@ -456,30 +456,36 @@ kubectl create secret docker-registry docr-secret \
 ### Step 8 — Provision Managed Redis
 
 ```bash
-# Create DO Managed Redis (1 vCPU / 1 GB, NYC3)
-doctl databases create lula-redis \
-  --engine redis \
+# Create DO Managed Valkey (1 vCPU / 1 GB, NYC3)
+doctl databases create lula-valkey \
+  --engine valkey \
   --region nyc3 \
   --size db-s-1vcpu-1gb \
   --num-nodes 1 \
-  --version 7
+  --version 8
 
-# Get the connection string (wait until status = online)
-doctl databases get lula-redis --format Name,Status
-doctl databases connection lula-redis --format URI
+# Look up the cluster ID (doctl get/connection require the database ID, not the name)
+DB_ID="$(doctl databases list --format ID,Name --no-header | awk '$2=="lula-valkey" {print $1}')"
+
+# Wait until status = online
+doctl databases get "${DB_ID}" --format Name,Status
+
+# Get the connection string
+doctl databases connection "${DB_ID}" --format URI
 ```
 
-Add the Redis URI as an additional secret:
+Add the Valkey URI as an additional secret. Keep the existing environment variable name [`LG_CHECKPOINT_REDIS_URL`](../README.md:151), because the application still uses the Redis client/backend for Redis-compatible services:
 
 ```bash
-REDIS_URI="$(doctl databases connection lula-redis --format URI --no-header)"
-kubectl create secret generic lula-redis-secret \
+DB_ID="$(doctl databases list --format ID,Name --no-header | awk '$2=="lula-valkey" {print $1}')"
+REDIS_URI="$(doctl databases connection "${DB_ID}" --format URI --no-header)"
+kubectl create secret generic lula-valkey-secret \
   --namespace lula-orch \
   --from-literal=REDIS_URL="${REDIS_URI}" \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-Then patch [`infra/k8s/deployment.yaml`](../infra/k8s/deployment.yaml) to inject `LG_CHECKPOINT_REDIS_URL` from this secret, or override it in the Kubernetes Secret `lula-secrets` directly.
+Then patch [`infra/k8s/deployment.yaml`](../infra/k8s/deployment.yaml) to inject `LG_CHECKPOINT_REDIS_URL` from this secret, or override it in the Kubernetes Secret `lula-secrets` directly. No application code rename is required: keep [`backend = "redis"`](../configs/runtime.prod.toml:59) and [`redis_url`](../configs/runtime.prod.toml:60) because Valkey is consumed through the existing Redis-compatible client path.
 
 The `runtime.prod.toml` checkpoint config:
 
@@ -659,7 +665,7 @@ Additional secrets injected at runtime (not in `secrets.yaml.example` — add ma
 
 | Secret key | Description | How to generate / obtain |
 |---|---|---|
-| `LG_CHECKPOINT_REDIS_URL` | DO Managed Redis connection string | `doctl databases connection lula-redis --format URI` |
+| `LG_CHECKPOINT_REDIS_URL` | DO Managed Valkey connection string (Redis-compatible) | `DB_ID="$(doctl databases list --format ID,Name --no-header | awk '$2=="lula-valkey" {print $1}')" && doctl databases connection "${DB_ID}" --format URI` |
 | `LG_AUTH_JWKS_URL` | JWKS endpoint for RS256 JWT validation | Your IdP (Auth0, Keycloak, Okta, etc.) |
 | `LG_AUTH_SECRET` | HMAC secret for HS256 JWT mode | `openssl rand -hex 32` |
 | `LG_RUNNER_APPROVAL_SECRET` | HMAC-SHA256 key for approval token signing/validation | `openssl rand -hex 32` |
@@ -999,7 +1005,7 @@ doctl kubernetes node-pool update "${DO_CLUSTER_NAME}" default-pool \
 
 LangGraph run state is checkpointed to Redis on every graph node transition. A run that is interrupted mid-execution (pod crash, node eviction, OOM kill) can be resumed from the last checkpoint by resubmitting the same `thread_id`.
 
-Redis AOF+RDB persistence is enabled on DO Managed Redis by default. Point-in-time restore window: 7 days.
+Valkey persistence is enabled on DO Managed Valkey by default. Check the current DO retention and restore guarantees for your selected plan and region at provisioning time.
 
 Checkpoint TTL: `86400` s (24 h) — configurable via `LG_CHECKPOINT_REDIS_TTL_SECONDS`.
 
@@ -1069,7 +1075,7 @@ kubectl -n lula-orch rollout undo deployment/lula-runner
 
 ### Use Spot / Preemptible Nodes for Runner Pool
 
-The runner is stateless at the pod level — run state lives in Redis checkpoints. Runner pods can safely run on DO Spot Droplets (when available) or use DOKS auto-scaling node pools that scale to zero overnight.
+The runner is stateless at the pod level — run state lives in Valkey-backed Redis-compatible checkpoints. Runner pods can safely run on DO Spot Droplets (when available) or use DOKS auto-scaling node pools that scale to zero overnight.
 
 ```bash
 # Add a spot node pool for burst runner capacity

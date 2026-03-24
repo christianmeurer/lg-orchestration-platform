@@ -23,6 +23,7 @@ usage() {
   echo "  DO_REGION                      DigitalOcean region slug (default: nyc3)"
   echo "  DO_K8S_VERSION                 Kubernetes version (default: latest)"
   echo "  DO_APP_ID                      App Platform app ID (to auto-update LG_RUNNER_BASE_URL)"
+  echo "  LG_CHECKPOINT_REDIS_URL        Valkey/Redis checkpoint URI (set this in App Platform)"
   echo ""
   echo "Optional positional argument:"
   echo "  IMAGE_TAG                      Docker image tag (default: latest)"
@@ -167,9 +168,11 @@ open(dst, 'w').write(text)
 PYEOF
   doctl apps update "${DO_APP_ID}" --spec "${PATCHED_APP_SPEC}"
   echo "App Platform updated. Runner URL set to: ${RUNNER_URL}"
+  echo "Make sure App Platform secret LG_CHECKPOINT_REDIS_URL is set to your DO Managed Valkey URI."
 else
   echo "NEXT STEPS:"
   echo "  Set LG_RUNNER_BASE_URL=${RUNNER_URL} in the App Platform environment:"
   echo "    doctl apps update <APP_ID> --spec infra/do/app.yaml"
+  echo "  Set LG_CHECKPOINT_REDIS_URL=<your-valkey-uri> in the same App Platform environment."
   echo "  Or via DO console > App Settings > Environment Variables."
 fi

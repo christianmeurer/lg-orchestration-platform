@@ -47,16 +47,45 @@ Optional environment variables:
   LG_RUNNER_API_KEY             Runner ↔ orchestrator key   (secret)
   MODEL_ACCESS_KEY              Generic model key           (secret)
   DIGITAL_OCEAN_MODEL_ACCESS_KEY  DO GenAI key              (secret)
+  LG_CHECKPOINT_REDIS_URL       Valkey/Redis checkpoint URI (secret)
 
 App Platform note:
-  SECRET env vars (LG_REMOTE_API_BEARER_TOKEN, LG_RUNNER_API_KEY,
-  DIGITAL_OCEAN_MODEL_ACCESS_KEY, MODEL_ACCESS_KEY) are NOT passed via the
-  spec file. Set them via the DO console or with:
-    doctl apps update <APP_ID> --spec infra/do/app.yaml
-  then edit the secrets in the console, or supply them through the
-  DO_* variables and let the script inject them with doctl apps update.
+  Secret env keys are declared in infra/do/app.yaml, but values are not
+  populated automatically for App Platform. Set them via the DO console or with:
+     doctl apps update <APP_ID> --spec infra/do/app.yaml
+  then edit these secrets in the DO console:
+    LG_REMOTE_API_BEARER_TOKEN
+    LG_RUNNER_API_KEY
+    DIGITAL_OCEAN_MODEL_ACCESS_KEY
+    MODEL_ACCESS_KEY
+    LG_CHECKPOINT_REDIS_URL
 EOF
   exit 1
+}
+
+ensure_app_platform_secret_key() {
+  local spec_path="$1"
+  local secret_key="$2"
+
+  if grep -q "key: ${secret_key}" "${spec_path}"; then
+    return 0
+  fi
+
+  python3 - "${spec_path}" "${secret_key}" <<'PYEOF'
+from pathlib import Path
+import sys
+
+spec_path = Path(sys.argv[1])
+secret_key = sys.argv[2]
+text = spec_path.read_text()
+
+anchor = "      - key: MODEL_ACCESS_KEY\n        scope: RUN_TIME\n        type: SECRET\n"
+insert = anchor + f"      - key: {secret_key}\n        scope: RUN_TIME\n        type: SECRET\n"
+
+if anchor in text:
+    text = text.replace(anchor, insert, 1)
+spec_path.write_text(text)
+PYEOF
 }
 
 # ---------------------------------------------------------------------------
@@ -148,6 +177,8 @@ deploy_app_platform() {
       -e "s|tag: .*|tag: ${IMAGE_TAG}|" \
       "${APP_SPEC}" > "${PATCHED_SPEC}"
 
+    ensure_app_platform_secret_key "${PATCHED_SPEC}" "LG_CHECKPOINT_REDIS_URL"
+
     CREATE_OUTPUT="$(doctl apps create --spec "${PATCHED_SPEC}" --format ID --no-header 2>/dev/null || true)"
     APP_ID="${CREATE_OUTPUT//[[:space:]]/}"
 
@@ -178,6 +209,9 @@ deploy_app_platform() {
       -e "s|repository: .*|repository: ${DO_APP_NAME}|" \
       -e "s|tag: .*|tag: ${IMAGE_TAG}|" \
       "${PATCHED_SPEC}"
+
+    ensure_app_platform_secret_key "${PATCHED_SPEC}" "LG_CHECKPOINT_REDIS_URL"
+
     doctl apps update "${APP_ID}" --spec "${PATCHED_SPEC}"
   fi
 
@@ -197,6 +231,7 @@ deploy_app_platform() {
     LG_RUNNER_API_KEY
     DIGITAL_OCEAN_MODEL_ACCESS_KEY
     MODEL_ACCESS_KEY
+    LG_CHECKPOINT_REDIS_URL
 EOF
 
   # Wait briefly then fetch live URL
@@ -243,6 +278,7 @@ deploy_droplet() {
     _RUNNER_KEY_B64="$(_b64 "${LG_RUNNER_API_KEY:-}")"
     _MODEL_KEY_B64="$(_b64 "${MODEL_ACCESS_KEY:-}")"
     _DO_MODEL_KEY_B64="$(_b64 "${DIGITAL_OCEAN_MODEL_ACCESS_KEY:-}")"
+    _CHECKPOINT_REDIS_URL_B64="$(_b64 "${LG_CHECKPOINT_REDIS_URL:-}")"
 
     cat > "${CLOUD_INIT}" <<CLOUDINIT
 #!/usr/bin/env sh
@@ -257,6 +293,7 @@ LG_REMOTE_API_BEARER_TOKEN="\$(printf '%s' '${_BEARER_B64}' | base64 -d)"
 LG_RUNNER_API_KEY="\$(printf '%s' '${_RUNNER_KEY_B64}' | base64 -d)"
 MODEL_ACCESS_KEY="\$(printf '%s' '${_MODEL_KEY_B64}' | base64 -d)"
 DIGITAL_OCEAN_MODEL_ACCESS_KEY="\$(printf '%s' '${_DO_MODEL_KEY_B64}' | base64 -d)"
+LG_CHECKPOINT_REDIS_URL="\$(printf '%s' '${_CHECKPOINT_REDIS_URL_B64}' | base64 -d)"
 
 apt-get update -qq
 apt-get install -y -qq ca-certificates curl docker.io
@@ -282,6 +319,7 @@ if [ -n "\${LG_REMOTE_API_BEARER_TOKEN}" ]; then RUN_ARGS="\${RUN_ARGS} -e LG_RE
 if [ -n "\${LG_RUNNER_API_KEY}" ]; then RUN_ARGS="\${RUN_ARGS} -e LG_RUNNER_API_KEY=\${LG_RUNNER_API_KEY}"; fi
 if [ -n "\${MODEL_ACCESS_KEY}" ]; then RUN_ARGS="\${RUN_ARGS} -e MODEL_ACCESS_KEY=\${MODEL_ACCESS_KEY}"; fi
 if [ -n "\${DIGITAL_OCEAN_MODEL_ACCESS_KEY}" ]; then RUN_ARGS="\${RUN_ARGS} -e DIGITAL_OCEAN_MODEL_ACCESS_KEY=\${DIGITAL_OCEAN_MODEL_ACCESS_KEY}"; fi
+if [ -n "\${LG_CHECKPOINT_REDIS_URL}" ]; then RUN_ARGS="\${RUN_ARGS} -e LG_CHECKPOINT_REDIS_URL=\${LG_CHECKPOINT_REDIS_URL}"; fi
 
 # shellcheck disable=SC2086
 docker run \${RUN_ARGS} "\${IMAGE}"
@@ -353,6 +391,7 @@ CLOUDINIT
     _RUNNER_KEY_B64="$(_b64 "${LG_RUNNER_API_KEY:-}")"
     _MODEL_KEY_B64="$(_b64 "${MODEL_ACCESS_KEY:-}")"
     _DO_MODEL_KEY_B64="$(_b64 "${DIGITAL_OCEAN_MODEL_ACCESS_KEY:-}")"
+    _CHECKPOINT_REDIS_URL_B64="$(_b64 "${LG_CHECKPOINT_REDIS_URL:-}")"
 
     # shellcheck disable=SC2029
     ssh "${SSH_OPTS[@]}" "root@${DROPLET_IP}" "
@@ -367,6 +406,7 @@ LG_REMOTE_API_BEARER_TOKEN=\"\$(printf '%s' '${_BEARER_B64}' | base64 -d)\"
 LG_RUNNER_API_KEY=\"\$(printf '%s' '${_RUNNER_KEY_B64}' | base64 -d)\"
 MODEL_ACCESS_KEY=\"\$(printf '%s' '${_MODEL_KEY_B64}' | base64 -d)\"
 DIGITAL_OCEAN_MODEL_ACCESS_KEY=\"\$(printf '%s' '${_DO_MODEL_KEY_B64}' | base64 -d)\"
+LG_CHECKPOINT_REDIS_URL=\"\$(printf '%s' '${_CHECKPOINT_REDIS_URL_B64}' | base64 -d)\"
 
 docker pull \"\${IMAGE}\"
 docker rm -f \"\${APP_NAME}\" > /dev/null 2>&1 || true
@@ -380,6 +420,7 @@ if [ -n \"\${LG_REMOTE_API_BEARER_TOKEN}\" ]; then RUN_ARGS=\"\${RUN_ARGS} -e LG
 if [ -n \"\${LG_RUNNER_API_KEY}\" ]; then RUN_ARGS=\"\${RUN_ARGS} -e LG_RUNNER_API_KEY=\${LG_RUNNER_API_KEY}\"; fi
 if [ -n \"\${MODEL_ACCESS_KEY}\" ]; then RUN_ARGS=\"\${RUN_ARGS} -e MODEL_ACCESS_KEY=\${MODEL_ACCESS_KEY}\"; fi
 if [ -n \"\${DIGITAL_OCEAN_MODEL_ACCESS_KEY}\" ]; then RUN_ARGS=\"\${RUN_ARGS} -e DIGITAL_OCEAN_MODEL_ACCESS_KEY=\${DIGITAL_OCEAN_MODEL_ACCESS_KEY}\"; fi
+if [ -n \"\${LG_CHECKPOINT_REDIS_URL}\" ]; then RUN_ARGS=\"\${RUN_ARGS} -e LG_CHECKPOINT_REDIS_URL=\${LG_CHECKPOINT_REDIS_URL}\"; fi
 
 docker run \${RUN_ARGS} \"\${IMAGE}\"
 
