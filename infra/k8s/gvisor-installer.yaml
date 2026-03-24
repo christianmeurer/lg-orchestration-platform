@@ -36,6 +36,7 @@ spec:
               curl -fsSL https://storage.googleapis.com/gvisor/releases/release/latest/x86_64/runsc \
                 -o /host/usr/local/sbin/runsc
               chmod 755 /host/usr/local/sbin/runsc
+              ln -sf /usr/local/sbin/runsc /host/usr/local/sbin/containerd-shim-runsc-v1
               if ! grep -q 'io.containerd.runsc.v1' /host/etc/containerd/config.toml 2>/dev/null; then
                 cat >> /host/etc/containerd/config.toml <<'EOF'
 
