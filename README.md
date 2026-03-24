@@ -332,7 +332,7 @@ If you use Lula in your research or work, please cite it:
   title = {Lula — Production-grade multi-agent coding assistant},
   year = {2026},
   url = {https://github.com/christianmeurer/Lula},
-  version = {1.0.0-rc4}
+  version = {1.0.0}
 }
 ```
 
