@@ -52,7 +52,7 @@ spec:
                   runtime_type = "io.containerd.runsc.v1"
               EOF
               fi
-              nsenter --mount=/host/proc/1/ns/mnt --pid=/host/proc/1/ns/pid -- \
+              nsenter --mount=/host/proc/1/ns/mnt -- \
                 chroot /host/proc/1/root /bin/sh -c '
                   set -eu
                   if command -v systemctl >/dev/null 2>&1; then
