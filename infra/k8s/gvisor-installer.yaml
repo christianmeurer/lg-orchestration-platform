@@ -32,7 +32,7 @@ spec:
             - -c
             - |
               set -euo pipefail
-              apt-get update -qq && apt-get install -y -qq curl
+              apt-get update -qq && apt-get install -y -qq curl util-linux
               curl -fsSL https://storage.googleapis.com/gvisor/releases/release/latest/x86_64/runsc \
                 -o /host/usr/local/sbin/runsc
               chmod 755 /host/usr/local/sbin/runsc
@@ -43,17 +43,24 @@ spec:
                   runtime_type = "io.containerd.runsc.v1"
               EOF
               fi
-              chroot /host /bin/sh -c '
-                set -eu
-                if command -v systemctl >/dev/null 2>&1; then
-                  systemctl restart containerd
-                elif command -v service >/dev/null 2>&1; then
-                  service containerd restart
-                else
-                  echo "containerd restart requires systemctl or service on the host" >&2
-                  exit 1
-                fi
-              '
+              containerd_pid=""
+              if [ -f /host/run/containerd/containerd.pid ]; then
+                containerd_pid="$(cat /host/run/containerd/containerd.pid 2>/dev/null || true)"
+              fi
+              if [ -z "${containerd_pid}" ]; then
+                for proc_dir in /host/proc/[0-9]*; do
+                  [ -r "${proc_dir}/comm" ] || continue
+                  if [ "$(cat "${proc_dir}/comm" 2>/dev/null)" = "containerd" ]; then
+                    containerd_pid="${proc_dir#/host/proc/}"
+                    break
+                  fi
+                done
+              fi
+              if [ -z "${containerd_pid}" ]; then
+                echo "containerd process not found on host" >&2
+                exit 1
+              fi
+              nsenter --pid=/host/proc/1/ns/pid -- /bin/sh -ceu 'kill -0 "$1"; kill -TERM "$1"' -- "${containerd_pid}"
       containers:
         - name: pause
           image: gcr.io/pause:3.9
