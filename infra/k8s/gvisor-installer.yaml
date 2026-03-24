@@ -47,7 +47,7 @@ spec:
 
                 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runsc]
                   runtime_type = "io.containerd.runsc.v1"
-                EOF
+              EOF
               fi
               nsenter --mount=/proc/1/ns/mnt -- systemctl restart containerd
       containers:
