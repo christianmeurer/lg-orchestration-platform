@@ -35,6 +35,7 @@ spec:
               apt-get update -qq && apt-get install -y -qq curl util-linux
               curl -fsSL https://storage.googleapis.com/gvisor/releases/release/latest/x86_64/runsc \
                 -o /host/usr/local/sbin/runsc
+              rm -f /host/usr/local/sbin/containerd-shim-runsc-v1
               curl -fsSL https://storage.googleapis.com/gvisor/releases/release/latest/x86_64/containerd-shim-runsc-v1 \
                 -o /host/usr/local/sbin/containerd-shim-runsc-v1
               chmod 755 /host/usr/local/sbin/runsc
