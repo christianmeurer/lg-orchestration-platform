@@ -169,22 +169,61 @@ if [[ -n "${DO_APP_ID}" ]]; then
   echo "Updating App Platform LG_RUNNER_BASE_URL -> ${RUNNER_URL} ..."
   PATCHED_APP_SPEC="$(mktemp --suffix=.yaml)"
   trap "rm -f '${PATCHED_RUNNER_DEPLOY}' '${PATCHED_APP_SPEC}'" EXIT
-  # Inject LG_RUNNER_BASE_URL env var into app spec (append to envs block)
+  # Inject or update LG_RUNNER_BASE_URL in the app spec without relying on a fixed anchor key.
   python3 - "${RUNNER_URL}" infra/do/app.yaml "${PATCHED_APP_SPEC}" <<'PYEOF'
-import sys, re
+from pathlib import Path
+import sys
+
 runner_url, src, dst = sys.argv[1], sys.argv[2], sys.argv[3]
-text = open(src).read()
-# Remove any existing LG_RUNNER_BASE_URL entry
-text = re.sub(
-    r'\s*- key: LG_RUNNER_BASE_URL\n(?:    .*\n)*',
-    '\n',
-    text,
-)
-# Append before last line of envs block (after last env entry before next section)
-inject = f"\n      - key: LG_RUNNER_BASE_URL\n        value: {runner_url}\n"
-# Insert after last env entry
-text = re.sub(r'(\n      - key: LG_ROUTER_MODEL\n        value: .*)', r'\1' + inject, text)
-open(dst, 'w').write(text)
+text = Path(src).read_text(encoding="utf-8")
+
+split = text.split("    envs:\n", 1)
+if len(split) != 2:
+    raise SystemExit("envs section not found in app spec")
+
+prefix, suffix = split
+env_section = suffix
+remainder = ""
+for idx, line in enumerate(suffix.splitlines()):
+    if idx > 0 and line.startswith("    ") and not line.startswith("      "):
+        lines = suffix.splitlines()
+        env_section = "\n".join(lines[:idx]) + "\n"
+        remainder = "\n".join(lines[idx:])
+        if remainder:
+            remainder = remainder + "\n"
+        break
+
+blocks: list[tuple[str, list[str]]] = []
+current_key: str | None = None
+current_block: list[str] = []
+for raw_line in env_section.splitlines():
+    if raw_line.startswith("      - key: "):
+        if current_key is not None:
+            blocks.append((current_key, current_block))
+        current_key = raw_line.split(": ", 1)[1].strip()
+        current_block = [raw_line]
+    elif current_key is not None:
+        current_block.append(raw_line)
+
+if current_key is not None:
+    blocks.append((current_key, current_block))
+
+ordered_keys = [key for key, _ in blocks if key != "LG_RUNNER_BASE_URL"]
+ordered_keys.append("LG_RUNNER_BASE_URL")
+
+updated_blocks: dict[str, list[str]] = {
+    key: block for key, block in blocks if key != "LG_RUNNER_BASE_URL"
+}
+updated_blocks["LG_RUNNER_BASE_URL"] = [
+    "      - key: LG_RUNNER_BASE_URL",
+    f"        value: {runner_url}",
+]
+
+new_env_lines: list[str] = []
+for key in ordered_keys:
+    new_env_lines.extend(updated_blocks[key])
+
+Path(dst).write_text(prefix + "    envs:\n" + "\n".join(new_env_lines) + "\n" + remainder, encoding="utf-8")
 PYEOF
   doctl apps update "${DO_APP_ID}" --spec - < "${PATCHED_APP_SPEC}"
   echo "App Platform updated. Runner URL set to: ${RUNNER_URL}"
