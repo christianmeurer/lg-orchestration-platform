@@ -346,6 +346,8 @@ App Platform is recommended for simplicity (managed TLS, rolling deploys, zero i
 
 ## Quick-start reference
 
+Validation note for this repository change set: the deployment scripts and startup shell wrappers were syntax-checked, and the focused Python/UI tests passed, but local image build validation could not be completed in this workspace because the local Docker daemon was unavailable.
+
 ```sh
 # One-time setup
 doctl auth init
