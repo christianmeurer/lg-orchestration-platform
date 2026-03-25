@@ -239,6 +239,11 @@ EOF
   LIVE_URL="$(doctl apps get "${APP_ID}" --format LiveURL --no-header 2>/dev/null || true)"
   if [[ -n "${LIVE_URL}" ]]; then
     echo "[deploy] remote api: ${LIVE_URL}"
+    if [[ -n "${LG_REMOTE_API_BEARER_TOKEN:-}" ]]; then
+      echo "[deploy] ui: ${LIVE_URL%/}/app/?access_token=${LG_REMOTE_API_BEARER_TOKEN}"
+    else
+      echo "[deploy] ui: ${LIVE_URL%/}/app/"
+    fi
   else
     echo "[deploy] app is deploying; check status with: doctl apps get ${APP_ID}"
   fi
