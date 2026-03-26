@@ -189,10 +189,9 @@ async fn main() -> anyhow::Result<()> {
     // ------------------------------------------------------------------
     // Subscriber: JSON formatter + optional OTel layer
     // ------------------------------------------------------------------
-    let otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
-        .unwrap_or_else(|_| "http://localhost:4317".to_string());
+    let otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
 
-    let maybe_tracer = try_init_otlp(&otlp_endpoint, "lula-runner");
+    let maybe_tracer = otlp_endpoint.as_ref().and_then(|ep| try_init_otlp(ep, "lula-runner"));
 
     let filter = EnvFilter::builder().with_default_directive(Level::INFO.into()).from_env_lossy();
 

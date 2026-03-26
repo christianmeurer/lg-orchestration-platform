@@ -476,7 +476,8 @@ def render_run_viewer_spa(*, api_base_url: str = "", mermaid_graph: str = "") ->
     api_base_url: base URL for API calls (empty = same origin).
     """
     safe_base = api_base_url.rstrip("/")
-    escaped_mermaid = escape(mermaid_graph.strip()) if mermaid_graph else ""
+    # Do not HTML escape before passing to JS string literal, just use raw string
+    raw_mermaid = mermaid_graph.strip() if mermaid_graph else ""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -799,7 +800,7 @@ mermaid.initialize({{ startOnLoad: false, theme: 'dark', darkMode: true,
   themeVariables: {{ background: '#0d1117', primaryColor: '#1f6feb',
     edgeLabelBackground: '#161b22', nodeBorder: '#30363d', lineColor: '#8b949e' }} }});
 window._mermaid = mermaid;
-window._mermaidGraph = {escaped_mermaid!r};
+window._mermaidGraph = {raw_mermaid!r};
 </script>
 
 <script>

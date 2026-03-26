@@ -71,7 +71,7 @@ ensure_app_platform_secret_key() {
     return 0
   fi
 
-  python3 - "${spec_path}" "${secret_key}" <<'PYEOF'
+  python - "${spec_path}" "${secret_key}" <<'PYEOF'
 from pathlib import Path
 import sys
 

@@ -6,13 +6,23 @@
 
 [models.router]
 provider = "digitalocean"
-model = "openai-gpt-4o-mini"
-temperature = 0.0
+model = "anthropic-claude-4.6-sonnet"
+temperature = 1.0
 
 [models.planner]
 provider = "digitalocean"
-model = "openai-gpt-4.1"
-temperature = 0.2
+model = "anthropic-claude-4.6-sonnet"
+temperature = 1.0
+
+[models.coder]
+provider = "digitalocean"
+model = "anthropic-claude-4.6-sonnet"
+temperature = 1.0
+
+[models.reporter]
+provider = "digitalocean"
+model = "anthropic-claude-4.6-sonnet"
+temperature = 1.0
 
 [models.routing]
 local_provider = "local"
@@ -48,7 +58,7 @@ root_dir = "."
 enabled = false
 
 [trace]
-enabled = false
+enabled = true
 output_dir = "artifacts/runs"
 
 [checkpoint]

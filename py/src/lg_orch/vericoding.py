@@ -93,9 +93,13 @@ class PythonInvariantChecker:
             candidate = self._allowed_root / candidate
 
         # Prefer canonical resolution when path exists; fall back to normpath.
-        if candidate.exists():
-            resolved = Path(os.path.realpath(candidate))
-        else:
+        try:
+            if candidate.exists():
+                resolved = Path(os.path.realpath(candidate))
+            else:
+                resolved = Path(os.path.normpath(candidate))
+        except OSError:
+            # Fall back to lexical normalization if permissions prevent stats (e.g., inside uv/cargo caches)
             resolved = Path(os.path.normpath(candidate))
 
         try:

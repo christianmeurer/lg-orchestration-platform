@@ -22,14 +22,44 @@ doctl auth init
 
 ---
 
-## Two deployment targets
+## Deployment Targets
 
-| Target | `DO_DEPLOY_TARGET` | HTTPS | Cost |
+The platform supports multiple deployment strategies depending on your operational maturity and scaling needs:
+
+| Target | Description | HTTPS | Cost |
 |---|---|---|---|
-| App Platform (recommended) | `app` (default) | Automatic (`*.ondigitalocean.app`) | ~$5/mo (Basic) |
-| Droplet | `droplet` | Manual reverse proxy required | ~$6/mo (1 vCPU / 2 GB) or ~$12/mo (2 vCPU / 4 GB) |
+| **Docker Compose** | Fastest local/Droplet startup | Manual reverse proxy | Low / Free |
+| **Helm Chart** | Scalable K8s deployment (simplifies DOKS) | Auto (cert-manager) | Medium/High |
+| **App Platform** | Fully managed DO service (recommended) | Automatic | ~$5/mo |
+| **Droplet** | Manual Docker-based deployment | Manual reverse proxy | ~$6/mo |
 
-Both targets share the same DOCR push step.
+---
+
+## Docker Compose (New/Simplified Local & Droplet)
+
+For a one-command setup without Kubernetes overhead, use the provided `docker-compose.yml`:
+
+```sh
+# Copy .env example or set variables
+export LG_REMOTE_API_BEARER_TOKEN="your-secret"
+docker compose up -d
+```
+This deploys both the orchestrator and the rust runner networked securely together.
+
+---
+
+## Helm Chart Deployment (New/Simplified Kubernetes)
+
+Instead of manually applying 5+ manifests and substituting secrets manually, use the provided Helm chart in `charts/lula/`.
+
+```sh
+# Override values or pass secrets directly
+helm upgrade --install lula ./charts/lula \
+  --namespace lula-orch \
+  --create-namespace \
+  --set secrets.remoteApiBearerToken="your-secret-token" \
+  --set secrets.digitalOceanModelAccessKey="do-model-key"
+```
 
 ---
 

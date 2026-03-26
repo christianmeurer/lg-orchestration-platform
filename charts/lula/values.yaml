@@ -1,0 +1,60 @@
+image:
+  repository: registry.digitalocean.com/lula-registry/lula
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets:
+  - name: docr-secret
+
+# Orchestrator Configuration
+orchestrator:
+  replicaCount: 2
+  profile: "prod"
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  service:
+    type: LoadBalancer
+    port: 80
+
+# Runner Configuration
+runner:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  service:
+    type: ClusterIP
+    port: 8088
+
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: lula.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: lula-tls
+      hosts:
+        - lula.example.com
+
+# Secrets Configuration
+secrets:
+  remoteApiBearerToken: ""
+  runnerApiKey: "dev-insecure"
+  digitalOceanModelAccessKey: ""
+  checkpointRedisUrl: ""
+  checkpointPostgresDsn: ""
+  hmacSecret: ""

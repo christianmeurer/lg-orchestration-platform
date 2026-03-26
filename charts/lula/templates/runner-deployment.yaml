@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lula-runner
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: {{ .Values.runner.replicaCount }}
+  selector:
+    matchLabels:
+      app: lula-runner
+  template:
+    metadata:
+      labels:
+        app: lula-runner
+    spec:
+      runtimeClassName: gvisor
+      nodeSelector:
+        sandbox: gvisor
+      tolerations:
+        - key: sandbox
+          operator: Equal
+          value: gvisor
+          effect: NoSchedule
+      {{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: runner
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/app/rs/target/release/lg-runner", "--bind", "0.0.0.0:8088", "--root-dir", "/app", "--profile", "prod"]
+          ports:
+            - containerPort: 8088
+          envFrom:
+            - secretRef:
+                name: lula-secrets
+          resources:
+            {{- toYaml .Values.runner.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: work-dir
+              mountPath: /workspace
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: work-dir
+          emptyDir: {}

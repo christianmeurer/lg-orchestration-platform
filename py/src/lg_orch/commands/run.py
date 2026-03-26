@@ -235,7 +235,7 @@ def run_command(args: Any, *, cfg: AppConfig, repo_root: Path) -> int:
     if approval_context is not None:
         state["_approval_context"] = approval_context
 
-    out: dict[str, Any] = {}
+    out: dict[str, Any] = dict(state)
     view = str(getattr(args, "view", "classic"))
     if view == "console":
         sys.stdout.write(render_run_header(request=str(args.request), intent=None))

@@ -13,6 +13,7 @@ rs/target/
 vscode-extension/node_modules/
 vscode-extension/out/
 vscode-extension/dist/
+py/src/lg_orch/spa/node_modules/
 **/traces/
 **/checkpoints/
 **/eval_reports/

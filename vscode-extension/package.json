@@ -4,6 +4,10 @@
   "description": "VS Code extension for Lula.",
   "version": "0.1.0",
   "publisher": "lg-orchestration",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/christianmeurer/Lula.git"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -25,8 +29,17 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "lula-sidebar",
+          "title": "Lula",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
     "views": {
-      "explorer": [
+      "lula-sidebar": [
         {
           "id": "orchestratorRuns",
           "name": "Orchestrator Runs"
@@ -161,15 +174,17 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "package": "npm run compile && vsce package",
-    "publish": "npm run compile && vsce publish"
+    "vscode:prepublish": "node esbuild.js --production",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "vsce package",
+    "publish": "vsce publish"
   },
   "devDependencies": {
     "@vscode/vsce": "^3.0.0",
     "@types/node": "^20.14.10",
     "@types/vscode": "^1.90.0",
+    "esbuild": "^0.20.0",
     "typescript": "^5.5.4"
   }
 }

@@ -4,7 +4,7 @@ WORKDIR /app
 
 ARG UV_VERSION=0.7.2
 
-ENV PATH=/root/.local/bin:${PATH} \
+ENV PATH=/home/lula/.local/bin:${PATH} \
     HOME=/home/lula \
     LG_PROFILE=prod \
     LG_REPO_ROOT=/app \
@@ -23,7 +23,7 @@ COPY configs/ ./configs/
 COPY prompts/ ./prompts/
 COPY schemas/ ./schemas/
 
-RUN uv sync --project ./py --python 3.12 --no-dev
+RUN uv sync --project ./py --python 3.12 --no-dev --all-extras
 
 ENV PATH=/app/py/.venv/bin:${PATH}
 

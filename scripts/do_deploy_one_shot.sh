@@ -43,7 +43,7 @@ require_cmd() {
 }
 
 generate_hex_secret() {
-  python3 - <<'PYEOF'
+  python - <<'PYEOF'
 import secrets
 print(secrets.token_hex(32))
 PYEOF
@@ -55,7 +55,7 @@ fi
 
 require_cmd doctl
 require_cmd docker
-require_cmd python3
+require_cmd python
 require_cmd git
 
 DO_APP_NAME="${DO_APP_NAME:-lula-orch}"
@@ -76,7 +76,7 @@ LG_PROFILE="${LG_PROFILE:-prod}"
 discover_model_selection() {
   local models_json
   models_json="$(doctl -o json gradient list-models)"
-  python3 - "$models_json" <<'PYEOF'
+  python - "$models_json" <<'PYEOF'
 import json
 import sys
 
@@ -139,7 +139,7 @@ export LG_ROUTER_MODEL
 
 bash scripts/do_deploy.sh "${IMAGE_TAG}"
 
-APP_ID="$(doctl apps list --format Spec.Name,ID --no-header | python3 - "${DO_APP_NAME}" <<'PYEOF'
+APP_ID="$(doctl apps list --format Spec.Name,ID --no-header | python - "${DO_APP_NAME}" <<'PYEOF'
 import sys
 target = sys.argv[1]
 for raw in sys.stdin:
@@ -159,7 +159,7 @@ PATCHED_SPEC="$(mktemp --suffix=.yaml)"
 trap 'rm -f "${PATCHED_SPEC}"' EXIT
 doctl apps spec get "${APP_ID}" > "${PATCHED_SPEC}"
 
-python3 - "${PATCHED_SPEC}" <<'PYEOF'
+python - "${PATCHED_SPEC}" <<'PYEOF'
 from pathlib import Path
 import os
 import re

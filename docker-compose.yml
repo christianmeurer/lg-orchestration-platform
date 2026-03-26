@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    image: lula-orchestrator
+    ports:
+      - "8001:8001"
+    environment:
+      - PORT=8001
+      - LG_PROFILE=prod
+      - LG_RUNNER_BASE_URL=http://runner:8088
+      - LG_RUNNER_API_KEY=${LG_RUNNER_API_KEY:-dev-insecure}
+      - LG_REMOTE_API_AUTH_MODE=${LG_REMOTE_API_AUTH_MODE:-off}
+      - LG_REMOTE_API_BEARER_TOKEN=${LG_REMOTE_API_BEARER_TOKEN:-}
+      - MODEL_ACCESS_KEY=${MODEL_ACCESS_KEY:-}
+    depends_on:
+      - runner
+    restart: unless-stopped
+    volumes:
+      - ./configs:/app/configs
+      - ./py:/app/py
+
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lula-runner
+    ports:
+      - "8088:8088"
+    environment:
+      - LG_RUNNER_API_KEY=${LG_RUNNER_API_KEY:-dev-insecure}
+      # Fallback to SafeFallback since unshare/microvm requires privileged mode or specific host setups
+      - LG_RUNNER_SANDBOX_BACKEND=fallback
+    restart: unless-stopped
+    volumes:
+      - workspace-data:/workspace
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  workspace-data:

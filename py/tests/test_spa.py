@@ -123,15 +123,15 @@ def test_spa_main_js_returns_js(tmp_path: Path) -> None:
     assert "refreshRunList" in js  # sidebar polling
 
 
-def test_index_html_contains_d3_cdn_script(tmp_path: Path) -> None:
-    """index.html must include the D3 v7 CDN script tag (jsDelivr)."""
+def test_index_html_contains_react_vite_script(tmp_path: Path) -> None:
+    """index.html must include the Vite module script tag for React."""
     spa_dir = Path(__file__).parent.parent / "src" / "lg_orch" / "spa"
     index_path = spa_dir / "index.html"
     if not index_path.exists():
         pytest.skip("spa/index.html not present — skipping test")
 
     html = index_path.read_text(encoding="utf-8")
-    assert "cdn.jsdelivr.net/npm/d3@7" in html, "index.html must load D3 v7 from the jsDelivr CDN"
+    assert 'src="/src/main.tsx"' in html, "index.html must load the React entry point"
 
 
 def test_main_js_uses_force_simulation(tmp_path: Path) -> None:

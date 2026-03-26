@@ -93,9 +93,20 @@ def init_telemetry(
 
     from lg_orch import __version__
 
-    resolved_endpoint = (
-        otlp_endpoint or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") or "http://localhost:4317"
-    )
+    resolved_endpoint = otlp_endpoint or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+    
+    if not resolved_endpoint:
+        # Fall back gracefully: install a no-op provider so downstream code
+        # can still call opentelemetry.trace.get_tracer() without crashing.
+        try:
+            from opentelemetry import trace as otel_trace
+            from opentelemetry.trace import NoOpTracerProvider
+
+            otel_trace.set_tracer_provider(NoOpTracerProvider())
+        except Exception:
+            pass
+        return
+
     lula_env = os.environ.get("LULA_ENV", "dev")
 
     try:
@@ -119,8 +130,7 @@ def init_telemetry(
         provider.add_span_processor(BatchSpanProcessor(exporter))
         otel_trace.set_tracer_provider(provider)
     except Exception:
-        # Fall back gracefully: install a no-op provider so downstream code
-        # can still call opentelemetry.trace.get_tracer() without crashing.
+        # Fallback on initialization error
         try:
             from opentelemetry import trace as otel_trace
             from opentelemetry.trace import NoOpTracerProvider

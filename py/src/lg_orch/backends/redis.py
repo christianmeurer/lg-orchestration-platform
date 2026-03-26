@@ -71,6 +71,7 @@ class RedisCheckpointSaver(BaseCheckpointSaver[Any]):
         ttl_seconds: int = 86400,
     ) -> None:
         try:
+            import redis
             import redis.asyncio as aioredis
         except ImportError as exc:
             raise ImportError(
@@ -81,7 +82,11 @@ class RedisCheckpointSaver(BaseCheckpointSaver[Any]):
         self._redis_url = redis_url
         self._key_prefix = key_prefix
         self._ttl_seconds = ttl_seconds
+        
+        # Async client for aget_tuple, aput, etc.
         self._client: Any = aioredis.from_url(redis_url, decode_responses=False)
+        # Sync client for get_tuple, put, etc. (avoids asyncio.run deadlocks)
+        self._sync_client: Any = redis.from_url(redis_url, decode_responses=False)
 
     # ------------------------------------------------------------------
     # Key helpers
@@ -107,14 +112,40 @@ class RedisCheckpointSaver(BaseCheckpointSaver[Any]):
         return parse_config(config)
 
     # ------------------------------------------------------------------
-    # Sync stubs — not supported; Redis requires async usage
+    # Sync implementation
     # ------------------------------------------------------------------
 
     def get_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
-        raise NotImplementedError(
-            "RedisCheckpointSaver does not support synchronous access. "
-            "Use aget_tuple() with an async runtime."
-        )
+        try:
+            thread_id, checkpoint_ns, checkpoint_id = self._parse_config(config)
+            requested_config: RunnableConfig | None = config if checkpoint_id is not None else None
+
+            if checkpoint_id is None:
+                idx_key = self._idx_key(thread_id, checkpoint_ns)
+                members = self._sync_client.zrevrange(idx_key, 0, 0)
+                if not members:
+                    return None
+                checkpoint_id = (
+                    members[0].decode("utf-8") if isinstance(members[0], bytes) else str(members[0])
+                )
+
+            ckpt_key = self._ckpt_key(thread_id, checkpoint_ns, checkpoint_id)
+            raw = self._sync_client.get(ckpt_key)
+            if raw is None:
+                return None
+
+            data = _deserialize(cast(bytes, raw))
+            return self._data_to_tuple(
+                data=data,
+                thread_id=thread_id,
+                checkpoint_ns=checkpoint_ns,
+                checkpoint_id=checkpoint_id,
+                requested_config=requested_config,
+            )
+        except CheckpointBackendError:
+            raise
+        except Exception as exc:
+            raise CheckpointBackendError(f"Redis get_tuple failed: {exc}") from exc
 
     def list(
         self,
@@ -124,10 +155,56 @@ class RedisCheckpointSaver(BaseCheckpointSaver[Any]):
         before: RunnableConfig | None = None,
         limit: int | None = None,
     ) -> Iterator[CheckpointTuple]:
-        raise NotImplementedError(
-            "RedisCheckpointSaver does not support synchronous access. "
-            "Use alist() with an async runtime."
-        )
+        try:
+            if config is None:
+                return
+
+            thread_id, checkpoint_ns, _ = self._parse_config(config)
+            idx_key = self._idx_key(thread_id, checkpoint_ns)
+
+            before_score: float = float("+inf")
+            if before is not None:
+                before_id = get_checkpoint_id(before)
+                if before_id is not None:
+                    score_raw = self._sync_client.zscore(idx_key, before_id)
+                    if score_raw is not None:
+                        before_score = float(score_raw)
+
+            count = limit if limit is not None and limit >= 0 else -1
+            members = self._sync_client.zrevrangebyscore(
+                idx_key,
+                before_score,
+                "-inf",
+                start=0,
+                num=count,
+                withscores=False,
+            )
+
+            yielded = 0
+            for member in members:
+                if limit is not None and yielded >= limit:
+                    break
+                ckpt_id = member.decode("utf-8") if isinstance(member, bytes) else str(member)
+                ckpt_key = self._ckpt_key(thread_id, checkpoint_ns, ckpt_id)
+                raw = self._sync_client.get(ckpt_key)
+                if raw is None:
+                    continue
+                data = _deserialize(cast(bytes, raw))
+                tup = self._data_to_tuple(
+                    data=data,
+                    thread_id=thread_id,
+                    checkpoint_ns=checkpoint_ns,
+                    checkpoint_id=ckpt_id,
+                    requested_config=None,
+                )
+                if filter is not None and any(tup.metadata.get(k) != v for k, v in filter.items()):
+                    continue
+                yield tup
+                yielded += 1
+        except CheckpointBackendError:
+            raise
+        except Exception as exc:
+            raise CheckpointBackendError(f"Redis list failed: {exc}") from exc
 
     def put(
         self,
@@ -136,10 +213,36 @@ class RedisCheckpointSaver(BaseCheckpointSaver[Any]):
         metadata: CheckpointMetadata,
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
-        raise NotImplementedError(
-            "RedisCheckpointSaver does not support synchronous access. "
-            "Use aput() with an async runtime."
-        )
+        thread_id, checkpoint_ns, parent_checkpoint_id = self._parse_config(config)
+        checkpoint_id = str(checkpoint["id"])
+
+        checkpoint_type, checkpoint_blob = self._dump_typed(checkpoint)
+        metadata_type, metadata_blob = self._dump_typed(get_checkpoint_metadata(config, metadata))
+
+        data: dict[str, Any] = {
+            "checkpoint_type": checkpoint_type,
+            "checkpoint_blob": checkpoint_blob,
+            "metadata_type": metadata_type,
+            "metadata_blob": metadata_blob,
+            "parent_checkpoint_id": parent_checkpoint_id or "",
+            "pending_writes": [],
+        }
+
+        ckpt_key = self._ckpt_key(thread_id, checkpoint_ns, checkpoint_id)
+        idx_key = self._idx_key(thread_id, checkpoint_ns)
+        score = time.time()
+
+        self._sync_client.set(ckpt_key, _serialize(data))
+        self._sync_client.zadd(idx_key, {checkpoint_id: score})
+        self._expire_keys_sync(ckpt_key, idx_key)
+
+        return {
+            "configurable": {
+                "thread_id": thread_id,
+                "checkpoint_ns": checkpoint_ns,
+                "checkpoint_id": checkpoint_id,
+            }
+        }
 
     def put_writes(
         self,
@@ -148,10 +251,42 @@ class RedisCheckpointSaver(BaseCheckpointSaver[Any]):
         task_id: str,
         task_path: str = "",
     ) -> None:
-        raise NotImplementedError(
-            "RedisCheckpointSaver does not support synchronous access. "
-            "Use aput_writes() with an async runtime."
-        )
+        thread_id, checkpoint_ns, checkpoint_id = self._parse_config(config)
+        if checkpoint_id is None:
+            raise ValueError("missing configurable.checkpoint_id")
+
+        ckpt_key = self._ckpt_key(thread_id, checkpoint_ns, checkpoint_id)
+        raw = self._sync_client.get(ckpt_key)
+        if raw is None:
+            return
+
+        data = _deserialize(cast(bytes, raw))
+        existing_writes: list[dict[str, Any]] = data.get("pending_writes", [])
+
+        existing_keys: set[tuple[str, int]] = set()
+        for w in existing_writes:
+            if isinstance(w, dict):
+                existing_keys.add((str(w.get("task_id", "")), int(w.get("idx", -999))))
+
+        for idx, (channel, value) in enumerate(writes):
+            write_idx = WRITES_IDX_MAP.get(channel, idx)
+            if write_idx >= 0 and (task_id, write_idx) in existing_keys:
+                continue
+            type_tag, payload = self._dump_typed(value)
+            existing_writes.append(
+                {
+                    "task_id": task_id,
+                    "idx": write_idx,
+                    "channel": channel,
+                    "type_tag": type_tag,
+                    "payload": payload,
+                    "task_path": task_path,
+                }
+            )
+
+        data["pending_writes"] = existing_writes
+        self._sync_client.set(ckpt_key, _serialize(data))
+        self._expire_keys_sync(ckpt_key)
 
     # ------------------------------------------------------------------
     # Async implementation
@@ -163,6 +298,10 @@ class RedisCheckpointSaver(BaseCheckpointSaver[Any]):
 
     def _load_typed(self, *, type_tag: str, payload: bytes) -> Any:
         return self.serde.loads_typed((type_tag, payload))
+
+    def _expire_keys_sync(self, *keys: str) -> None:
+        for key in keys:
+            self._sync_client.expire(key, self._ttl_seconds)
 
     async def _expire_keys(self, *keys: str) -> None:
         for key in keys:
