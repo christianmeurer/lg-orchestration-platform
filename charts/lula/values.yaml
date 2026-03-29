@@ -1,6 +1,6 @@
 image:
-  repository: registry.digitalocean.com/lula-registry/lula
-  pullPolicy: IfNotPresent
+  repository: registry.digitalocean.com/lula-orch/lula-orch
+  pullPolicy: Always
   tag: "latest"
 
 imagePullSecrets:
@@ -10,6 +10,10 @@ imagePullSecrets:
 orchestrator:
   replicaCount: 2
   profile: "prod"
+  routerModel: "anthropic-claude-4.6-sonnet"
+  plannerModel: "anthropic-claude-4.6-sonnet"
+  coderModel: "anthropic-claude-4.6-sonnet"
+  reporterModel: "anthropic-claude-4.6-sonnet"
   resources:
     requests:
       cpu: 500m
@@ -24,6 +28,12 @@ orchestrator:
 # Runner Configuration
 runner:
   replicaCount: 1
+  gvisor:
+    enabled: true  # Set to false if gVisor pool has insufficient capacity
+  workspace:
+    persistent: false  # Set to true to use PVC instead of emptyDir
+    storageClass: "do-block-storage"
+    size: "10Gi"
   resources:
     requests:
       cpu: 500m
@@ -40,6 +50,11 @@ ingress:
   className: "nginx"
   annotations:
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/affinity: "cookie"
+    nginx.ingress.kubernetes.io/affinity-mode: "persistent"
+    nginx.ingress.kubernetes.io/session-cookie-name: "LULA_AFFINITY"
+    nginx.ingress.kubernetes.io/session-cookie-max-age: "3600"
+    nginx.ingress.kubernetes.io/session-cookie-change-on-failure: "true"
   hosts:
     - host: lula.example.com
       paths:

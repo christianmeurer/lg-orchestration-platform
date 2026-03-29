@@ -4,7 +4,6 @@ metadata:
   name: lula-runner
   namespace: {{ .Release.Namespace }}
 spec:
-  replicas: {{ .Values.runner.replicaCount }}
   selector:
     matchLabels:
       app: lula-runner
@@ -13,6 +12,7 @@ spec:
       labels:
         app: lula-runner
     spec:
+      {{- if .Values.runner.gvisor.enabled }}
       runtimeClassName: gvisor
       nodeSelector:
         sandbox: gvisor
@@ -21,6 +21,7 @@ spec:
           operator: Equal
           value: gvisor
           effect: NoSchedule
+      {{- end }}
       {{- if .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml .Values.imagePullSecrets | nindent 8 }}
@@ -35,6 +36,28 @@ spec:
           envFrom:
             - secretRef:
                 name: lula-secrets
+          env:
+            - name: LG_RUN_TIMEOUT_SECS
+              value: "600"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8088
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8088
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8088
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
           resources:
             {{- toYaml .Values.runner.resources | nindent 12 }}
           securityContext:
@@ -52,4 +75,9 @@ spec:
           type: RuntimeDefault
       volumes:
         - name: work-dir
+          {{- if .Values.runner.workspace.persistent }}
+          persistentVolumeClaim:
+            claimName: lula-workspace
+          {{- else }}
           emptyDir: {}
+          {{- end }}

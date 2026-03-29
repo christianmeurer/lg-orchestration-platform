@@ -374,6 +374,27 @@ App Platform is recommended for simplicity (managed TLS, rolling deploys, zero i
 
 ---
 
+## Enabling Persistent Workspace
+
+By default, the runner uses an `emptyDir` volume for `/workspace`. This is wiped on pod restart.
+
+To enable persistence:
+
+1. Apply the PVC:
+   ```bash
+   kubectl apply -f infra/k8s/workspace-pvc.yaml
+   ```
+
+2. Update the Helm chart:
+   ```bash
+   helm upgrade lula ./charts/lula -n lula-orch --reuse-values \
+     --set runner.workspace.persistent=true
+   ```
+
+Note: `ReadWriteOnce` PVCs can only be mounted by one pod at a time. If you have multiple runner replicas, use `ReadWriteMany` with a shared storage class (e.g., NFS or DO Spaces).
+
+---
+
 ## Quick-start reference
 
 Validation note for this repository change set: the deployment scripts and startup shell wrappers were syntax-checked, and the focused Python/UI tests passed, but local image build validation could not be completed in this workspace because the local Docker daemon was unavailable.

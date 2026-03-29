@@ -24,6 +24,7 @@ spec:
         prometheus.io/port: "8088"
         prometheus.io/path: "/metrics"
     spec:
+      automountServiceAccountToken: false
       runtimeClassName: gvisor
       nodeSelector:
         sandbox: gvisor
@@ -44,7 +45,7 @@ spec:
             - --bind
             - "0.0.0.0:8088"
             - --root-dir
-            - /app
+            - /workspace
             - --profile
             - prod
           ports:
@@ -55,6 +56,11 @@ spec:
                 secretKeyRef:
                   name: lula-secrets
                   key: LG_RUNNER_API_KEY
+            - name: LG_RUNNER_APPROVAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: lula-secrets
+                  key: LG_RUNNER_APPROVAL_SECRET
             # Enable Linux namespace isolation inside the gVisor sandbox
             - name: LG_RUNNER_LINUX_NAMESPACE_ENABLED
               value: "0"  # unshare not available inside gVisor; gVisor itself provides isolation
@@ -62,6 +68,16 @@ spec:
               value: "/opt/lula/rootfs.ext4"
             - name: LG_RUNNER_KERNEL_IMAGE
               value: "/opt/lula/vmlinux"
+            # Workspace environment — commands run in /workspace (writable emptyDir)
+            - name: HOME
+              value: "/workspace"
+            - name: TMPDIR
+              value: "/workspace/tmp"
+            - name: XDG_CACHE_HOME
+              value: "/workspace/.cache"
+            # K8s service DNS for the orchestrator to reach the runner
+            - name: LG_RUNNER_BASE_URL
+              value: "http://lula-runner.lula-orch.svc.cluster.local:8088"
           livenessProbe:
             httpGet:
               path: /healthz
@@ -74,6 +90,16 @@ spec:
               port: 8088
             initialDelaySeconds: 15
             periodSeconds: 10
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8088
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
+            # Allows up to 60s (12 * 5s) for the runner to start before
+            # liveness/readiness probes begin. Prevents premature restarts
+            # during slow gVisor container startup.
           resources:
             requests:
               cpu: 500m
@@ -101,6 +127,11 @@ spec:
           type: RuntimeDefault
       volumes:
         - name: work-dir
+          # Use emptyDir for ephemeral workspace (default).
+          # To persist workspace across pod restarts, replace with:
+          #   persistentVolumeClaim:
+          #     claimName: lula-workspace
+          # and apply infra/k8s/workspace-pvc.yaml first.
           emptyDir: {}
         - name: firecracker-assets
           hostPath:

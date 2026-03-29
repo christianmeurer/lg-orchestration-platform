@@ -1,0 +1,19 @@
+# Persistent workspace volume for the Lula runner.
+# Apply this manifest to enable workspace persistence across pod restarts.
+# Without this, /workspace is an emptyDir that is wiped on pod restart.
+#
+# Usage:
+#   kubectl apply -f infra/k8s/workspace-pvc.yaml
+#   Then update runner-deployment.yaml to use this PVC instead of emptyDir.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lula-workspace
+  namespace: lula-orch
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: do-block-storage
+  resources:
+    requests:
+      storage: 10Gi

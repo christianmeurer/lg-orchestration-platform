@@ -1,0 +1,16 @@
+{{- if .Values.runner.workspace.persistent }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lula-workspace
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: lula-runner
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.runner.workspace.storageClass | default "do-block-storage" }}
+  resources:
+    requests:
+      storage: {{ .Values.runner.workspace.size | default "10Gi" }}
+{{- end }}
