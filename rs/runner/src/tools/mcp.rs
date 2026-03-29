@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 use std::collections::BTreeMap;
+use std::fmt::Write;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -156,8 +157,12 @@ impl McpStdioClient {
             cmd.current_dir(&cfg.root_dir);
         }
 
-        for (key, value) in &server.env {
-            cmd.env(key, value);
+        for (k, v) in &server.env {
+            if is_safe_env_key(k) {
+                cmd.env(k, v);
+            } else {
+                tracing::warn!(key = %k, "mcp_env_key_blocked: dangerous env var key rejected");
+            }
         }
 
         let mut child = cmd.spawn().map_err(|e| {
@@ -444,7 +449,7 @@ fn deterministic_token(prefix: &str, value: &str) -> String {
     let digest = hasher.finalize();
     let mut short_hex = String::with_capacity(12);
     for b in digest.iter().take(6) {
-        short_hex.push_str(&format!("{b:02x}"));
+        let _ = write!(short_hex, "{b:02x}");
     }
     format!("[{prefix}_{short_hex}]")
 }
@@ -895,6 +900,27 @@ pub async fn mcp_prompt_get(cfg: &RunnerConfig, input: Value) -> Result<ToolEnve
             Err(err)
         }
     }
+}
+
+/// Returns `true` if the env var key is safe to pass to a spawned MCP server.
+///
+/// Blocks keys that can hijack the dynamic linker (`LD_*`, `DYLD_*`),
+/// preload libraries (`*PRELOAD*`), or override the shell (`SHELL`, `IFS`).
+fn is_safe_env_key(key: &str) -> bool {
+    let upper = key.to_ascii_uppercase();
+    // Block dynamic linker / preload injection vectors.
+    if upper.starts_with("LD_")
+        || upper.starts_with("DYLD_")
+        || upper.contains("PRELOAD")
+        || upper == "SHELL"
+        || upper == "IFS"
+        || upper == "CDPATH"
+        || upper == "ENV"
+        || upper == "BASH_ENV"
+    {
+        return false;
+    }
+    true
 }
 
 #[cfg(test)]
@@ -1410,5 +1436,38 @@ while True:
 
         assert!(!env.ok);
         assert!(env.stderr.contains("jsonrpc_error:-32050:forced call error"));
+    }
+
+    #[test]
+    fn test_is_safe_env_key_blocks_ld_preload() {
+        assert!(!is_safe_env_key("LD_PRELOAD"));
+        assert!(!is_safe_env_key("LD_LIBRARY_PATH"));
+        assert!(!is_safe_env_key("DYLD_INSERT_LIBRARIES"));
+        assert!(!is_safe_env_key("DYLD_LIBRARY_PATH"));
+    }
+
+    #[test]
+    fn test_is_safe_env_key_blocks_shell_injection() {
+        assert!(!is_safe_env_key("SHELL"));
+        assert!(!is_safe_env_key("IFS"));
+        assert!(!is_safe_env_key("BASH_ENV"));
+        assert!(!is_safe_env_key("ENV"));
+        assert!(!is_safe_env_key("CDPATH"));
+    }
+
+    #[test]
+    fn test_is_safe_env_key_allows_safe_keys() {
+        assert!(is_safe_env_key("PATH"));
+        assert!(is_safe_env_key("HOME"));
+        assert!(is_safe_env_key("RUST_LOG"));
+        assert!(is_safe_env_key("MY_CUSTOM_VAR"));
+        assert!(is_safe_env_key("NODE_ENV"));
+    }
+
+    #[test]
+    fn test_is_safe_env_key_case_insensitive() {
+        assert!(!is_safe_env_key("ld_preload"));
+        assert!(!is_safe_env_key("Ld_Preload"));
+        assert!(!is_safe_env_key("dyld_insert_libraries"));
     }
 }

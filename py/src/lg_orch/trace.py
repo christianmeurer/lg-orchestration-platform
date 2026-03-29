@@ -45,7 +45,7 @@ def _state_as_dict(state: Any) -> dict[str, Any]:
         from pydantic import BaseModel  # local import — avoids circular deps
 
         if isinstance(state, BaseModel):
-            base = state.model_dump()
+            base = state.model_dump(by_alias=True)
             extra = getattr(state, "model_extra", None)
             if extra:
                 base.update(extra)

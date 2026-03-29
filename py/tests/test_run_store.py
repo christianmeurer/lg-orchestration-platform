@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from unittest.mock import patch
 
-from lg_orch.run_store import RunStore
+import fakeredis
+
+from lg_orch.run_store import RedisRunStore, RunStore, create_run_store
 
 
 def _make_record(run_id: str = "run1", status: str = "running") -> dict:
@@ -347,4 +351,191 @@ def test_search_runs_limit_respected(tmp_path: Path) -> None:
         results = store.search_runs("pipeline", limit=2)
         assert len(results) <= 2
     finally:
+        store.close()
+
+
+# ---------------------------------------------------------------------------
+# RedisRunStore tests (using fakeredis)
+# ---------------------------------------------------------------------------
+
+
+def _make_redis_store(namespace: str = "") -> RedisRunStore:
+    """Create a RedisRunStore backed by fakeredis (in-process, no real Redis)."""
+    server = fakeredis.FakeServer()
+    store = object.__new__(RedisRunStore)
+    store._namespace = namespace
+    store._ttl = 86400
+    import fakeredis as _fr
+
+    store._client = _fr.FakeRedis(server=server, decode_responses=True)
+    return store
+
+
+def test_redis_upsert_and_get_run() -> None:
+    store = _make_redis_store()
+    store.upsert(_make_record("redis-run-1"))
+    row = store.get_run("redis-run-1")
+    assert row is not None
+    assert row["run_id"] == "redis-run-1"
+    assert row["request"] == "do something"
+    store.close()
+
+
+def test_redis_get_run_missing() -> None:
+    store = _make_redis_store()
+    assert store.get_run("nonexistent") is None
+    store.close()
+
+
+def test_redis_list_runs_empty() -> None:
+    store = _make_redis_store()
+    assert store.list_runs() == []
+    store.close()
+
+
+def test_redis_list_runs_ordered_by_created_at_desc() -> None:
+    store = _make_redis_store()
+    r1 = _make_record("r1")
+    r1["created_at"] = "2026-01-01T00:00:00Z"
+    r2 = _make_record("r2")
+    r2["created_at"] = "2026-01-02T00:00:00Z"
+    store.upsert(r1)
+    store.upsert(r2)
+    rows = store.list_runs()
+    assert len(rows) == 2
+    assert rows[0]["run_id"] == "r2"
+    assert rows[1]["run_id"] == "r1"
+    store.close()
+
+
+def test_redis_upsert_idempotent_update() -> None:
+    store = _make_redis_store()
+    store.upsert(_make_record("r3", status="running"))
+    updated = _make_record("r3", status="succeeded")
+    updated["exit_code"] = 0
+    updated["finished_at"] = "2026-01-01T00:01:00Z"
+    store.upsert(updated)
+    row = store.get_run("r3")
+    assert row is not None
+    assert row["status"] == "succeeded"
+    assert row["exit_code"] == 0
+    assert row["finished_at"] == "2026-01-01T00:01:00Z"
+    store.close()
+
+
+def test_redis_search_runs() -> None:
+    store = _make_redis_store()
+    r = _make_record("search-redis-1")
+    r["request"] = "deploy the kubernetes cluster"
+    store.upsert(r)
+    results = store.search_runs("kubernetes")
+    assert len(results) >= 1
+    assert any(row["run_id"] == "search-redis-1" for row in results)
+    store.close()
+
+
+def test_redis_search_runs_empty_query() -> None:
+    store = _make_redis_store()
+    store.upsert(_make_record("r1"))
+    assert store.search_runs("") == []
+    store.close()
+
+
+def test_redis_namespace_isolation() -> None:
+    server = fakeredis.FakeServer()
+    store_a = object.__new__(RedisRunStore)
+    store_a._namespace = "a"
+    store_a._ttl = 86400
+    store_a._client = fakeredis.FakeRedis(server=server, decode_responses=True)
+
+    store_b = object.__new__(RedisRunStore)
+    store_b._namespace = "b"
+    store_b._ttl = 86400
+    store_b._client = fakeredis.FakeRedis(server=server, decode_responses=True)
+
+    store_a.upsert(_make_record("ns-run-1"))
+    assert len(store_a.list_runs()) == 1
+    assert store_b.list_runs() == []
+    store_a.close()
+    store_b.close()
+
+
+def test_redis_recovery_facts() -> None:
+    store = _make_redis_store()
+    facts = [_make_fact("fp1"), _make_fact("fp2", failure_class="typecheck")]
+    store.upsert_recovery_facts("run-A", facts)
+    rows = store.get_recent_recovery_facts()
+    fingerprints = {r["fingerprint"] for r in rows}
+    assert "fp1" in fingerprints
+    assert "fp2" in fingerprints
+    store.close()
+
+
+def test_redis_recovery_facts_by_fingerprint() -> None:
+    store = _make_redis_store()
+    store.upsert_recovery_facts("run-B", [_make_fact("target_fp"), _make_fact("other_fp")])
+    rows = store.get_recent_recovery_facts(fingerprint="target_fp")
+    assert len(rows) == 1
+    assert rows[0]["fingerprint"] == "target_fp"
+    store.close()
+
+
+def test_redis_semantic_memories() -> None:
+    store = _make_redis_store()
+    store.upsert_semantic_memories(
+        "run-semantic",
+        [
+            {
+                "kind": "approval_history",
+                "source": "approved",
+                "summary": "approved by chris for approval:apply_patch",
+            },
+        ],
+    )
+    rows = store.search_semantic_memories(query="approved", limit=5)
+    assert len(rows) >= 1
+    assert rows[0]["run_id"] == "run-semantic"
+    store.close()
+
+
+def test_redis_episodic_context_empty() -> None:
+    store = _make_redis_store()
+    result = store.get_episodic_context(
+        failure_fingerprint="no_such_fp",
+        failure_class="no_such_class",
+    )
+    assert result == []
+    store.close()
+
+
+# ---------------------------------------------------------------------------
+# create_run_store factory tests
+# ---------------------------------------------------------------------------
+
+
+def test_create_run_store_falls_back_to_sqlite(tmp_path: Path) -> None:
+    """create_run_store returns SQLite RunStore when no Redis URL is set."""
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("LG_CHECKPOINT_REDIS_URL", None)
+        store = create_run_store(db_path=tmp_path / "runs.sqlite")
+        assert isinstance(store, RunStore)
+        store.close()
+
+
+def test_create_run_store_uses_redis_when_available() -> None:
+    """create_run_store returns RedisRunStore when Redis URL is valid."""
+    with patch("lg_orch.run_store.RedisRunStore") as mock_cls:
+        mock_instance = _make_redis_store()
+        mock_cls.return_value = mock_instance
+        store = create_run_store(redis_url="redis://localhost:6379")
+        assert store is mock_instance
+        mock_instance.close()
+
+
+def test_create_run_store_falls_back_on_redis_error(tmp_path: Path) -> None:
+    """create_run_store falls back to SQLite when Redis connection fails."""
+    with patch.dict(os.environ, {"LG_CHECKPOINT_REDIS_URL": "redis://localhost:19999"}):
+        store = create_run_store(db_path=tmp_path / "runs.sqlite")
+        # Should not raise — should fall back to SQLite
+        assert isinstance(store, RunStore)
         store.close()

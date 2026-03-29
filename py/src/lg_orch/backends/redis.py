@@ -64,11 +64,18 @@ class RedisCheckpointSaver(BaseCheckpointSaver[Any]):
     ``alist``, ``aput``, ``aput_writes``) with an async LangGraph runtime.
     """
 
+    # Timeout (seconds) for socket connect and per-command operations.
+    # Prevents indefinite hangs when the Redis/Valkey instance is unreachable.
+    _DEFAULT_SOCKET_CONNECT_TIMEOUT: float = 5.0
+    _DEFAULT_SOCKET_TIMEOUT: float = 10.0
+
     def __init__(
         self,
         redis_url: str,
         key_prefix: str = "lula:ckpt:",
         ttl_seconds: int = 86400,
+        socket_connect_timeout: float | None = None,
+        socket_timeout: float | None = None,
     ) -> None:
         try:
             import redis
@@ -82,11 +89,24 @@ class RedisCheckpointSaver(BaseCheckpointSaver[Any]):
         self._redis_url = redis_url
         self._key_prefix = key_prefix
         self._ttl_seconds = ttl_seconds
-        
+
+        _conn_timeout = socket_connect_timeout if socket_connect_timeout is not None else self._DEFAULT_SOCKET_CONNECT_TIMEOUT
+        _sock_timeout = socket_timeout if socket_timeout is not None else self._DEFAULT_SOCKET_TIMEOUT
+
         # Async client for aget_tuple, aput, etc.
-        self._client: Any = aioredis.from_url(redis_url, decode_responses=False)
+        self._client: Any = aioredis.from_url(
+            redis_url,
+            decode_responses=False,
+            socket_connect_timeout=_conn_timeout,
+            socket_timeout=_sock_timeout,
+        )
         # Sync client for get_tuple, put, etc. (avoids asyncio.run deadlocks)
-        self._sync_client: Any = redis.from_url(redis_url, decode_responses=False)
+        self._sync_client: Any = redis.from_url(
+            redis_url,
+            decode_responses=False,
+            socket_connect_timeout=_conn_timeout,
+            socket_timeout=_sock_timeout,
+        )
 
     # ------------------------------------------------------------------
     # Key helpers

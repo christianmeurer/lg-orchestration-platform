@@ -86,7 +86,7 @@ pub async fn dispatch_tool(
     match out {
         Ok(mut env) => {
             // Single authoritative timing write — tool impls produce timing_ms=0.
-            env.timing_ms = started.elapsed().as_millis();
+            env.timing_ms = started.elapsed().as_millis() as u64;
             if let Some(route_meta) = route.clone() {
                 env = env.with_route(route_meta);
             }
@@ -113,7 +113,7 @@ pub async fn dispatch_tool(
                     json!({"error": error_message, "diagnostics": []}),
                 ),
             };
-            env.timing_ms = started.elapsed().as_millis();
+            env.timing_ms = started.elapsed().as_millis() as u64;
             if let Some(route_meta) = route {
                 env = env.with_route(route_meta);
             }

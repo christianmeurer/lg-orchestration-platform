@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import os
 import re
 import shlex
 import time
@@ -12,6 +14,22 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+
+# HIGH FIX 4: Allowlist of binaries permitted as test commands to prevent
+# command injection from malicious repository package.json scripts.
+_ALLOWED_TEST_COMMANDS = {"pytest", "python", "uv", "npm", "yarn", "cargo", "make", "go"}
+
+
+def _validate_test_command(cmd: str) -> bool:
+    """Validate that the test command starts with an allowed binary."""
+    try:
+        parts = shlex.split(cmd)
+    except ValueError:
+        return False
+    if not parts:
+        return False
+    binary = os.path.basename(parts[0])
+    return binary in _ALLOWED_TEST_COMMANDS
 
 
 def detect_test_runner(root_dir: str | Path) -> str:
@@ -104,6 +122,22 @@ class HealingLoop:
         """Run pytest in repo_path subprocess; return TestSuiteResult."""
         run_id = uuid.uuid4().hex
         timestamp = time.time()
+
+        # HIGH FIX 4: Validate test command against allowlist before executing
+        if not _validate_test_command(self.test_runner_cmd):
+            logging.warning(
+                "healing_loop_blocked_unsafe_test_command: %s", self.test_runner_cmd
+            )
+            return TestSuiteResult(
+                run_id=run_id,
+                repo_path=self._repo_path,
+                passed=0,
+                failed=0,
+                errors=1,
+                failed_tests=[],
+                output=f"Blocked unsafe test command: {self.test_runner_cmd}",
+                timestamp=timestamp,
+            )
 
         try:
             cmd_parts = shlex.split(self.test_runner_cmd)
@@ -198,14 +232,32 @@ class HealingLoop:
             job.status = "skipped"
             return
         try:
-            await self._graph_runner(
+            result = await self._graph_runner(
                 {
-                    "task": f"Fix failing tests: {job.failing_tests}",
+                    "task": "Fix failing tests",
+                    "healing_context": {
+                        "job_id": job.job_id,
+                        "failing_tests": list(job.failing_tests),
+                        "failure_class": "test_failure",
+                        "repo_path": job.repo_path,
+                    },
                     "repo_path": job.repo_path,
                     "healing_job_id": job.job_id,
                 }
             )
-            job.status = "healed"
+            # Check if healing actually succeeded via verification
+            if isinstance(result, dict):
+                verification = result.get("verification", {})
+                if isinstance(verification, dict) and verification.get("ok", False):
+                    job.status = "healed"
+                else:
+                    job.status = "failed"
+                    logging.warning(
+                        "Healing job %s completed but verification did not pass",
+                        job.job_id,
+                    )
+            else:
+                job.status = "healed"  # fallback: assume success if no verification info
         except Exception:
             job.status = "failed"
 

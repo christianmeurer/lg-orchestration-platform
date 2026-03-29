@@ -38,7 +38,7 @@ if [[ -z "${DO_REGISTRY}" ]]; then
 fi
 
 # --- Optional with defaults ---
-DO_CLUSTER_NAME="${DO_CLUSTER_NAME:-lula-orch}"
+DO_CLUSTER_NAME="${DO_CLUSTER_NAME:-lula-cluster}"
 DO_REGION="${DO_REGION:-nyc3}"
 DO_K8S_VERSION="${DO_K8S_VERSION:-}"
 DO_APP_ID="${DO_APP_ID:-}"
@@ -168,9 +168,10 @@ echo ""
 if [[ -n "${DO_APP_ID}" ]]; then
   echo "Updating App Platform LG_RUNNER_BASE_URL -> ${RUNNER_URL} ..."
   PATCHED_APP_SPEC="$(mktemp --suffix=.yaml)"
-  trap "rm -f '${PATCHED_RUNNER_DEPLOY}' '${PATCHED_APP_SPEC}'" EXIT
-  # Inject or update LG_RUNNER_BASE_URL in the app spec without relying on a fixed anchor key.
-  python3 - "${RUNNER_URL}" infra/do/app.yaml "${PATCHED_APP_SPEC}" <<'PYEOF'
+  trap "rm -f '${PATCHED_RUNNER_DEPLOY}' '${PATCHED_APP_SPEC}' '${PATCHED_APP_SPEC}.in'" EXIT
+  # Inject or update LG_RUNNER_BASE_URL in the live app spec without relying on a fixed anchor key.
+  doctl apps spec get "${DO_APP_ID}" > "${PATCHED_APP_SPEC}.in"
+  python3 - "${RUNNER_URL}" "${PATCHED_APP_SPEC}.in" "${PATCHED_APP_SPEC}" <<'PYEOF'
 from pathlib import Path
 import sys
 
@@ -216,7 +217,7 @@ updated_blocks: dict[str, list[str]] = {
 }
 updated_blocks["LG_RUNNER_BASE_URL"] = [
     "      - key: LG_RUNNER_BASE_URL",
-    f"        value: {runner_url}",
+    f'        value: "{runner_url}"',
 ]
 
 new_env_lines: list[str] = []

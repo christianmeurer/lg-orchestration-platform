@@ -236,7 +236,9 @@ mod listener {
         let mut addr: libc::sockaddr_vm = unsafe { std::mem::zeroed() };
         addr.svm_family = libc::AF_VSOCK as libc::sa_family_t;
         addr.svm_port = port;
-        addr.svm_cid = libc::VMADDR_CID_ANY;
+        // VMADDR_CID_HOST = 2: accept connections only from the host
+        // hypervisor, not from other VMs sharing the same host.
+        addr.svm_cid = 2; // VMADDR_CID_HOST
 
         let ret = unsafe {
             libc::bind(

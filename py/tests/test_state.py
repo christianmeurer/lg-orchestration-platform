@@ -250,12 +250,11 @@ def test_orch_state_new_phase1_fields_defaults() -> None:
 
 
 def test_orch_state_allows_runtime_private_mcp_fields() -> None:
-    # With extra="allow", underscore-prefixed runtime fields that LangGraph or
-    # the ingest harness injects are accepted and round-trip via model_extra.
+    # With aliases, underscore-prefixed runtime fields are parsed into the model
     state = OrchState(
         request="run mcp",
         _mcp_enabled=True,  # type: ignore[call-arg]
         _mcp_servers={"mock": {"command": "python"}},  # type: ignore[call-arg]
     )
-    assert state.model_extra.get("_mcp_enabled") is True
-    assert isinstance(state.model_extra.get("_mcp_servers"), dict)
+    assert state.mcp_enabled_internal is True
+    assert isinstance(state.mcp_servers_internal, dict)

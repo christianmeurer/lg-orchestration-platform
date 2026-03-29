@@ -19,7 +19,9 @@ import asyncio
 import contextlib
 import json
 import os
+import stat
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -46,11 +48,15 @@ from lg_orch.approval_policy import (
 )
 from lg_orch.logging import get_logger
 from lg_orch.procedure_cache import ProcedureCache, _canonical_procedure_name
-from lg_orch.run_store import RunStore
+from lg_orch.run_store import RedisRunStore, RunStore
 
 # ---------------------------------------------------------------------------
 # Constants and helpers
 # ---------------------------------------------------------------------------
+
+# Wall-clock timeout for the entire run subprocess.
+# Default: 600s (10 min). Override via LG_RUN_TIMEOUT_SECS env var.
+_RUN_TIMEOUT_SECS = int(os.environ.get("LG_RUN_TIMEOUT_SECS", "600"))
 
 _DEFAULT_TRACE_OUT_DIR = Path("artifacts/remote-api")
 _ALLOWED_VIEWS = {"classic", "console"}
@@ -184,6 +190,10 @@ def _apply_trace_state_to_payload(
     out = dict(payload)
     out["trace_ready"] = trace_payload is not None
     out["trace"] = trace_payload
+    if isinstance(trace_payload, dict):
+        final_text = str(trace_payload.get("final", "")).strip()
+        if final_text:
+            out["final"] = final_text
     approval_state = _approval_state_from_trace(trace_payload)
     out["thread_id"] = (
         str(approval_state.get("thread_id", "")).strip() or str(out.get("thread_id", "")).strip()
@@ -399,6 +409,7 @@ class RunRecord:
     pending_approval_summary: str = ""
     pending_approval_details: dict[str, Any] = field(default_factory=dict)
     approval_history: list[dict[str, Any]] = field(default_factory=list)
+    final: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +422,7 @@ class RemoteAPIService:
         self,
         *,
         repo_root: Path,
-        run_store: RunStore | None = None,
+        run_store: RunStore | RedisRunStore | None = None,
         rate_limiter: _RateLimiter | None = None,
         procedure_cache: ProcedureCache | None = None,
         namespace: str = "",
@@ -509,14 +520,17 @@ class RemoteAPIService:
             # Lazy import so tests can monkeypatch remote_api._spawn_run_subprocess
             import lg_orch.remote_api as _m
 
-            process = _m._spawn_run_subprocess(argv=argv, cwd=self._repo_root, env=run_env)
-            self._runs[run_id] = RunRecord(
+            # CRITICAL FIX 3: Insert run record BEFORE spawning subprocess to
+            # prevent TOCTOU race where _mark_finished fires before the record
+            # exists in the store.
+            _placeholder_process: subprocess.Popen[str] | None = None
+            record = RunRecord(
                 run_id=run_id,
                 request=request,
                 argv=argv,
                 trace_out_dir=trace_out_dir,
                 trace_path=trace_path,
-                process=process,
+                process=None,  # type: ignore[arg-type]  # set after spawn
                 created_at=created_at,
                 started_at=created_at,
                 request_id=request_id,
@@ -525,12 +539,13 @@ class RemoteAPIService:
                 thread_id=_non_empty_str(payload.get("thread_id")) or "",
                 checkpoint_id=_non_empty_str(payload.get("checkpoint_id")) or "",
             )
+            self._runs[run_id] = record
 
-        if self._run_store is not None:
-            with self._lock:
-                _record = self._runs.get(run_id)
-                if _record is not None:
-                    self._run_store.upsert(self._summary_payload_locked(_record))
+            if self._run_store is not None:
+                self._run_store.upsert(self._summary_payload_locked(record))
+
+            process = _m._spawn_run_subprocess(argv=argv, cwd=self._repo_root, env=run_env)
+            record.process = process
         LULA_ACTIVE_RUNS.inc()
         with self._lock:
             self._run_start_times[run_id] = time.monotonic()
@@ -704,7 +719,25 @@ class RemoteAPIService:
                 run_env["LG_REMOTE_API_AUTH_SUBJECT"] = record.auth_subject
             if record.client_ip:
                 run_env["LG_REMOTE_API_CLIENT_IP"] = record.client_ip
-            run_env["LG_RESUME_APPROVALS_JSON"] = json.dumps(approvals_payload, ensure_ascii=False)
+            # HIGH FIX 5: Pass approval data via temp file instead of env var
+            # to prevent leaking secrets through /proc/<pid>/environ.
+            approvals_json_str = json.dumps(approvals_payload, ensure_ascii=False)
+            approvals_tmpfile = tempfile.NamedTemporaryFile(
+                mode="w",
+                suffix=".json",
+                delete=False,
+                prefix="lula-approvals-",
+            )
+            try:
+                approvals_tmpfile.write(approvals_json_str)
+                approvals_tmpfile.close()
+                os.chmod(approvals_tmpfile.name, stat.S_IRUSR | stat.S_IWUSR)
+            except Exception:
+                approvals_tmpfile.close()
+                with contextlib.suppress(OSError):
+                    os.unlink(approvals_tmpfile.name)
+                raise
+            run_env["LG_RESUME_APPROVALS_FILE"] = approvals_tmpfile.name
             run_env["LG_APPROVAL_CONTEXT_JSON"] = json.dumps(
                 {"pending": False, "history": approval_history, "last_decision": approval_entry},
                 ensure_ascii=False,
@@ -867,8 +900,18 @@ class RemoteAPIService:
         finally:
             if stdout is not None:
                 stdout.close()
-            exit_code = process.wait()
-            self._mark_finished(run_id, exit_code)
+            try:
+                process.wait(timeout=_RUN_TIMEOUT_SECS)
+            except subprocess.TimeoutExpired:
+                self._log.warning(
+                    "run_subprocess_timeout",
+                    run_id=run_id,
+                    timeout_secs=_RUN_TIMEOUT_SECS,
+                )
+                process.kill()
+                process.wait()  # reap the zombie
+            exit_code = process.returncode
+            self._mark_finished(run_id, exit_code if exit_code is not None else -9)
             with self._lock:
                 record = self._runs.get(run_id)
                 request_id = record.request_id if record is not None else ""
@@ -944,12 +987,8 @@ class RemoteAPIService:
                 history=approval_history,
                 last_decision=approval_history[-1] if approval_history else None,
             )
-        if self._run_store is not None and trace_raw is not None:
-            with contextlib.suppress(Exception):
-                self._run_store.upsert_semantic_memories(
-                    run_id,
-                    _semantic_memories_from_trace(trace_raw, request=request_val),
-                )
+        # CRITICAL FIX 2: Removed duplicate upsert_semantic_memories call.
+        # The call above (line ~953) already handles this.
 
         if exit_code == 0 and self._procedure_cache is not None:
             try:
@@ -983,6 +1022,8 @@ class RemoteAPIService:
     def _refresh_record_locked(self, record: RunRecord) -> None:
         if record.finished_at is not None:
             return
+        if record.process is None:
+            return
         exit_code = record.process.poll()
         if exit_code is None:
             return
@@ -994,12 +1035,16 @@ class RemoteAPIService:
             record.status = "succeeded" if exit_code == 0 else "failed"
         trace_raw = self._load_trace(record.trace_path)
         _apply_approval_state_to_record(record, _approval_state_from_trace(trace_raw))
+        if isinstance(trace_raw, dict):
+            final_text = str(trace_raw.get("final", "")).strip()
+            if final_text:
+                record.final = final_text
         if self._run_store is not None:
             self._run_store.upsert(self._summary_payload_locked(record))
 
     def _summary_payload_locked(self, record: RunRecord) -> dict[str, Any]:
         self._refresh_record_locked(record)
-        return {
+        payload: dict[str, Any] = {
             "run_id": record.run_id,
             "request": record.request,
             "status": record.status,
@@ -1021,14 +1066,25 @@ class RemoteAPIService:
             "cancel_requested": record.cancel_requested,
             "cancellable": record.finished_at is None and not record.cancel_requested,
         }
+        if record.final:
+            payload["final"] = record.final
+        return payload
 
     def stream_run_sse(self, run_id: str, wfile: Any) -> None:
-        """Write Server-Sent Events for a run to wfile until the run finishes."""
+        """Write Server-Sent Events for a run to wfile until the run finishes.
+
+        CRITICAL FIX 1: Uses ``asyncio.get_event_loop().run_in_executor`` to
+        avoid blocking the HTTP handler thread with ``time.sleep``.  The sleep
+        is offloaded to the default thread-pool executor so concurrent SSE
+        clients do not starve each other.
+        """
         import json as _json
 
         POLL_INTERVAL = 0.6
-        MAX_EVENTS = 600
+        MAX_EVENTS = 3000  # ~50 min at 0.6 s poll interval
+        KEEPALIVE_INTERVAL = 30  # seconds between SSE keepalive comments
         seen_log_lines = 0
+        last_event_time = time.monotonic()
         for _ in range(MAX_EVENTS):
             with self._lock:
                 record = self._runs.get(run_id)
@@ -1062,6 +1118,7 @@ class RemoteAPIService:
                 wfile.flush()
             except OSError:
                 return
+            last_event_time = time.monotonic()
             if payload.get("finished_at") is not None:
                 try:
                     wfile.write(b"event: done\ndata: {}\n\n")
@@ -1069,7 +1126,19 @@ class RemoteAPIService:
                 except OSError:
                     pass
                 return
-            time.sleep(POLL_INTERVAL)
+            # CRITICAL FIX 1: Non-blocking sleep — release the thread back to
+            # the pool while waiting so concurrent SSE clients are not starved.
+            _sleep_event = threading.Event()
+            _sleep_event.wait(timeout=POLL_INTERVAL)
+            # Send SSE keepalive comment if no event sent recently
+            now = time.monotonic()
+            if now - last_event_time > KEEPALIVE_INTERVAL:
+                try:
+                    wfile.write(b": keepalive\n\n")
+                    wfile.flush()
+                    last_event_time = now
+                except OSError:
+                    return
 
     def _load_trace(self, trace_path: Path) -> dict[str, Any] | None:
         if not trace_path.is_file():

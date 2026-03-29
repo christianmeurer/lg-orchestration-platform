@@ -382,7 +382,7 @@ class MetaGraphScheduler:
                     for remaining in list(running.keys()):
                         remaining.cancel()
                     if running:
-                        await asyncio.gather(*running.keys(), return_exceptions=True)
+                        await asyncio.wait(list(running.keys()), return_when=asyncio.ALL_COMPLETED)
                     # Tasks left in "running" state were cancelled mid-flight by the
                     # scheduler (not due to their own error).  Count them as skipped,
                     # not as failures — the cancellation was a scheduler decision.

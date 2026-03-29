@@ -150,7 +150,7 @@ pub struct ToolEnvelope {
     pub mcp: Option<McpMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub route: Option<RouteMetadata>,
-    pub timing_ms: u128,
+    pub timing_ms: u64,
     pub artifacts: Value,
 }
 

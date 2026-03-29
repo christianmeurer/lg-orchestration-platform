@@ -381,14 +381,25 @@ def test_coerce_approval_token_accepts_legacy_format() -> None:
 
 
 def test_coerce_approval_token_accepts_hmac_format() -> None:
-    hmac_token = (
+    # Dot-separated format (current, matches Rust runner)
+    dot_token = (
+        "approval:apply_patch.1700000000.abcdef1234567890abcdef1234567890"
+        ".deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    )
+    result = _coerce_approval_token({"challenge_id": "approval:apply_patch", "token": dot_token})
+    assert result is not None
+    parts = result["token"].split(".")
+    assert len(parts) == 4
+
+    # Pipe-separated format (deprecated, still accepted)
+    pipe_token = (
         "approval:apply_patch|1700000000|abcdef1234567890abcdef1234567890"
         "|deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
     )
-    result = _coerce_approval_token({"challenge_id": "approval:apply_patch", "token": hmac_token})
-    assert result is not None
-    parts = result["token"].split("|")
-    assert len(parts) == 4
+    result2 = _coerce_approval_token({"challenge_id": "approval:apply_patch", "token": pipe_token})
+    assert result2 is not None
+    parts2 = result2["token"].split("|")
+    assert len(parts2) == 4
 
 
 def test_coerce_approval_token_rejects_malformed_pipe_count() -> None:

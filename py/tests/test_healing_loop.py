@@ -83,7 +83,7 @@ def test_healing_loop_creates_job_on_failure(tmp_path: Any) -> None:
     async def fake_graph_runner(payload: dict[str, Any]) -> dict[str, Any]:
         nonlocal call_count
         call_count += 1
-        return {"ok": True}
+        return {"ok": True, "verification": {"ok": True}}
 
     healing = HealingLoop(
         repo_path=str(tmp_path),
@@ -206,3 +206,105 @@ def test_detect_test_runner_python_default(tmp_path: Path) -> None:
 def test_detect_test_runner_fallback(tmp_path: Path) -> None:
     # Empty directory — no marker files present
     assert detect_test_runner(tmp_path) == "python -m pytest"
+
+
+# ---------------------------------------------------------------------------
+# Fix 10.4: Typed handoff and post-healing verification
+# ---------------------------------------------------------------------------
+
+
+def test_run_job_sends_structured_handoff(tmp_path: Any) -> None:
+    """_run_job sends a structured healing_context dict, not a formatted string."""
+    captured_payload: list[dict[str, Any]] = []
+
+    async def capturing_runner(payload: dict[str, Any]) -> dict[str, Any]:
+        captured_payload.append(payload)
+        return {"verification": {"ok": True}}
+
+    healing = HealingLoop(
+        repo_path=str(tmp_path),
+        graph_runner=capturing_runner,
+    )
+
+    job = HealingJob(
+        job_id="j-structured",
+        repo_path=str(tmp_path),
+        failing_tests=["tests/test_a.py::test_1", "tests/test_b.py::test_2"],
+        priority=1,
+        created_at=time.time(),
+        status="running",
+    )
+
+    asyncio.run(healing._run_job(job))
+
+    assert len(captured_payload) == 1
+    payload = captured_payload[0]
+    assert payload["task"] == "Fix failing tests"
+    assert "healing_context" in payload
+    ctx = payload["healing_context"]
+    assert ctx["job_id"] == "j-structured"
+    assert ctx["failing_tests"] == ["tests/test_a.py::test_1", "tests/test_b.py::test_2"]
+    assert ctx["failure_class"] == "test_failure"
+    assert ctx["repo_path"] == str(tmp_path)
+    assert payload["repo_path"] == str(tmp_path)
+    assert payload["healing_job_id"] == "j-structured"
+
+
+def test_run_job_marks_healed_on_verification_ok(tmp_path: Any) -> None:
+    """_run_job marks job as healed when verification.ok is True."""
+
+    async def ok_runner(payload: dict[str, Any]) -> dict[str, Any]:
+        return {"verification": {"ok": True}}
+
+    healing = HealingLoop(repo_path=str(tmp_path), graph_runner=ok_runner)
+    job = HealingJob(
+        job_id="j-ok",
+        repo_path=str(tmp_path),
+        failing_tests=["tests/test_a.py::test_1"],
+        priority=1,
+        created_at=time.time(),
+        status="running",
+    )
+
+    asyncio.run(healing._run_job(job))
+    assert job.status == "healed"
+
+
+def test_run_job_marks_failed_on_verification_not_ok(tmp_path: Any) -> None:
+    """_run_job marks job as failed when verification.ok is False."""
+
+    async def fail_runner(payload: dict[str, Any]) -> dict[str, Any]:
+        return {"verification": {"ok": False, "failure_class": "test_assertion"}}
+
+    healing = HealingLoop(repo_path=str(tmp_path), graph_runner=fail_runner)
+    job = HealingJob(
+        job_id="j-fail",
+        repo_path=str(tmp_path),
+        failing_tests=["tests/test_a.py::test_1"],
+        priority=1,
+        created_at=time.time(),
+        status="running",
+    )
+
+    asyncio.run(healing._run_job(job))
+    assert job.status == "failed"
+
+
+def test_run_job_marks_failed_on_missing_verification(tmp_path: Any) -> None:
+    """_run_job marks job as failed when result dict has no verification key."""
+
+    async def no_verif_runner(payload: dict[str, Any]) -> dict[str, Any]:
+        return {"result": "done"}
+
+    healing = HealingLoop(repo_path=str(tmp_path), graph_runner=no_verif_runner)
+    job = HealingJob(
+        job_id="j-no-verif",
+        repo_path=str(tmp_path),
+        failing_tests=["tests/test_a.py::test_1"],
+        priority=1,
+        created_at=time.time(),
+        status="running",
+    )
+
+    asyncio.run(healing._run_job(job))
+    assert job.status == "failed"

@@ -1,0 +1,21 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: lula-orch-pdb
+  namespace: lula-orch
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: lula-orch
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: lula-runner-pdb
+  namespace: lula-orch
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: lula-runner

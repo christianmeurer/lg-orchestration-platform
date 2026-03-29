@@ -18,7 +18,7 @@ from lg_orch.nodes import (
     router,
     verifier,
 )
-from lg_orch.state import OrchState
+from lg_orch.state import OrchState, OrchStateDict
 from lg_orch.visualize import GraphEdge, graph_mermaid
 
 
@@ -30,25 +30,32 @@ def _make_traced_node(node_fn: Any, node_name: str) -> Any:
     field in state, when present).
     """
 
-    def _traced(state: OrchState) -> Any:
+    def _traced(state: dict[str, Any]) -> Any:
         try:
             from opentelemetry import trace as _otel_trace
+            from opentelemetry.trace import StatusCode as _StatusCode
 
             tracer = _otel_trace.get_tracer("lg_orch.graph")
-            run_id = str((state.model_extra or {}).get("_run_id", ""))
-            lane = str((state.model_extra or {}).get("_lane", ""))
-            with tracer.start_as_current_span(
-                f"node.{node_name}",
-                attributes={
-                    "graph.node": node_name,
-                    "graph.run_id": run_id,
-                    "graph.lane": lane,
-                },
-            ):
-                return node_fn(state)
         except Exception:
-            # OTel must never break graph execution.
+            # OTel import failed — run the node without tracing.
             return node_fn(state)
+
+        run_id = str(state.get("_run_id", ""))
+        lane = str(state.get("_lane", ""))
+        with tracer.start_as_current_span(
+            f"node.{node_name}",
+            attributes={
+                "graph.node": node_name,
+                "graph.run_id": run_id,
+                "graph.lane": lane,
+            },
+        ) as span:
+            try:
+                return node_fn(state)
+            except Exception as exc:
+                span.record_exception(exc)
+                span.set_status(_StatusCode.ERROR)
+                raise
 
     # Preserve the original callable's identity for LangGraph introspection.
     _traced.__name__ = getattr(node_fn, "__name__", node_name)
@@ -56,15 +63,22 @@ def _make_traced_node(node_fn: Any, node_name: str) -> Any:
     return _traced
 
 
-def route_after_policy_gate(state: OrchState) -> str:
-    halt_reason = state.halt_reason.strip()
+def _get_state_attr(state: Any, key: str, default: Any = None) -> Any:
+    """Retrieve a value from *state* whether it is a dict or a Pydantic model."""
+    if isinstance(state, dict):
+        return state.get(key, default)
+    return getattr(state, key, default)
+
+
+def route_after_policy_gate(state: dict[str, Any]) -> str:
+    halt_reason = str(_get_state_attr(state, "halt_reason", "")).strip()
     if halt_reason in {"max_loops_exhausted", "plan_max_iterations_exhausted"}:
         return "reporter"
 
-    if state.context_reset_requested:
+    if bool(_get_state_attr(state, "context_reset_requested", False)):
         return "context_builder"
 
-    retry_target = state.retry_target
+    retry_target = _get_state_attr(state, "retry_target")
     if retry_target == "router":
         return "router"
     if retry_target == "planner":
@@ -77,15 +91,18 @@ def route_after_policy_gate(state: OrchState) -> str:
     return "context_builder"
 
 
-def route_after_verifier(state: OrchState) -> str:
-    if state.verification is not None and state.verification.ok:
+def route_after_verifier(state: dict[str, Any]) -> str:
+    verification = _get_state_attr(state, "verification")
+    if isinstance(verification, dict) and verification.get("ok"):
+        return "reporter"
+    if hasattr(verification, "ok") and verification.ok:
         return "reporter"
 
     return "policy_gate"
 
 
 def build_graph(*, checkpointer: BaseCheckpointSaver[Any] | None = None) -> Any:
-    g: StateGraph[OrchState] = StateGraph(OrchState)
+    g = StateGraph(OrchStateDict)
     g.add_node("ingest", _make_traced_node(ingest, "ingest"))
     g.add_node("policy_gate", _make_traced_node(policy_gate, "policy_gate"))
     g.add_node("context_builder", _make_traced_node(context_builder, "context_builder"))

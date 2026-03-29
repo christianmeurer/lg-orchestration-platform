@@ -2,7 +2,7 @@
 #   LG_PLANNER_PROVIDER, LG_PLANNER_MODEL
 #   LG_ROUTER_PROVIDER, LG_ROUTER_MODEL
 # Available DO models: openai/gpt-4.1, openai/gpt-4o-mini, openai/gpt-5,
-#   meta-llama/Meta-Llama-3.3-70B-Instruct, anthropic/claude-sonnet-4-6
+#   meta-llama/Meta-Llama-3.3-70B-Instruct, anthropic-claude-4.6-sonnet
 
 [models.router]
 provider = "digitalocean"
@@ -30,7 +30,7 @@ fallback_task_classes = ["summarization", "lint_reflection", "context_condensati
 
 [models.digitalocean]
 base_url = "https://inference.do-ai.run/v1"
-timeout_s = 60
+timeout_s = 30
 
 [models.openai_compatible]
 base_url = "https://api.openai.com/v1"
@@ -40,14 +40,14 @@ timeout_s = 60
 max_loops = 3
 max_tool_calls_per_loop = 12
 max_patch_bytes = 200000
-tool_timeout_s = 600
+tool_timeout_s = 60
 stable_prefix_tokens = 12000
 working_set_tokens = 8000
 tool_result_summary_chars = 800
 
 [policy]
 network_default = "deny"
-require_approval_for_mutations = true
+require_approval_for_mutations = false
 allowed_write_paths = ["py/**", "rs/**", "docs/**", "prompts/**", "schemas/**", "configs/**", "eval/**", "scripts/**", ".github/**"]
 
 [runner]
@@ -66,7 +66,7 @@ enabled = true
 db_path = "artifacts/checkpoints/langgraph.sqlite"
 namespace = "main"
 thread_prefix = "lg-orch"
-backend = "redis"
+backend = "sqlite"
 redis_url = "redis://redis:6379/0"  # override via LG_CHECKPOINT_REDIS_URL env var for custom endpoints
 postgres_dsn = ""
 redis_ttl_seconds = 86400

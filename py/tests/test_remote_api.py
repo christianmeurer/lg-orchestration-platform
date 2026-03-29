@@ -15,15 +15,19 @@ class DummyProcess:
     def __init__(self, *, output: str, returncode: int) -> None:
         self.stdout = io.StringIO(output)
         self._returncode = returncode
+        self.returncode = returncode
         self.terminated = False
 
     def poll(self) -> int | None:
         return self._returncode
 
-    def wait(self) -> int:
+    def wait(self, timeout: float | None = None) -> int:
         return self._returncode
 
     def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
         self.terminated = True
 
 
@@ -39,7 +43,7 @@ class RunningDummyProcess(DummyProcess):
         self.terminated = True
         self._running = False
 
-    def wait(self) -> int:
+    def wait(self, timeout: float | None = None) -> int:
         self._running = False
         return self._returncode
 
@@ -484,7 +488,9 @@ def test_api_http_response_approves_suspended_run_and_resumes(
         "--checkpoint-id",
         "cp-123",
     ]
-    approvals = json.loads(spawn_calls[1]["env"]["LG_RESUME_APPROVALS_JSON"])
+    # HIGH FIX 5: Approvals are now passed via a temp file, not an env var.
+    approvals_file = spawn_calls[1]["env"]["LG_RESUME_APPROVALS_FILE"]
+    approvals = json.loads(Path(approvals_file).read_text(encoding="utf-8"))
     assert approvals["apply_patch"]["challenge_id"] == "approval:apply_patch"
 
 
@@ -567,8 +573,8 @@ def test_api_http_response_rejects_suspended_run(
 def test_approval_token_uses_hmac_format_when_secret_set(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LG_RUNNER_APPROVAL_SECRET", "test-secret-value")
     token = _approval_token_for_challenge("approval:apply_patch")
-    parts = token.split("|")
-    assert len(parts) == 4, f"expected 4 pipe-separated fields, got {len(parts)}: {token!r}"
+    parts = token.split(".")
+    assert len(parts) == 4, f"expected 4 dot-separated fields, got {len(parts)}: {token!r}"
     challenge_id, iat_str, nonce, signature = parts
     assert challenge_id == "approval:apply_patch"
     assert iat_str.isdigit()
@@ -592,9 +598,10 @@ def test_approval_token_hmac_is_consistent_with_known_secret(
 
     monkeypatch.setenv("LG_RUNNER_APPROVAL_SECRET", "known-secret")
     token = _approval_token_for_challenge("chal-id")
-    parts = token.split("|")
+    parts = token.split(".")
     assert len(parts) == 4
     challenge_id, iat_str, nonce, signature = parts
+    # HMAC is computed over pipe-separated message, but token uses dot-separated format.
     message = f"{challenge_id}|{iat_str}|{nonce}"
     expected_sig = _hmac.new(b"known-secret", message.encode(), hashlib.sha256).hexdigest()
     assert signature == expected_sig
@@ -604,7 +611,7 @@ def test_approval_token_two_calls_produce_different_nonces(monkeypatch: pytest.M
     monkeypatch.setenv("LG_RUNNER_APPROVAL_SECRET", "secret")
     t1 = _approval_token_for_challenge("chal")
     t2 = _approval_token_for_challenge("chal")
-    assert t1.split("|")[2] != t2.split("|")[2], "nonces must differ between calls"
+    assert t1.split(".")[2] != t2.split(".")[2], "nonces must differ between calls"
 
 
 def test_rate_limiter_allows_one_and_blocks_second() -> None:

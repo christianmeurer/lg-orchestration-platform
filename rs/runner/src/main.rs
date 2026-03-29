@@ -98,26 +98,83 @@ async fn execute_tool(
     Ok(Json(env))
 }
 
+fn check_batch_size(n: usize) -> Result<(), crate::errors::ApiError> {
+    const MAX_BATCH_SIZE: usize = 50;
+    if n > MAX_BATCH_SIZE {
+        return Err(crate::errors::ApiError::BadRequest(format!(
+            "batch size {n} exceeds maximum of {MAX_BATCH_SIZE}"
+        )));
+    }
+    Ok(())
+}
+
 async fn batch_execute_tool(
     axum::extract::State(cfg): axum::extract::State<RunnerConfig>,
     Json(req): Json<ToolBatchExecuteRequest>,
 ) -> Result<Json<ToolBatchExecuteResponse>, crate::errors::ApiError> {
+    check_batch_size(req.calls.len())?;
     let cfg = Arc::new(cfg);
     let n = req.calls.len();
+    // Bound concurrency to prevent resource exhaustion under gVisor where
+    // process spawning is more expensive than on native Linux.
+    let sem = Arc::new(tokio::sync::Semaphore::new(8));
     let mut set: tokio::task::JoinSet<(usize, Result<ToolEnvelope, crate::errors::ApiError>)> =
         tokio::task::JoinSet::new();
     for (idx, call) in req.calls.into_iter().enumerate() {
         let cfg = Arc::clone(&cfg);
-        set.spawn(async move { (idx, dispatch_tool(&cfg, call).await) });
+        let sem = Arc::clone(&sem);
+        set.spawn(async move {
+            let _permit = sem.acquire().await.expect("semaphore closed");
+            (idx, dispatch_tool(&cfg, call).await)
+        });
     }
+    // Collect all results — partial successes are preserved even when some
+    // tool calls fail.  A single failing call does NOT abort the entire batch.
     let mut out: Vec<Option<ToolEnvelope>> = (0..n).map(|_| None).collect();
     while let Some(join_result) = set.join_next().await {
-        let (idx, result) = join_result.map_err(|e| {
-            crate::errors::ApiError::Other(anyhow::anyhow!("batch task panicked: {e}"))
-        })?;
-        out[idx] = Some(result?);
+        match join_result {
+            Ok((idx, Ok(env))) => {
+                out[idx] = Some(env);
+            }
+            Ok((idx, Err(e))) => {
+                tracing::warn!(idx, error = %e, "batch tool call failed; returning error envelope");
+                out[idx] = Some(ToolEnvelope::err(
+                    "batch",
+                    1,
+                    e.to_string(),
+                    serde_json::json!({"error": "tool_call_failed", "idx": idx}),
+                ));
+            }
+            Err(join_err) => {
+                tracing::error!(error = %join_err, "batch task panicked");
+                // Find the slot that panicked — we cannot recover the idx from a
+                // JoinError, so push an error envelope at the first empty slot.
+                if let Some(slot) = out.iter_mut().find(|s| s.is_none()) {
+                    *slot = Some(ToolEnvelope::err(
+                        "batch",
+                        1,
+                        format!("task panicked: {join_err}"),
+                        serde_json::json!({"error": "task_panicked"}),
+                    ));
+                }
+            }
+        }
     }
-    let results = out.into_iter().map(Option::unwrap).collect();
+    // Fill any remaining None slots (should not happen, but be defensive).
+    let results = out
+        .into_iter()
+        .enumerate()
+        .map(|(idx, opt)| {
+            opt.unwrap_or_else(|| {
+                ToolEnvelope::err(
+                    "batch",
+                    1,
+                    format!("task {idx} did not complete"),
+                    serde_json::json!({"error": "task_incomplete", "idx": idx}),
+                )
+            })
+        })
+        .collect();
     Ok(Json(ToolBatchExecuteResponse { results }))
 }
 
@@ -216,6 +273,25 @@ async fn main() -> anyhow::Result<()> {
     )?;
     cfg.indexing.ensure_started();
 
+    // Probe cgroup v2 availability and emit a metric so operators can detect
+    // when resource limits are silently not enforced (e.g. non-root in gVisor).
+    {
+        let cgroup_available = std::path::Path::new("/sys/fs/cgroup/cgroup.controllers").exists();
+        if cgroup_available {
+            tracing::info!("cgroup_v2_available: resource limits will be enforced");
+        } else {
+            tracing::warn!(
+                "cgroup_v2_unavailable: resource limits will NOT be enforced; \
+                 runaway processes can exhaust pod memory"
+            );
+        }
+        metrics::counter!(
+            "runner_cgroup_available",
+            "available" => if cgroup_available { "true" } else { "false" }
+        )
+        .increment(1);
+    }
+
     // ------------------------------------------------------------------
     // MCP connection pool — periodic cleanup of stale entries
     // ------------------------------------------------------------------
@@ -282,4 +358,22 @@ async fn shutdown_signal() {
 async fn shutdown_signal() {
     tokio::signal::ctrl_c().await.expect("failed to install ctrl-c handler");
     tracing::info!("runner_shutdown: received ctrl-c");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_batch_size_limit_allows_within_limit() {
+        assert!(check_batch_size(50).is_ok());
+        assert!(check_batch_size(1).is_ok());
+        assert!(check_batch_size(0).is_ok());
+    }
+
+    #[test]
+    fn test_batch_size_limit_rejects_over_limit() {
+        assert!(check_batch_size(51).is_err());
+        assert!(check_batch_size(100).is_err());
+    }
 }

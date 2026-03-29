@@ -57,7 +57,24 @@ def run_command(args: Any, *, cfg: AppConfig, repo_root: Path) -> int:
     trace_out_dir = str(trace_out_dir_raw).strip() if trace_out_dir_raw is not None else ""
 
     resume_approvals: dict[str, Any] | None = None
-    resume_approvals_raw = str(os.environ.get("LG_RESUME_APPROVALS_JSON", "")).strip()
+    # HIGH FIX 5: Read approvals from temp file (LG_RESUME_APPROVALS_FILE)
+    # instead of environment variable to avoid leaking secrets via /proc.
+    # Falls back to LG_RESUME_APPROVALS_JSON for backward compatibility.
+    resume_approvals_file = str(os.environ.get("LG_RESUME_APPROVALS_FILE", "")).strip()
+    resume_approvals_raw = ""
+    if resume_approvals_file:
+        try:
+            resume_approvals_raw = Path(resume_approvals_file).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            log.warning("resume_approvals_file_read_failed", error=str(exc))
+        finally:
+            # Clean up the temp file after reading
+            try:
+                os.unlink(resume_approvals_file)
+            except OSError:
+                pass
+    if not resume_approvals_raw:
+        resume_approvals_raw = str(os.environ.get("LG_RESUME_APPROVALS_JSON", "")).strip()
     if resume_approvals_raw:
         try:
             parsed_resume_approvals = json.loads(resume_approvals_raw)
@@ -96,11 +113,25 @@ def run_command(args: Any, *, cfg: AppConfig, repo_root: Path) -> int:
         db_path = resolve_checkpoint_db_path(repo_root=repo_root, db_path=cfg.checkpoint.db_path)
         _backend = cfg.checkpoint.backend
         if _backend == "redis":
-            checkpointer = create_checkpoint_saver(
-                "redis",
-                redis_url=cfg.checkpoint.redis_url,
-                ttl_seconds=cfg.checkpoint.redis_ttl_seconds,
-            )
+            try:
+                _redis_saver = create_checkpoint_saver(
+                    "redis",
+                    redis_url=cfg.checkpoint.redis_url,
+                    ttl_seconds=cfg.checkpoint.redis_ttl_seconds,
+                )
+                # Verify connectivity before committing to Redis backend.
+                # The socket_connect_timeout (default 5s) on the client
+                # ensures this does not hang indefinitely.
+                _redis_saver._sync_client.ping()  # type: ignore[union-attr]
+                checkpointer = _redis_saver
+                log.info("checkpoint_redis_ok", url=cfg.checkpoint.redis_url[:30])
+            except Exception as exc:
+                log.warning(
+                    "checkpoint_redis_unreachable",
+                    error=str(exc),
+                    fallback="sqlite",
+                )
+                checkpointer = create_checkpoint_saver("sqlite", db_path=db_path)
         elif _backend == "postgres":
             checkpointer = create_checkpoint_saver(
                 "postgres",
@@ -214,6 +245,7 @@ def run_command(args: Any, *, cfg: AppConfig, repo_root: Path) -> int:
         "_config_policy": {
             "network_default": cfg.policy.network_default,
             "require_approval_for_mutations": cfg.policy.require_approval_for_mutations,
+            "allowed_write_paths": list(cfg.policy.allowed_write_paths),
         },
         "_trace_enabled": trace_enabled,
         "_trace_out_dir": trace_out_dir or cfg.trace.output_dir,
@@ -363,6 +395,7 @@ def run_command(args: Any, *, cfg: AppConfig, repo_root: Path) -> int:
                     "request_id": str(out.get("_request_id", "")),
                     "auth_subject": str(remote_api_context.get("auth_subject", "")),
                     "client_ip": str(remote_api_context.get("client_ip", "")),
+                    "final": str(out.get("final", "")),
                 }
                 run_store.upsert(record)
 

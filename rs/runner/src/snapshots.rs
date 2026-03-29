@@ -12,8 +12,35 @@ use tokio::process::Command;
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::envelope::CheckpointPointer;
+use crate::errors::ApiError;
 
 const SNAPSHOT_REF_PREFIX: &str = "refs/lg_orch/snapshots/";
+
+/// Validate that a snapshot ID is safe to embed in a git ref name.
+///
+/// Accepts only alphanumeric characters, hyphens, and underscores,
+/// with a maximum length of 64 characters.  This prevents git flag
+/// injection (e.g. `--force`) and ref-name collisions (e.g. `refs/heads/main`).
+fn validate_snapshot_id(id: &str) -> Result<(), ApiError> {
+    if id.is_empty() || id.len() > 64 {
+        return Err(ApiError::BadRequest(format!(
+            "snapshot_id must be 1–64 characters, got {}",
+            id.len()
+        )));
+    }
+    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err(ApiError::BadRequest(
+            "snapshot_id must contain only [a-zA-Z0-9_-]".to_string(),
+        ));
+    }
+    // Reject IDs starting with '-' to prevent git flag injection (e.g. `--force`).
+    if id.starts_with('-') {
+        return Err(ApiError::BadRequest(
+            "snapshot_id must not start with '-'".to_string(),
+        ));
+    }
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // Per-repository serialisation lock
@@ -150,7 +177,10 @@ pub async fn undo_to_snapshot(
     }
 
     let resolved_snapshot = if let Some(id) = snapshot_id {
-        id.trim().to_string()
+        let trimmed = id.trim().to_string();
+        validate_snapshot_id(&trimmed)
+            .map_err(|e| SnapshotError::Other(anyhow::anyhow!("{e}")))?;
+        trimmed
     } else {
         let (ok, stdout, stderr) = run_git(
             root_dir,
@@ -316,5 +346,29 @@ mod tests {
             .await
             .expect_err("expected snapshot not found");
         assert!(matches!(err, SnapshotError::SnapshotNotFound(_)));
+    }
+
+    #[test]
+    fn test_validate_snapshot_id_valid() {
+        assert!(validate_snapshot_id("abc-123_XYZ").is_ok());
+        assert!(validate_snapshot_id("a").is_ok());
+        assert!(validate_snapshot_id(&"x".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn test_validate_snapshot_id_empty() {
+        assert!(validate_snapshot_id("").is_err());
+    }
+
+    #[test]
+    fn test_validate_snapshot_id_too_long() {
+        assert!(validate_snapshot_id(&"x".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn test_validate_snapshot_id_git_flag_injection() {
+        assert!(validate_snapshot_id("--force").is_err());
+        assert!(validate_snapshot_id("refs/heads/main").is_err());
+        assert!(validate_snapshot_id("../escape").is_err());
     }
 }

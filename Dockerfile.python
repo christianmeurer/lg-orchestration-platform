@@ -23,7 +23,7 @@ COPY configs/ ./configs/
 COPY prompts/ ./prompts/
 COPY schemas/ ./schemas/
 
-RUN uv sync --project ./py --python 3.12 --no-dev --all-extras
+RUN uv sync --project ./py --python /usr/local/bin/python --no-dev --all-extras
 
 ENV PATH=/app/py/.venv/bin:${PATH}
 

@@ -22,6 +22,18 @@ from langgraph.checkpoint.base import (
 
 from lg_orch.backends._base import BaseCheckpointSaver, parse_config
 
+import re
+
+_TABLE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+
+
+def _validate_table_name(name: str) -> str:
+    """Validate that *name* is a safe SQL identifier."""
+    if not _TABLE_NAME_RE.match(name):
+        raise ValueError(f"Invalid table name: {name!r}")
+    return name
+
+
 _POSTGRES_CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS lula_checkpoints (
     thread_id             TEXT NOT NULL,
@@ -80,7 +92,8 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[Any]):
 
         super().__init__()
         self._dsn = dsn
-        self._table_name = table_name
+        # MEDIUM FIX 1: Validate table name to prevent SQL injection
+        self._table_name = _validate_table_name(table_name)
         self._pool: Any = None
         self._initialized = False
 
@@ -274,24 +287,27 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[Any]):
         tbl = self._table_name
         async with pool.connection() as conn:
             conn.row_factory = _dict_row_factory  # type: ignore[attr-defined,unused-ignore]
-            if checkpoint_id is not None:
-                row = await conn.fetchrow(
-                    f"SELECT * FROM {tbl}"
-                    f" WHERE thread_id = $1 AND checkpoint_ns = $2 AND checkpoint_id = $3",
-                    thread_id,
-                    checkpoint_ns,
-                    checkpoint_id,
-                )
-            else:
-                row = await conn.fetchrow(
-                    f"SELECT * FROM {tbl}"
-                    f" WHERE thread_id = $1 AND checkpoint_ns = $2"
-                    f" ORDER BY created_at DESC LIMIT 1",
-                    thread_id,
-                    checkpoint_ns,
-                )
-            if row is None:
-                return None
+            # HIGH FIX 1: Use psycopg3 cursor-based API instead of asyncpg's
+            # conn.fetchrow() which does not exist in psycopg3.
+            async with conn.cursor() as cur:
+                if checkpoint_id is not None:
+                    await cur.execute(
+                        f"SELECT * FROM {tbl}"
+                        f" WHERE thread_id = %s AND checkpoint_ns = %s AND checkpoint_id = %s",
+                        (thread_id, checkpoint_ns, checkpoint_id),
+                    )
+                else:
+                    await cur.execute(
+                        f"SELECT * FROM {tbl}"
+                        f" WHERE thread_id = %s AND checkpoint_ns = %s"
+                        f" ORDER BY created_at DESC LIMIT 1",
+                        (thread_id, checkpoint_ns),
+                    )
+                row_tuple = await cur.fetchone()
+                if row_tuple is None:
+                    return None
+                cols = [desc[0] for desc in cur.description or []]
+                row = dict(zip(cols, row_tuple, strict=False))
             return self._row_to_tuple(row, requested_config=requested_config)
 
     async def alist(
@@ -310,21 +326,22 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[Any]):
         pool = await self._get_pool()
         tbl = self._table_name
 
+        # HIGH FIX 1: Use psycopg3 %s placeholders instead of asyncpg $N
         params: list[Any] = [thread_id, checkpoint_ns]
         where_extra = ""
         if before is not None:
             before_id = get_checkpoint_id(before)
             if before_id is not None:
                 params.append(before_id)
-                where_extra = f" AND checkpoint_id != ${len(params)}"
+                where_extra = " AND checkpoint_id != %s"
 
         limit_clause = ""
         if limit is not None and limit >= 0:
             params.append(limit)
-            limit_clause = f" LIMIT ${len(params)}"
+            limit_clause = " LIMIT %s"
 
         query = (
-            f"SELECT * FROM {tbl} WHERE thread_id = $1 AND checkpoint_ns = $2"
+            f"SELECT * FROM {tbl} WHERE thread_id = %s AND checkpoint_ns = %s"
             f"{where_extra} ORDER BY created_at DESC{limit_clause}"
         )
 
@@ -354,13 +371,14 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[Any]):
 
         pool = await self._get_pool()
         tbl = self._table_name
+        # HIGH FIX 1: Use psycopg3 %s placeholders instead of asyncpg $N
         async with pool.connection() as conn:
             await conn.execute(
                 f"""
                 INSERT INTO {tbl}
                     (thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id,
                      checkpoint, checkpoint_type, metadata_type, metadata_blob, pending_writes)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (thread_id, checkpoint_ns, checkpoint_id) DO UPDATE SET
                     parent_checkpoint_id = EXCLUDED.parent_checkpoint_id,
                     checkpoint           = EXCLUDED.checkpoint,
@@ -370,15 +388,17 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[Any]):
                     pending_writes       = EXCLUDED.pending_writes,
                     created_at           = now()
                 """,
-                thread_id,
-                checkpoint_ns,
-                checkpoint_id,
-                parent_checkpoint_id or None,
-                checkpoint_blob,
-                checkpoint_type,
-                metadata_type,
-                metadata_blob,
-                json.dumps([]),
+                (
+                    thread_id,
+                    checkpoint_ns,
+                    checkpoint_id,
+                    parent_checkpoint_id or None,
+                    checkpoint_blob,
+                    checkpoint_type,
+                    metadata_type,
+                    metadata_blob,
+                    json.dumps([]),
+                ),
             )
             await conn.commit()
 
@@ -404,11 +424,12 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[Any]):
 
         pool = await self._get_pool()
         tbl = self._table_name
+        # HIGH FIX 1: Use psycopg3 %s placeholders instead of asyncpg $N
         async with pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     f"SELECT pending_writes FROM {tbl}"
-                    f" WHERE thread_id = $1 AND checkpoint_ns = $2 AND checkpoint_id = $3",
+                    f" WHERE thread_id = %s AND checkpoint_ns = %s AND checkpoint_id = %s",
                     (thread_id, checkpoint_ns, checkpoint_id),
                 )
                 row = await cur.fetchone()
@@ -441,12 +462,14 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[Any]):
                 )
 
             await conn.execute(
-                f"UPDATE {tbl} SET pending_writes = $1"
-                f" WHERE thread_id = $2 AND checkpoint_ns = $3 AND checkpoint_id = $4",
-                json.dumps(existing_writes),
-                thread_id,
-                checkpoint_ns,
-                checkpoint_id,
+                f"UPDATE {tbl} SET pending_writes = %s"
+                f" WHERE thread_id = %s AND checkpoint_ns = %s AND checkpoint_id = %s",
+                (
+                    json.dumps(existing_writes),
+                    thread_id,
+                    checkpoint_ns,
+                    checkpoint_id,
+                ),
             )
             await conn.commit()
 
@@ -455,7 +478,7 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[Any]):
         pool = await self._get_pool()
         tbl = self._table_name
         async with pool.connection() as conn:
-            await conn.execute(f"DELETE FROM {tbl} WHERE thread_id = $1", thread_id)
+            await conn.execute(f"DELETE FROM {tbl} WHERE thread_id = %s", (thread_id,))
             await conn.commit()
 
     async def aclose(self) -> None:

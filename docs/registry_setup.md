@@ -36,7 +36,7 @@ The Kubernetes manifests reference an `imagePullSecret` named `docr-secret`.
 Create it once per namespace:
 
 ```bash
-doctl registry kubernetes-manifest | kubectl apply -f -
+doctl registry kubernetes-manifest | sed "s/name: registry-.*/name: docr-secret/" | kubectl apply -n lula-orch -f -
 ```
 
 Or manually:

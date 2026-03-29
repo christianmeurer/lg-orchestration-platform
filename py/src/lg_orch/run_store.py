@@ -2,9 +2,12 @@
 # Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 from __future__ import annotations
 
+import json
 import logging
+import os
 import sqlite3
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -29,6 +32,7 @@ _COLUMNS = (
     "pending_approval",
     "pending_approval_summary",
     "namespace",
+    "final",
 )
 
 _CREATE_TABLE = """\
@@ -49,7 +53,8 @@ CREATE TABLE IF NOT EXISTS runs (
     checkpoint_id TEXT NOT NULL DEFAULT '',
     pending_approval INTEGER NOT NULL DEFAULT 0,
     pending_approval_summary TEXT NOT NULL DEFAULT '',
-    namespace    TEXT NOT NULL DEFAULT ''
+    namespace    TEXT NOT NULL DEFAULT '',
+    final        TEXT NOT NULL DEFAULT ''
 )
 """
 
@@ -187,6 +192,7 @@ class RunStore:
             ("checkpoint_id", "TEXT NOT NULL DEFAULT ''"),
             ("pending_approval", "INTEGER NOT NULL DEFAULT 0"),
             ("pending_approval_summary", "TEXT NOT NULL DEFAULT ''"),
+            ("final", "TEXT NOT NULL DEFAULT ''"),
         )
         for column, spec in run_columns:
             try:
@@ -527,3 +533,338 @@ class RunStore:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Redis-backed RunStore for multi-replica deployments
+# ---------------------------------------------------------------------------
+
+_RUN_KEY_PREFIX = "lula:run:"
+_RUN_INDEX_KEY = "lula:runs:index"
+_RECOVERY_KEY_PREFIX = "lula:recovery:"
+_RECOVERY_INDEX_KEY = "lula:recovery:index"
+_SEMANTIC_KEY_PREFIX = "lula:semantic:"
+_SEMANTIC_INDEX_KEY = "lula:semantic:index"
+_DEFAULT_TTL_SECONDS = 86400  # 24 hours
+
+
+class RedisRunStore:
+    """Redis-backed RunStore for multi-replica deployments.
+
+    Implements the same public interface as :class:`RunStore` so that
+    :class:`~lg_orch.api.service.RemoteAPIService` can use either backend
+    transparently.
+
+    Falls back to in-memory storage if Redis is unavailable at construction
+    time (see :func:`create_run_store`).
+    """
+
+    def __init__(
+        self,
+        redis_url: str,
+        *,
+        namespace: str = "",
+        connect_timeout: float = 5.0,
+        socket_timeout: float = 10.0,
+        ttl_seconds: int = _DEFAULT_TTL_SECONDS,
+    ) -> None:
+        import redis as redis_lib
+
+        self._namespace = namespace.strip()
+        self._ttl = ttl_seconds
+        self._client: Any = redis_lib.from_url(
+            redis_url,
+            socket_connect_timeout=connect_timeout,
+            socket_timeout=socket_timeout,
+            decode_responses=True,
+        )
+        # Verify connectivity — raises on failure so caller can fall back.
+        self._client.ping()
+
+    # ------------------------------------------------------------------
+    # Key helpers (namespace-aware)
+    # ------------------------------------------------------------------
+
+    def _run_key(self, run_id: str) -> str:
+        return f"{_RUN_KEY_PREFIX}{self._namespace}:{run_id}"
+
+    def _run_index_key(self) -> str:
+        return f"{_RUN_INDEX_KEY}:{self._namespace}"
+
+    def _recovery_key(self, fingerprint: str, run_id: str) -> str:
+        return f"{_RECOVERY_KEY_PREFIX}{self._namespace}:{fingerprint}:{run_id}"
+
+    def _recovery_index_key(self) -> str:
+        return f"{_RECOVERY_INDEX_KEY}:{self._namespace}"
+
+    def _semantic_key(self, memory_key: str, run_id: str) -> str:
+        return f"{_SEMANTIC_KEY_PREFIX}{self._namespace}:{memory_key}:{run_id}"
+
+    def _semantic_index_key(self) -> str:
+        return f"{_SEMANTIC_INDEX_KEY}:{self._namespace}"
+
+    # ------------------------------------------------------------------
+    # Runs
+    # ------------------------------------------------------------------
+
+    def upsert(self, record: dict[str, Any]) -> None:
+        data = {k: record[k] for k in _COLUMNS if k in record}
+        data["namespace"] = self._namespace
+        if not data:
+            return
+        run_id = data.get("run_id", "")
+        if not run_id:
+            return
+        created_at = str(data.get("created_at", ""))
+        try:
+            score = datetime.fromisoformat(
+                created_at.replace("Z", "+00:00")
+            ).timestamp()
+        except (ValueError, TypeError):
+            score = time.time()
+        key = self._run_key(run_id)
+        self._client.setex(key, self._ttl, json.dumps(data, default=str))
+        self._client.zadd(self._run_index_key(), {run_id: score})
+        self._client.expire(self._run_index_key(), self._ttl)
+
+    def get_run(self, run_id: str, namespace: str | None = None) -> dict[str, Any] | None:
+        ns = namespace if namespace is not None else self._namespace
+        key = f"{_RUN_KEY_PREFIX}{ns}:{run_id}"
+        raw = self._client.get(key)
+        if raw is None:
+            return None
+        return json.loads(raw)
+
+    def list_runs(self, namespace: str | None = None) -> list[dict[str, Any]]:
+        ns = namespace if namespace is not None else self._namespace
+        idx_key = f"{_RUN_INDEX_KEY}:{ns}"
+        run_ids: list[str] = self._client.zrevrange(idx_key, 0, -1)
+        runs: list[dict[str, Any]] = []
+        for rid in run_ids:
+            raw = self._client.get(f"{_RUN_KEY_PREFIX}{ns}:{rid}")
+            if raw is not None:
+                runs.append(json.loads(raw))
+        return runs
+
+    def search_runs(
+        self,
+        query: str,
+        limit: int = 50,
+        namespace: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Brute-force search over all runs (no FTS in Redis).
+
+        Scans the index and filters by substring match on run_id, request,
+        status, or pending_approval_summary.  Adequate for the typical
+        run-store size (hundreds, not millions).
+        """
+        ns = namespace if namespace is not None else self._namespace
+        query_text = query.strip().lower()
+        if not query_text:
+            return []
+        limit = max(1, limit)
+        all_runs = self.list_runs(namespace=ns)
+        results: list[dict[str, Any]] = []
+        for run in all_runs:
+            haystack = " ".join(
+                str(run.get(f, ""))
+                for f in ("run_id", "request", "status", "pending_approval_summary")
+            ).lower()
+            if query_text in haystack:
+                results.append(run)
+                if len(results) >= limit:
+                    break
+        return results
+
+    # ------------------------------------------------------------------
+    # Recovery facts
+    # ------------------------------------------------------------------
+
+    def upsert_recovery_facts(self, run_id: str, facts: list[dict[str, Any]]) -> None:
+        now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        idx_key = self._recovery_index_key()
+        for fact in facts:
+            if not isinstance(fact, dict):
+                continue
+            fingerprint = str(fact.get("failure_fingerprint", "")).strip()
+            if not fingerprint:
+                continue
+            loop_raw = fact.get("loop", 0)
+            loop = loop_raw if isinstance(loop_raw, int) and not isinstance(loop_raw, bool) else 0
+            salience_raw = fact.get("salience", 0)
+            salience = (
+                salience_raw
+                if isinstance(salience_raw, int) and not isinstance(salience_raw, bool)
+                else 0
+            )
+            retry_target = fact.get("retry_target")
+            data = {
+                "fingerprint": fingerprint,
+                "run_id": run_id,
+                "loop": loop,
+                "failure_class": str(fact.get("failure_class", "")).strip(),
+                "summary": str(fact.get("summary", fact.get("loop_summary", ""))).strip(),
+                "last_check": str(fact.get("last_check", "")).strip(),
+                "context_scope": str(fact.get("context_scope", "")).strip(),
+                "retry_target": str(retry_target).strip() if retry_target is not None else None,
+                "plan_action": str(fact.get("plan_action", "keep")).strip() or "keep",
+                "salience": salience,
+                "created_at": now,
+                "namespace": self._namespace,
+            }
+            key = self._recovery_key(fingerprint, run_id)
+            self._client.setex(key, self._ttl, json.dumps(data, default=str))
+            self._client.zadd(idx_key, {f"{fingerprint}:{run_id}": salience})
+            self._client.expire(idx_key, self._ttl)
+
+    def get_recent_recovery_facts(
+        self,
+        *,
+        fingerprint: str | None = None,
+        failure_class: str | None = None,
+        limit: int = 8,
+    ) -> list[dict[str, Any]]:
+        limit = max(1, limit)
+        idx_key = self._recovery_index_key()
+        members: list[str] = self._client.zrevrange(idx_key, 0, -1)
+        all_facts: list[dict[str, Any]] = []
+        for member in members:
+            raw = self._client.get(f"{_RECOVERY_KEY_PREFIX}{self._namespace}:{member}")
+            if raw is not None:
+                all_facts.append(json.loads(raw))
+
+        if fingerprint:
+            matched = [f for f in all_facts if f.get("fingerprint") == fingerprint]
+            if matched:
+                matched.sort(key=lambda x: (x.get("salience", 0), x.get("loop", 0)), reverse=True)
+                return matched[:limit]
+
+        if failure_class:
+            matched = [f for f in all_facts if f.get("failure_class") == failure_class]
+            matched.sort(key=lambda x: (x.get("salience", 0), x.get("loop", 0)), reverse=True)
+            return matched[:limit]
+
+        all_facts.sort(key=lambda x: (x.get("salience", 0), x.get("loop", 0)), reverse=True)
+        return all_facts[:limit]
+
+    def get_episodic_context(
+        self,
+        *,
+        failure_fingerprint: str = "",
+        failure_class: str = "",
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        return self.get_recent_recovery_facts(
+            fingerprint=failure_fingerprint or None,
+            failure_class=failure_class or None,
+            limit=limit,
+        )
+
+    # ------------------------------------------------------------------
+    # Semantic memories
+    # ------------------------------------------------------------------
+
+    def upsert_semantic_memories(self, run_id: str, memories: list[dict[str, Any]]) -> None:
+        now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        idx_key = self._semantic_index_key()
+        for memory in memories:
+            if not isinstance(memory, dict):
+                continue
+            summary = str(memory.get("summary", "")).strip()
+            if not summary:
+                continue
+            memory_key = str(memory.get("memory_key", "")).strip()
+            if not memory_key:
+                memory_key = (
+                    f"{str(memory.get('kind', '')).strip()}"
+                    f"|{str(memory.get('source', '')).strip()}"
+                    f"|{summary}"
+                ).lower()
+            data = {
+                "memory_key": memory_key,
+                "run_id": run_id,
+                "kind": str(memory.get("kind", "")).strip() or "run_note",
+                "source": str(memory.get("source", "")).strip(),
+                "summary": summary,
+                "created_at": now,
+                "namespace": self._namespace,
+            }
+            key = self._semantic_key(memory_key, run_id)
+            self._client.setex(key, self._ttl, json.dumps(data, default=str))
+            self._client.zadd(idx_key, {f"{memory_key}:{run_id}": time.time()})
+            self._client.expire(idx_key, self._ttl)
+
+    def search_semantic_memories(
+        self,
+        *,
+        query: str,
+        limit: int = 5,
+    ) -> list[dict[str, Any]]:
+        query_text = query.strip().lower()
+        if not query_text:
+            return []
+        limit = max(1, limit)
+        idx_key = self._semantic_index_key()
+        members: list[str] = self._client.zrevrange(idx_key, 0, -1)
+        results: list[dict[str, Any]] = []
+        for member in members:
+            parts = member.split(":", 1)
+            if len(parts) != 2:
+                continue
+            mem_key, rid = parts
+            raw = self._client.get(self._semantic_key(mem_key, rid))
+            if raw is None:
+                continue
+            data = json.loads(raw)
+            haystack = " ".join(
+                str(data.get(f, "")) for f in ("summary", "source", "kind")
+            ).lower()
+            if query_text in haystack:
+                results.append(data)
+                if len(results) >= limit:
+                    break
+        return results
+
+    def close(self) -> None:
+        try:
+            self._client.close()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Factory — choose backend based on environment
+# ---------------------------------------------------------------------------
+
+
+def create_run_store(
+    *,
+    db_path: Path | None = None,
+    namespace: str = "",
+    redis_url: str | None = None,
+) -> RunStore | RedisRunStore:
+    """Create the best available run store.
+
+    Preference order:
+
+    1. If *redis_url* is provided (or ``LG_CHECKPOINT_REDIS_URL`` is set),
+       attempt to connect to Redis/Valkey.  On success return a
+       :class:`RedisRunStore`.
+    2. Fall back to the SQLite-backed :class:`RunStore`.
+
+    This mirrors the checkpoint-saver fallback pattern used elsewhere in the
+    project.
+    """
+    url = redis_url or os.environ.get("LG_CHECKPOINT_REDIS_URL", "")
+    if url:
+        try:
+            store = RedisRunStore(url, namespace=namespace)
+            _log.info("run_store_backend=redis")
+            return store
+        except Exception as exc:
+            _log.warning("redis_run_store_unavailable_falling_back error=%s", exc)
+
+    if db_path is None:
+        db_path = Path("data/runs.sqlite")
+    _log.info("run_store_backend=memory")
+    return RunStore(db_path=db_path, namespace=namespace)

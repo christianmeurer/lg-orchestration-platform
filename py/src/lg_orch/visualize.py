@@ -800,11 +800,11 @@ mermaid.initialize({{ startOnLoad: false, theme: 'dark', darkMode: true,
   themeVariables: {{ background: '#0d1117', primaryColor: '#1f6feb',
     edgeLabelBackground: '#161b22', nodeBorder: '#30363d', lineColor: '#8b949e' }} }});
 window._mermaid = mermaid;
-window._mermaidGraph = {raw_mermaid!r};
+window._mermaidGraph = {json.dumps(raw_mermaid)};
 </script>
 
 <script>
-const API = {safe_base!r};
+const API = {json.dumps(safe_base)};
 
 // ── State ────────────────────────────────────────────────────
 let _runs = [];

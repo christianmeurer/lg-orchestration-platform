@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -88,7 +88,7 @@ class PlannerOutput(BaseModel):
 
 
 class RouterDecision(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     intent: Intent
     task_class: str = "analysis"
@@ -133,11 +133,78 @@ class VerifierReport(BaseModel):
     loop_summary: str = ""
 
 
+class OrchStateDict(TypedDict, total=False):
+    request: str
+    intent: Intent
+    repo_context: dict[str, Any]
+    facts: list[dict[str, Any]]
+    plan: PlannerOutput | None
+    tool_results: list[dict[str, Any]]
+    patches: list[dict[str, Any]]
+    verification: VerifierReport | None
+    final: str
+    guards: dict[str, Any]
+    budgets: dict[str, Any]
+    approvals: dict[str, Any]
+    security: dict[str, Any]
+    telemetry: dict[str, Any]
+    route: RouterDecision | None
+    active_handoff: AgentHandoff | None
+    retry_target: RetryTarget | None
+    recovery_packet: RecoveryPacket | None
+    context_reset_requested: bool
+    plan_discarded: bool
+    plan_discard_reason: str
+    halt_reason: str
+    loop_summaries: list[dict[str, Any]]
+    history_policy: dict[str, Any]
+    provenance: list[dict[str, Any]]
+    checkpoint: dict[str, Any]
+    snapshots: list[dict[str, Any]]
+    undo: dict[str, Any]
+    resume: dict[str, Any]
+    mcp_tools: list[dict[str, Any]]
+    worktree_path: str | None
+    long_term_memory_path: str | None
+    repo_root: str | None
+    runner_url: str | None
+    healing_job_id: str | None
+    test_repair_mode: bool
+    _run_id: str
+    _repo_root: str
+    _runner_base_url: str
+    _runner_api_key: str | None
+    _mcp_enabled: bool
+    _mcp_servers: dict[str, Any]
+    _checkpoint: dict[str, Any]
+    _models: dict[str, Any]
+    _model_routing_policy: dict[str, Any]
+    _model_provider_runtime: dict[str, Any]
+    _budget_max_loops: int
+    _budget_max_tool_calls_per_loop: int
+    _budget_max_patch_bytes: int
+    _budget_context: dict[str, Any]
+    _config_policy: dict[str, Any]
+    _trace_enabled: bool
+    _trace_out_dir: str
+    _trace_capture_model_metadata: bool
+    _run_store_path: str
+    _procedure_cache_path: str
+    _vericoding_enabled: bool
+    _vericoding_extensions: list[str]
+    _request_id: str
+    _remote_api_context: dict[str, Any]
+    _resume_approvals: dict[str, Any]
+    _approval_context: dict[str, Any]
+    _runner_enabled: bool
+    _trace_events: list[dict[str, Any]]
+
+
 class OrchState(BaseModel):
     # extra="allow" is required so that LangGraph's internal underscore-prefixed
     # fields (_run_id, _lane, etc.) can coexist in the graph state without
     # causing Pydantic validation errors.
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     request: str
     intent: Intent = "analysis"
@@ -175,6 +242,39 @@ class OrchState(BaseModel):
     runner_url: str | None = None
     healing_job_id: str | None = None
     test_repair_mode: bool = False
+
+    # -------------------------------------------------------------------------
+    # Internal fields using aliases because Pydantic ignores _ prefixed fields
+    # during initialization and model_dump(), which breaks LangGraph state!
+    # -------------------------------------------------------------------------
+    run_id_internal: str = Field(default="", alias="_run_id")
+    repo_root_internal: str = Field(default="", alias="_repo_root")
+    runner_base_url_internal: str = Field(default="http://127.0.0.1:8088", alias="_runner_base_url")
+    runner_api_key_internal: str | None = Field(default=None, alias="_runner_api_key")
+    mcp_enabled_internal: bool = Field(default=False, alias="_mcp_enabled")
+    mcp_servers_internal: dict[str, Any] = Field(default_factory=dict, alias="_mcp_servers")
+    checkpoint_internal: dict[str, Any] = Field(default_factory=dict, alias="_checkpoint")
+    models_internal: dict[str, Any] = Field(default_factory=dict, alias="_models")
+    model_routing_policy_internal: dict[str, Any] = Field(default_factory=dict, alias="_model_routing_policy")
+    model_provider_runtime_internal: dict[str, Any] = Field(default_factory=dict, alias="_model_provider_runtime")
+    budget_max_loops_internal: int = Field(default=1, alias="_budget_max_loops")
+    budget_max_tool_calls_per_loop_internal: int = Field(default=1, alias="_budget_max_tool_calls_per_loop")
+    budget_max_patch_bytes_internal: int = Field(default=0, alias="_budget_max_patch_bytes")
+    budget_context_internal: dict[str, Any] = Field(default_factory=dict, alias="_budget_context")
+    config_policy_internal: dict[str, Any] = Field(default_factory=dict, alias="_config_policy")
+    trace_enabled_internal: bool = Field(default=False, alias="_trace_enabled")
+    trace_out_dir_internal: str = Field(default="", alias="_trace_out_dir")
+    trace_capture_model_metadata_internal: bool = Field(default=False, alias="_trace_capture_model_metadata")
+    run_store_path_internal: str = Field(default="", alias="_run_store_path")
+    procedure_cache_path_internal: str = Field(default="", alias="_procedure_cache_path")
+    vericoding_enabled_internal: bool = Field(default=False, alias="_vericoding_enabled")
+    vericoding_extensions_internal: list[str] = Field(default_factory=list, alias="_vericoding_extensions")
+    request_id_internal: str = Field(default="", alias="_request_id")
+    remote_api_context_internal: dict[str, Any] = Field(default_factory=dict, alias="_remote_api_context")
+    resume_approvals_internal: dict[str, Any] = Field(default_factory=dict, alias="_resume_approvals")
+    approval_context_internal: dict[str, Any] = Field(default_factory=dict, alias="_approval_context")
+    runner_enabled_internal: bool = Field(default=True, alias="_runner_enabled")
+    trace_events_internal: list[dict[str, Any]] = Field(default_factory=list, alias="_trace_events")
 
 
 class ModelRoutingDecision(BaseModel):

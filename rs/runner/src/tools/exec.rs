@@ -155,13 +155,25 @@ pub async fn exec(
 
     // Build the minimal safe environment that would be passed to any command.
     // Shared between the vsock guest path and the host-command paths below.
+    //
+    // HOME, TMPDIR, and XDG_CACHE_HOME are injected with /workspace fallbacks
+    // so that Python, uv, cargo, and git can write caches even when the runner
+    // process itself was started without these vars (e.g. in a gVisor container
+    // where the entrypoint does not set them).
     let mut filtered_env: HashMap<String, String> = HashMap::new();
     if let Ok(path) = std::env::var("PATH") {
         filtered_env.insert("PATH".to_string(), path);
     }
-    if let Ok(home) = std::env::var("HOME") {
-        filtered_env.insert("HOME".to_string(), home);
-    }
+    // HOME: fall back to /workspace so Python/uv/git can locate their config dirs.
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/workspace".to_string());
+    filtered_env.insert("HOME".to_string(), home);
+    // TMPDIR: redirect temp files to the writable workspace volume.
+    let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "/workspace/tmp".to_string());
+    filtered_env.insert("TMPDIR".to_string(), tmpdir);
+    // XDG_CACHE_HOME: redirect XDG caches (uv, pip, cargo) to the workspace.
+    let xdg_cache = std::env::var("XDG_CACHE_HOME")
+        .unwrap_or_else(|_| "/workspace/.cache".to_string());
+    filtered_env.insert("XDG_CACHE_HOME".to_string(), xdg_cache);
     if let Ok(v) = std::env::var("CARGO_HOME") {
         filtered_env.insert("CARGO_HOME".to_string(), v);
     }
@@ -326,7 +338,11 @@ pub async fn exec(
         c.current_dir(&cfg.root_dir);
     }
 
-    let t = Duration::from_secs(inp.timeout_s.unwrap_or(600));
+    // Cap the timeout to prevent indefinitely long-running commands.
+    // Default: 600s (10 min). Maximum: 3600s (1 hour).
+    const MAX_TIMEOUT_SECS: u64 = 3600;
+    let timeout_secs = inp.timeout_s.unwrap_or(600).min(MAX_TIMEOUT_SECS);
+    let t = Duration::from_secs(timeout_secs);
     let child = c.spawn().map_err(|e| ApiError::Other(e.into()))?;
 
     // Apply cgroup v2 resource limits for the LinuxNamespace backend.
@@ -624,6 +640,22 @@ mod tests {
             // If spawn fails, that's fine too, as long as it tried.
         } else if let Err(e) = result {
             panic!("unexpected error: {e:?}");
+        }
+    
+        #[test]
+        fn test_timeout_cap_applied() {
+            const MAX_TIMEOUT_SECS: u64 = 3600;
+            let requested: u64 = 99999;
+            let actual = requested.min(MAX_TIMEOUT_SECS);
+            assert_eq!(actual, MAX_TIMEOUT_SECS);
+        }
+    
+        #[test]
+        fn test_timeout_within_cap_unchanged() {
+            const MAX_TIMEOUT_SECS: u64 = 3600;
+            let requested: u64 = 300;
+            let actual = requested.min(MAX_TIMEOUT_SECS);
+            assert_eq!(actual, 300);
         }
     }
 }

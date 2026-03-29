@@ -161,7 +161,11 @@ def _first_step_handoff(plan_payload: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _default_plan(request: str = "") -> PlannerOutput:
+def _default_plan(
+    request: str = "",
+    *,
+    verification: dict[str, Any] | None = None,
+) -> PlannerOutput:
     tools: list[ToolCall] = [ToolCall(tool="list_files", input={"path": ".", "recursive": False})]
     expected_outcome = "Top-level repository structure captured."
 
@@ -179,28 +183,58 @@ def _default_plan(request: str = "") -> PlannerOutput:
         expected_outcome = "Top-level repository structure and TODOs captured."
 
     step_id = "step-1"
+    steps: list[PlanStep] = []
+
+    # If verification indicates failure, prepend a recovery-aware step
+    if verification and not verification.get("ok", True):
+        failure_class = str(verification.get("failure_class", "unknown")).strip() or "unknown"
+        recovery_raw = verification.get("recovery", {})
+        recovery = recovery_raw if isinstance(recovery_raw, dict) else {}
+        recovery_action = str(recovery.get("action", "retry")).strip() or "retry"
+        recovery_step_id = "step-0-recovery"
+        steps.append(
+            PlanStep(
+                id=recovery_step_id,
+                description=(
+                    f"Recovery from verification failure ({failure_class}):"
+                    f" {recovery_action} with updated context."
+                ),
+                tools=[],
+                expected_outcome=f"Recovery action '{recovery_action}' applied for {failure_class}.",
+                files_touched=[],
+                handoff=None,
+            )
+        )
+
+    steps.append(
+        PlanStep(
+            id=step_id,
+            description="Collect repository context.",
+            tools=tools,
+            expected_outcome=expected_outcome,
+            files_touched=[],
+            handoff=_default_step_handoff(
+                request,
+                step_id=step_id,
+                expected_outcome=expected_outcome,
+            ),
+        )
+    )
+
+    acceptance_criteria = [
+        "Necessary repository context was gathered.",
+        "The request can be answered or executed with bounded next steps.",
+    ]
+    if verification and not verification.get("ok", True):
+        acceptance_criteria.append(
+            "Recovery from prior verification failure has been addressed."
+        )
 
     return PlannerOutput(
-        steps=[
-            PlanStep(
-                id=step_id,
-                description="Collect repository context.",
-                tools=tools,
-                expected_outcome=expected_outcome,
-                files_touched=[],
-                handoff=_default_step_handoff(
-                    request,
-                    step_id=step_id,
-                    expected_outcome=expected_outcome,
-                ),
-            )
-        ],
+        steps=steps,
         verification=[],
         rollback="No changes were made.",
-        acceptance_criteria=[
-            "Necessary repository context was gathered.",
-            "The request can be answered or executed with bounded next steps.",
-        ],
+        acceptance_criteria=acceptance_criteria,
         max_iterations=1,
     )
 

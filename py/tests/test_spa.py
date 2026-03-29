@@ -27,14 +27,18 @@ class DummyProcess:
 
         self.stdout = io.StringIO("")
         self._returncode = 0
+        self.returncode = 0
 
     def poll(self) -> int | None:
         return self._returncode
 
-    def wait(self) -> int:
+    def wait(self, timeout: float | None = None) -> int:
         return self._returncode
 
     def terminate(self) -> None:
+        pass
+
+    def kill(self) -> None:
         pass
 
 
@@ -123,15 +127,16 @@ def test_spa_main_js_returns_js(tmp_path: Path) -> None:
     assert "refreshRunList" in js  # sidebar polling
 
 
-def test_index_html_contains_react_vite_script(tmp_path: Path) -> None:
-    """index.html must include the Vite module script tag for React."""
+def test_index_html_contains_d3_and_inline_script(tmp_path: Path) -> None:
+    """index.html must include the D3 CDN script and an inline <script> block."""
     spa_dir = Path(__file__).parent.parent / "src" / "lg_orch" / "spa"
     index_path = spa_dir / "index.html"
     if not index_path.exists():
         pytest.skip("spa/index.html not present — skipping test")
 
     html = index_path.read_text(encoding="utf-8")
-    assert 'src="/src/main.tsx"' in html, "index.html must load the React entry point"
+    assert "d3" in html, "index.html must load D3 for the agent activity graph"
+    assert "<script>" in html, "index.html must contain an inline script block"
 
 
 def test_main_js_uses_force_simulation(tmp_path: Path) -> None:

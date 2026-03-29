@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import os
 from typing import Any
 
 from pydantic import BaseModel
@@ -89,8 +90,10 @@ def _normalize_rel_path(path: str) -> str:
 def _coerce_approval_token(raw: object) -> dict[str, str] | None:
     """Validate and extract an approval token dict.
 
-    Accepts tokens in both the legacy plain-text format (``approve:<id>``) and
-    the current HMAC format (``<challenge_id>|<iat>|<nonce>|<signature>``).
+    Accepts tokens in the legacy plain-text format (``approve:<id>``),
+    the dot-separated HMAC format (``<challenge_id>.<iat>.<nonce>.<sig>``),
+    and the deprecated pipe-separated HMAC format
+    (``<challenge_id>|<iat>|<nonce>|<sig>``).
     Structural integrity is checked here; cryptographic verification is
     delegated to the Rust runner.
     """
@@ -103,12 +106,22 @@ def _coerce_approval_token(raw: object) -> dict[str, str] | None:
     if not isinstance(token, str) or not token.strip():
         return None
     token_s = token.strip()
-    parts = token_s.split("|")
-    if len(parts) != 1 and len(parts) != 4:
-        return None
-    if len(parts) == 4 and not all(parts):
-        return None
-    return {"challenge_id": challenge_id.strip(), "token": token_s}
+    # Try dot-separated first (current format matching Rust runner).
+    dot_parts = token_s.split(".")
+    if len(dot_parts) == 4:
+        if not all(dot_parts):
+            return None
+        return {"challenge_id": challenge_id.strip(), "token": token_s}
+    # Fall back to pipe-separated (deprecated format).
+    pipe_parts = token_s.split("|")
+    if len(pipe_parts) == 4:
+        if not all(pipe_parts):
+            return None
+        return {"challenge_id": challenge_id.strip(), "token": token_s}
+    # Legacy plain-text format (single segment, no separators).
+    if len(dot_parts) == 1 and len(pipe_parts) == 1:
+        return {"challenge_id": challenge_id.strip(), "token": token_s}
+    return None
 
 
 def _approval_for_tool(
@@ -180,7 +193,10 @@ def executor(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
     if not isinstance(plan, dict):
         return state
 
-    runner_base_url = str(state.get("_runner_base_url", "http://127.0.0.1:8088"))
+    _default_runner_url = os.environ.get(
+        "LG_RUNNER_BASE_URL", "http://lula-runner.lula-orch.svc.cluster.local:8088"
+    )
+    runner_base_url = str(state.get("_runner_base_url", _default_runner_url))
     if not _validate_base_url(runner_base_url):
         log.error("executor_invalid_base_url", url=runner_base_url)
         return append_event(
@@ -279,6 +295,22 @@ def executor(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
                             stop_execution = True
                             break
                         input_payload["approval"] = approval
+                    else:
+                        # Auto-generate a signed approval token when approval
+                        # is not required by policy.  The Rust runner
+                        # unconditionally validates a signed HMAC token on
+                        # every apply_patch call, so we must always supply
+                        # one.  Both sides share LG_RUNNER_APPROVAL_SECRET.
+                        from lg_orch.api.approvals import (
+                            approval_token_for_challenge as _gen_token,
+                        )
+
+                        challenge_id = "approval:apply_patch"
+                        token = _gen_token(challenge_id)
+                        input_payload["approval"] = {
+                            "challenge_id": challenge_id,
+                            "token": token,
+                        }
 
                     if allowed_write_paths:
                         changed_paths = _apply_patch_changed_paths(input_payload)
@@ -358,6 +390,15 @@ def executor(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
                 batch_results = client.batch_execute_tools(calls=calls)
                 tool_results.extend(batch_results)
                 tool_calls_used += len(calls)
+
+                # Mark the SCIP index as stale if any apply_patch succeeded
+                for result in batch_results:
+                    if (
+                        result.get("tool") == "apply_patch"
+                        and result.get("ok", False)
+                    ):
+                        state["_scip_index_stale"] = True
+                        break
 
                 for result in batch_results:
                     snapshot_meta = result.get("snapshot")

@@ -102,12 +102,14 @@ _breakers_lock = threading.Lock()
 # httpx.Client singleton cache — one shared TCP pool per (base_url, api_key)
 # ---------------------------------------------------------------------------
 
-_client_cache: dict[tuple[str, str], httpx.Client] = {}
+# MEDIUM FIX 2: Include timeout_s in cache key so different timeouts
+# do not silently share the same httpx.Client instance.
+_client_cache: dict[tuple[str, str, int], httpx.Client] = {}
 _client_cache_lock = threading.Lock()
 
 
 def _get_or_create_client(base_url: str, api_key: str, timeout_s: int) -> httpx.Client:
-    key = (base_url, api_key)
+    key = (base_url, api_key, timeout_s)
     with _client_cache_lock:
         if key not in _client_cache:
             headers = {
@@ -520,6 +522,8 @@ class InferenceClient:
         )
         try:
 
+            req = client.build_request("POST", "/chat/completions", json=payload, headers=req_headers)
+
             @retry(
                 reraise=True,
                 stop=stop_after_attempt(3),
@@ -527,7 +531,7 @@ class InferenceClient:
                 retry=retry_if_exception_type(httpx.TransportError),
             )
             async def _connect() -> httpx.Response:
-                return await client.post("/chat/completions", json=payload, headers=req_headers)
+                return await client.send(req, stream=True)
 
             try:
                 resp = await _connect()

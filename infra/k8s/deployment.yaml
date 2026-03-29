@@ -61,6 +61,11 @@ spec:
                 secretKeyRef:
                   name: lula-secrets
                   key: LG_RUNNER_API_KEY
+            - name: LG_RUNNER_APPROVAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: lula-secrets
+                  key: LG_RUNNER_APPROVAL_SECRET
             - name: DIGITAL_OCEAN_MODEL_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
@@ -88,6 +93,16 @@ spec:
               port: 8001
             initialDelaySeconds: 20
             periodSeconds: 10
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
+            # Allows up to 60s (12 * 5s) for the orchestrator to start before
+            # liveness/readiness probes begin. Prevents premature restarts
+            # during slow gVisor container startup.
           resources:
             requests:
               cpu: 500m

@@ -222,12 +222,12 @@ for key in ordered_keys:
         block = [f"      - key: {key}"]
         if is_secret:
           block.extend([
-              f"        value: {value}",
+              f'        value: "{value}"',
               "        scope: RUN_TIME",
               "        type: SECRET",
           ])
         else:
-          block.append(f"        value: {value}")
+          block.append(f'        value: "{value}"')
         updated_blocks[key] = block
     else:
         for existing_key, existing_block in blocks:

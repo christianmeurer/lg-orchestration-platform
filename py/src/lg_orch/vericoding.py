@@ -53,7 +53,9 @@ _KNOWN_TOOLS: frozenset[str] = frozenset(
 )
 
 # Shell metacharacters that must not appear in any argument.
-_SHELL_METACHARS: str = "`$()| ;&><\n"
+# Space is intentionally excluded: create_subprocess_exec does not use a shell,
+# so spaces in arguments are safe and rejecting them breaks valid paths.
+_SHELL_METACHARS: str = "`$()|;&><\n"
 
 
 # ---------------------------------------------------------------------------

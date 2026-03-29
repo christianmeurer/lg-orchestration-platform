@@ -86,14 +86,19 @@ spec:
       ports:
         - protocol: TCP
           port: 443
-        - protocol: TCP
-          port: 25061
     # Internal Redis
     - to:
         - podSelector: {}
       ports:
         - protocol: TCP
           port: 6379
+    # External managed Valkey/Redis (DigitalOcean managed database, TLS)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 25061
     # Internal Postgres
     - to:
         - podSelector: {}

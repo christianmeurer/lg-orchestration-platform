@@ -278,6 +278,8 @@ def get_current_user(settings: JWTSettings | None = None) -> Any:
         _settings: JWTSettings = Depends(lambda: settings or JWTSettings.from_env()),  # noqa: B008
     ) -> TokenClaims:
         if not _settings.enabled:
+            # HIGH FIX 3: When auth is disabled, grant no roles — not all roles.
+            # Admin/operator endpoints will be denied; non-role-checked endpoints pass.
             return TokenClaims(sub="anonymous", roles=[], exp=0, iat=0)
         if credentials is None:
             raise HTTPException(status_code=401, detail="missing_authorization_header")
@@ -316,7 +318,9 @@ def require_roles(*roles: str, settings: JWTSettings | None = None) -> Any:
         _settings: JWTSettings = Depends(lambda: settings or JWTSettings.from_env()),  # noqa: B008
     ) -> TokenClaims:
         if not _settings.enabled:
-            return TokenClaims(sub="anonymous", roles=list(required), exp=0, iat=0)
+            # HIGH FIX 3: When auth is disabled, grant no roles — not all roles.
+            # This prevents auth bypass where disabling JWT grants admin access.
+            return TokenClaims(sub="anonymous", roles=[], exp=0, iat=0)
         if credentials is None:
             raise HTTPException(status_code=401, detail="missing_authorization_header")
         try:
@@ -347,7 +351,8 @@ def authorize_stdlib(
     and returns a synthetic anonymous :class:`TokenClaims`.
     """
     if not settings.enabled:
-        return TokenClaims(sub="anonymous", roles=list(required_roles), exp=0, iat=0)
+        # HIGH FIX 3: When auth is disabled, grant no roles — not all roles.
+        return TokenClaims(sub="anonymous", roles=[], exp=0, iat=0)
     token = _extract_bearer_token(authorization)
     claims = verify_token(token, settings)
     _check_roles(claims, required_roles)

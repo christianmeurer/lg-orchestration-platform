@@ -37,8 +37,7 @@ COPY configs/ ./configs/
 COPY prompts/ ./prompts/
 COPY schemas/ ./schemas/
 
-RUN uv python install 3.12 \
-    && uv sync --project ./py --python 3.12 --no-dev
+RUN uv sync --project ./py --python /usr/local/bin/python --no-dev --all-extras
 
 # Stage 3: Runtime image
 FROM python:3.12-slim-bookworm AS runtime

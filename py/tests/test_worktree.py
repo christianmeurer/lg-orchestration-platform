@@ -15,6 +15,7 @@ from lg_orch.worktree import (
     WorktreeContext,
     WorktreeError,
     WorktreeLease,
+    cleanup_orphaned_worktrees,
     create_worktree,
     merge_worktree,
     remove_worktree,
@@ -306,3 +307,68 @@ class TestWorktreeLease:
         asyncio.run(_run())
         assert len(received) == 1
         assert received[0] is expected_ctx
+
+
+# ---------------------------------------------------------------------------
+# cleanup_orphaned_worktrees
+# ---------------------------------------------------------------------------
+
+
+class TestCleanupOrphanedWorktrees:
+    def test_cleanup_orphaned_worktrees_returns_list(self, tmp_path: pytest.TempPathFactory) -> None:
+        """cleanup_orphaned_worktrees returns a list (may be empty in test env)."""
+        import subprocess as sp
+
+        sp.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
+        sp.run(
+            ["git", "commit", "--allow-empty", "-m", "init"],
+            cwd=str(tmp_path),
+            capture_output=True,
+        )
+        result = cleanup_orphaned_worktrees(tmp_path)
+        assert isinstance(result, list)
+
+    def test_cleanup_orphaned_worktrees_nonexistent_path(
+        self, tmp_path: pytest.TempPathFactory
+    ) -> None:
+        """cleanup_orphaned_worktrees handles non-git directories gracefully."""
+        result = cleanup_orphaned_worktrees(tmp_path)
+        assert isinstance(result, list)
+        assert result == []
+
+    def test_cleanup_orphaned_worktrees_removes_orphan(
+        self, tmp_path: pytest.TempPathFactory
+    ) -> None:
+        """cleanup_orphaned_worktrees removes worktrees whose path no longer exists."""
+        import subprocess as sp
+
+        # Simulate porcelain output with an orphaned lg-orch worktree
+        porcelain_output = (
+            "worktree /repo\n"
+            "HEAD abc123\n"
+            "branch refs/heads/main\n"
+            "\n"
+            "worktree /nonexistent/path\n"
+            "HEAD def456\n"
+            "branch refs/heads/lg-orch/orphan-run\n"
+            "\n"
+        )
+
+        with patch(
+            "lg_orch.worktree.subprocess.run",
+        ) as mock_run:
+            # First call: git worktree list --porcelain
+            list_result = MagicMock()
+            list_result.returncode = 0
+            list_result.stdout = porcelain_output
+
+            # Subsequent calls: git worktree remove, git branch -D
+            remove_result = MagicMock()
+            remove_result.returncode = 0
+
+            mock_run.side_effect = [list_result, remove_result, remove_result]
+
+            result = cleanup_orphaned_worktrees("/repo")
+
+        assert result == ["/nonexistent/path"]
+        assert mock_run.call_count == 3

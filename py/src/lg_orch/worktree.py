@@ -4,14 +4,18 @@
 
 Public surface:
     WorktreeContext, WorktreeError, WorktreeLease,
-    create_worktree, remove_worktree, merge_worktree
+    create_worktree, remove_worktree, merge_worktree,
+    cleanup_orphaned_worktrees
 """
 
 from __future__ import annotations
 
 import asyncio
 import dataclasses
+import logging
 import os
+import subprocess
+from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING
 
@@ -24,6 +28,7 @@ __all__ = [
     "WorktreeContext",
     "WorktreeError",
     "WorktreeLease",
+    "cleanup_orphaned_worktrees",
     "create_worktree",
     "merge_worktree",
     "remove_worktree",
@@ -142,11 +147,15 @@ async def remove_worktree(ctx: WorktreeContext) -> None:
     Args:
         ctx: The :class:`WorktreeContext` to clean up.
     """
+    # MEDIUM FIX 4: Pass cwd to _run_git so operations target the correct repo.
+    # Derive base_path from worktree_path (parent of .lg_orch_worktrees/<run_id>).
+    _base_path = str(Path(ctx.worktree_path).parent.parent)
     rc, _, err = await _run_git(
         "worktree",
         "remove",
         "--force",
         ctx.worktree_path,
+        cwd=_base_path,
     )
     if rc != 0:
         _log.warning(
@@ -156,7 +165,7 @@ async def remove_worktree(ctx: WorktreeContext) -> None:
             stderr=err,
         )
 
-    rc, _, err = await _run_git("branch", "-D", ctx.branch)
+    rc, _, err = await _run_git("branch", "-D", ctx.branch, cwd=_base_path)
     if rc != 0:
         _log.warning(
             "worktree.branch_delete_failed",
@@ -181,7 +190,9 @@ async def merge_worktree(ctx: WorktreeContext, strategy: str = "ours") -> None:
         WorktreeError: If either git command exits with a non-zero code
                        (e.g. a merge conflict that cannot be auto-resolved).
     """
-    rc, _, err = await _run_git("checkout", ctx.base_branch)
+    # MEDIUM FIX 4: Pass cwd to _run_git so checkout/merge target the correct repo.
+    _base_path = str(Path(ctx.worktree_path).parent.parent)
+    rc, _, err = await _run_git("checkout", ctx.base_branch, cwd=_base_path)
     if rc != 0:
         raise WorktreeError(f"git checkout {ctx.base_branch!r} failed (rc={rc}): {err}")
 
@@ -190,6 +201,7 @@ async def merge_worktree(ctx: WorktreeContext, strategy: str = "ours") -> None:
         "--no-ff",
         f"--strategy={strategy}",
         ctx.branch,
+        cwd=_base_path,
     )
     if rc != 0:
         raise WorktreeError(
@@ -254,3 +266,81 @@ class WorktreeLease:
             except WorktreeError:
                 _log.warning("worktree.merge_failed", run_id=self._run_id, exc_info=True)
         await remove_worktree(self._ctx)
+
+
+# ---------------------------------------------------------------------------
+# Orphan recovery (startup cleanup)
+# ---------------------------------------------------------------------------
+
+
+def cleanup_orphaned_worktrees(base_path: str | Path) -> list[str]:
+    """Scan for and remove orphaned lg-orch worktrees.
+
+    Orphaned worktrees are created when a pod restarts mid-task, leaving
+    git worktrees on disk with no corresponding WorktreeLease in memory.
+
+    Runs ``git worktree list --porcelain`` and removes any worktree whose
+    branch name starts with ``lg-orch/`` and whose path no longer exists
+    on disk.
+
+    Returns a list of removed worktree paths.
+    """
+    base_path = Path(base_path)
+    removed: list[str] = []
+
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=str(base_path),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return removed
+
+        # Parse porcelain output: blocks separated by blank lines
+        # Each block: "worktree <path>\nHEAD <sha>\nbranch refs/heads/<name>\n"
+        current_path: str | None = None
+        current_branch: str | None = None
+
+        for line in result.stdout.splitlines():
+            if line.startswith("worktree "):
+                current_path = line[len("worktree "):].strip()
+                current_branch = None
+            elif line.startswith("branch "):
+                current_branch = line[len("branch "):].strip()
+            elif line == "" and current_path and current_branch:
+                # End of block — check if this is an lg-orch worktree
+                branch_short = current_branch.removeprefix("refs/heads/")
+                if branch_short.startswith("lg-orch/"):
+                    # If the worktree directory doesn't exist, it's definitely orphaned
+                    if not Path(current_path).exists():
+                        try:
+                            subprocess.run(
+                                ["git", "worktree", "remove", "--force", current_path],
+                                cwd=str(base_path),
+                                capture_output=True,
+                                timeout=30,
+                            )
+                            # Also delete the branch
+                            subprocess.run(
+                                ["git", "branch", "-D", branch_short],
+                                cwd=str(base_path),
+                                capture_output=True,
+                                timeout=30,
+                            )
+                            removed.append(current_path)
+                        except Exception as e:
+                            logging.warning(
+                                "Failed to remove orphaned worktree %s: %s",
+                                current_path,
+                                e,
+                            )
+                current_path = None
+                current_branch = None
+
+    except Exception as e:
+        logging.warning("cleanup_orphaned_worktrees failed: %s", e)
+
+    return removed

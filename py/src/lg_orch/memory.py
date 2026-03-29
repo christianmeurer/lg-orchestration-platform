@@ -44,14 +44,15 @@ def _state_get(state: object, key: str, default: object = None) -> object:
 def _state_to_dict(state: object) -> dict[str, Any]:
     """Convert a Pydantic model or dict to a plain dict.
 
-    Uses ``model_dump()`` so that nested Pydantic sub-objects (e.g.
+    Uses ``model_dump(by_alias=True)`` so that nested Pydantic sub-objects (e.g.
     ``RouterDecision``, ``VerifierReport``) are recursively serialised to
-    plain dicts.  ``model_extra`` is merged in afterwards to capture
+    plain dicts, and so that alias fields (like ``_run_id``) are dumped under their alias.
+    ``model_extra`` is merged in afterwards to capture
     underscore-prefixed internal fields (``_budget_max_loops``, etc.) that
     Pydantic stores separately when ``extra="allow"``.
     """
     if isinstance(state, BaseModel):
-        d: dict[str, Any] = state.model_dump()
+        d: dict[str, Any] = state.model_dump(by_alias=True)
         if hasattr(state, "model_extra") and state.model_extra:
             d.update(state.model_extra)
         return d

@@ -64,6 +64,16 @@ class ScipIndex:
 
     repo_root: str
     symbols: list[ScipSymbol] = field(default_factory=list)
+    _stale: bool = field(default=False, repr=False)
+
+    @property
+    def is_stale(self) -> bool:
+        """True if the index may be out of date due to file changes."""
+        return self._stale
+
+    def mark_stale(self) -> None:
+        """Mark the index as stale. Called after apply_patch operations."""
+        self._stale = True
 
     # ------------------------------------------------------------------
     # Query methods
@@ -71,6 +81,9 @@ class ScipIndex:
 
     def find_symbol(self, name: str) -> list[ScipSymbol]:
         """Return all symbols whose ``name`` equals *name* (exact match)."""
+        if self._stale:
+            import logging
+            logging.debug("ScipIndex.find_symbol called on stale index; results may be outdated")
         return [s for s in self.symbols if s.name == name]
 
     def find_references(self, symbol_name: str) -> list[ScipSymbol]:

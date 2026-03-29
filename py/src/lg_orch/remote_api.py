@@ -848,7 +848,7 @@ def serve_remote_api(*, repo_root: Path, host: str, port: int) -> int:
     from lg_orch.config import load_config
     from lg_orch.logging import get_logger, init_telemetry
     from lg_orch.procedure_cache import ProcedureCache
-    from lg_orch.run_store import RunStore
+    from lg_orch.run_store import RunStore, create_run_store
 
     init_telemetry(
         service_name="lula-orchestrator",
@@ -863,9 +863,8 @@ def serve_remote_api(*, repo_root: Path, host: str, port: int) -> int:
 
     remote_api_cfg = cfg.remote_api
     _namespace = remote_api_cfg.default_namespace
-    run_store: RunStore | None = None
-    if remote_api_cfg.run_store_path:
-        run_store = RunStore(db_path=Path(remote_api_cfg.run_store_path), namespace=_namespace)
+    run_store_path = Path(remote_api_cfg.run_store_path) if remote_api_cfg.run_store_path else None
+    run_store = create_run_store(db_path=run_store_path, namespace=_namespace)
     rate_limiter: _RateLimiter | None = None
     if remote_api_cfg.rate_limit_rps > 0:
         rps = remote_api_cfg.rate_limit_rps

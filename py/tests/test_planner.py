@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from lg_orch.nodes._planner_prompt import _format_mcp_tool_catalog
+from lg_orch.nodes._planner_prompt import _default_plan, _format_mcp_tool_catalog
 from lg_orch.nodes.planner import (
     _classify_intent,
     _planner_model_output,
@@ -1115,3 +1115,55 @@ def test_planner_mcp_tool_catalog_uses_runtime_tools_not_hardcoded_names(
 
     assert f"`{custom_tool_name}`" in captured["user_prompt"]
     assert "## Available MCP Tools" in captured["user_prompt"]
+
+
+# --- Fix 10.1: _default_plan with failed verification ---
+
+
+def test_default_plan_with_failed_verification_includes_recovery_step() -> None:
+    """_default_plan with a failed verification dict produces a recovery step."""
+    verification = {
+        "ok": False,
+        "failure_class": "test_assertion",
+        "recovery": {"action": "widen_context"},
+    }
+    plan = _default_plan("fix the bug", verification=verification)
+    plan_dict = plan.model_dump()
+    steps = plan_dict["steps"]
+    assert len(steps) == 2
+    recovery_step = steps[0]
+    assert recovery_step["id"] == "step-0-recovery"
+    assert "test_assertion" in recovery_step["description"]
+    assert "widen_context" in recovery_step["description"]
+    assert any(
+        "Recovery from prior verification failure" in c
+        for c in plan_dict["acceptance_criteria"]
+    )
+
+
+def test_default_plan_without_verification_unchanged() -> None:
+    """_default_plan without verification produces the original single-step plan."""
+    plan = _default_plan("fix the bug")
+    plan_dict = plan.model_dump()
+    assert len(plan_dict["steps"]) == 1
+    assert plan_dict["steps"][0]["id"] == "step-1"
+
+
+def test_default_plan_with_ok_verification_unchanged() -> None:
+    """_default_plan with ok=True verification produces the original single-step plan."""
+    plan = _default_plan("fix the bug", verification={"ok": True})
+    plan_dict = plan.model_dump()
+    assert len(plan_dict["steps"]) == 1
+    assert plan_dict["steps"][0]["id"] == "step-1"
+
+
+def test_planner_local_path_passes_verification_to_default_plan() -> None:
+    """When the local model path is taken, verification state is forwarded to _default_plan."""
+    verification = {
+        "ok": False,
+        "failure_class": "lint_error",
+        "recovery": {"action": "retry"},
+    }
+    out = planner(_base_state(request="fix the bug", verification=verification))
+    steps = out["plan"]["steps"]
+    assert any("lint_error" in step["description"] for step in steps)

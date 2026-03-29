@@ -1,8 +1,45 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
+use std::sync::LazyLock;
+
 use regex::Regex;
 
 use crate::envelope::Diagnostic;
+
+// ---------------------------------------------------------------------------
+// Compiled-once regex statics (Wave 9 perf: avoid re-compiling per call)
+// ---------------------------------------------------------------------------
+
+/// Rust compiler error/warning header: `error[E0432]: unresolved import`
+static RE_RUST: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(error|warning)(?:\[(?P<code>[A-Z]\d{4}|[a-z]\d{3})\])?:\s*(?P<message>.+)$")
+        .expect("static regex")
+});
+
+/// Rust compiler location line: ` --> src/main.rs:10:5`
+static RE_RUST_AT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^\s*-->\s*(?P<file>[^:]+):(?P<line>\d+):(?P<col>\d+)\s*$")
+        .expect("static regex")
+});
+
+/// GCC / Clippy / generic `file:line:col: severity: message` format
+static RE_GCC_LIKE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^(?P<file>[^:\n\r]+):(?P<line>\d+):(?P<col>\d+):\s*(?:(?P<sev>error|warning|note):\s*)?(?:(?P<code>[-A-Za-z0-9_]+):\s*)?(?P<message>.+)$",
+    )
+    .expect("static regex")
+});
+
+/// Trailing bracket code: `[clippy::manual_map]`
+static RE_BRACKET_CODE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[(?P<code>[A-Za-z0-9_:.\-]+)\]\s*$").expect("static regex")
+});
+
+/// Python traceback file/line: `  File "app.py", line 7, in <module>`
+static RE_PYTHON: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"^\s*File\s+"(?P<file>[^"]+)",\s+line\s+(?P<line>\d+).*$"#)
+        .expect("static regex")
+});
 
 fn fnv1a_64(text: &str) -> u64 {
     let mut hash: u64 = 0xcbf29ce484222325;
@@ -42,77 +79,29 @@ fn normalize_file(raw: &str) -> String {
 pub fn parse_structured_diagnostics(stderr: &str) -> Vec<Diagnostic> {
     let mut out: Vec<Diagnostic> = Vec::new();
 
-    let rust_re =
-        Regex::new(r"^(error|warning)(?:\[(?P<code>[A-Z]\d{4}|[a-z]\d{3})\])?:\s*(?P<message>.+)$")
-            .ok();
-    let rust_at_re = Regex::new(r"^\s*-->\s*(?P<file>[^:]+):(?P<line>\d+):(?P<col>\d+)\s*$").ok();
-    let gcc_like_re = Regex::new(
-        r"^(?P<file>[^:\n\r]+):(?P<line>\d+):(?P<col>\d+):\s*(?:(?P<sev>error|warning|note):\s*)?(?:(?P<code>[-A-Za-z0-9_]+):\s*)?(?P<message>.+)$",
-    )
-    .ok();
-    let bracket_code_re = Regex::new(r"\[(?P<code>[A-Za-z0-9_:.\-]+)\]\s*$").ok();
-    let py_re = Regex::new(r#"^\s*File\s+"(?P<file>[^"]+)",\s+line\s+(?P<line>\d+).*$"#).ok();
-
     let lines: Vec<&str> = stderr.lines().collect();
     let mut i = 0usize;
     while i < lines.len() {
         let line = lines[i].trim_end();
 
-        if let Some(re) = &gcc_like_re {
-            if let Some(caps) = re.captures(line) {
-                let file = normalize_file(caps.name("file").map_or("", |m| m.as_str()));
-                let line_no = parse_u32(caps.name("line").map(|m| m.as_str()));
-                let col_no = parse_u32(caps.name("col").map(|m| m.as_str()));
-                let mut code = caps.name("code").map(|m| m.as_str().trim().to_string());
-                let mut message =
-                    caps.name("message").map_or("", |m| m.as_str()).trim().to_string();
+        if let Some(caps) = RE_GCC_LIKE.captures(line) {
+            let file = normalize_file(caps.name("file").map_or("", |m| m.as_str()));
+            let line_no = parse_u32(caps.name("line").map(|m| m.as_str()));
+            let col_no = parse_u32(caps.name("col").map(|m| m.as_str()));
+            let mut code = caps.name("code").map(|m| m.as_str().trim().to_string());
+            let mut message =
+                caps.name("message").map_or("", |m| m.as_str()).trim().to_string();
 
-                if code.is_none() {
-                    if let Some(bre) = &bracket_code_re {
-                        if let Some(bc) = bre.captures(&message) {
-                            code = bc.name("code").map(|m| m.as_str().to_string());
-                            if let Some(mat) = bc.get(0) {
-                                message = message[..mat.start()].trim_end().to_string();
-                            }
-                        }
+            if code.is_none() {
+                if let Some(bc) = RE_BRACKET_CODE.captures(&message) {
+                    code = bc.name("code").map(|m| m.as_str().to_string());
+                    if let Some(mat) = bc.get(0) {
+                        message = message[..mat.start()].trim_end().to_string();
                     }
-                }
-
-                if !file.is_empty() && !message.is_empty() {
-                    let fingerprint =
-                        diagnostic_fingerprint(&file, line_no, col_no, code.as_deref(), &message);
-                    out.push(Diagnostic {
-                        file: file.clone(),
-                        line: line_no,
-                        column: col_no,
-                        code: code.clone(),
-                        fingerprint: Some(fingerprint),
-                        message,
-                    });
-                    i += 1;
-                    continue;
                 }
             }
-        }
 
-        if let Some(re) = &rust_re {
-            if let Some(caps) = re.captures(line) {
-                let code = caps.name("code").map(|m| m.as_str().to_string());
-                let message = caps.name("message").map_or("", |m| m.as_str()).trim().to_string();
-
-                let mut file = String::new();
-                let mut line_no: Option<u32> = None;
-                let mut col_no: Option<u32> = None;
-                if let Some(at_re) = &rust_at_re {
-                    if let Some(next_line) = lines.get(i + 1).copied() {
-                        if let Some(at_caps) = at_re.captures(next_line.trim_end()) {
-                            file = normalize_file(at_caps.name("file").map_or("", |m| m.as_str()));
-                            line_no = parse_u32(at_caps.name("line").map(|m| m.as_str()));
-                            col_no = parse_u32(at_caps.name("col").map(|m| m.as_str()));
-                        }
-                    }
-                }
-
+            if !file.is_empty() && !message.is_empty() {
                 let fingerprint =
                     diagnostic_fingerprint(&file, line_no, col_no, code.as_deref(), &message);
                 out.push(Diagnostic {
@@ -128,37 +117,64 @@ pub fn parse_structured_diagnostics(stderr: &str) -> Vec<Diagnostic> {
             }
         }
 
-        if let Some(re) = &py_re {
-            if let Some(caps) = re.captures(line) {
-                let file = normalize_file(caps.name("file").map_or("", |m| m.as_str()));
-                let line_no = parse_u32(caps.name("line").map(|m| m.as_str()));
-                let mut message = String::new();
-                if let Some(next_line) = lines.get(i + 1).copied() {
-                    let trimmed = next_line.trim();
-                    if !trimmed.is_empty() && !trimmed.starts_with('^') {
-                        message = trimmed.to_string();
-                    }
+        if let Some(caps) = RE_RUST.captures(line) {
+            let code = caps.name("code").map(|m| m.as_str().to_string());
+            let message = caps.name("message").map_or("", |m| m.as_str()).trim().to_string();
+
+            let mut file = String::new();
+            let mut line_no: Option<u32> = None;
+            let mut col_no: Option<u32> = None;
+            if let Some(next_line) = lines.get(i + 1).copied() {
+                if let Some(at_caps) = RE_RUST_AT.captures(next_line.trim_end()) {
+                    file = normalize_file(at_caps.name("file").map_or("", |m| m.as_str()));
+                    line_no = parse_u32(at_caps.name("line").map(|m| m.as_str()));
+                    col_no = parse_u32(at_caps.name("col").map(|m| m.as_str()));
                 }
-                if message.is_empty() {
-                    if let Some(last) = lines.last() {
-                        let t = last.trim();
-                        if !t.is_empty() {
-                            message = t.to_string();
-                        }
-                    }
-                }
-                let fingerprint = diagnostic_fingerprint(&file, line_no, None, None, &message);
-                out.push(Diagnostic {
-                    file: file.clone(),
-                    line: line_no,
-                    column: None,
-                    code: None,
-                    fingerprint: Some(fingerprint),
-                    message,
-                });
-                i += 1;
-                continue;
             }
+
+            let fingerprint =
+                diagnostic_fingerprint(&file, line_no, col_no, code.as_deref(), &message);
+            out.push(Diagnostic {
+                file: file.clone(),
+                line: line_no,
+                column: col_no,
+                code: code.clone(),
+                fingerprint: Some(fingerprint),
+                message,
+            });
+            i += 1;
+            continue;
+        }
+
+        if let Some(caps) = RE_PYTHON.captures(line) {
+            let file = normalize_file(caps.name("file").map_or("", |m| m.as_str()));
+            let line_no = parse_u32(caps.name("line").map(|m| m.as_str()));
+            let mut message = String::new();
+            if let Some(next_line) = lines.get(i + 1).copied() {
+                let trimmed = next_line.trim();
+                if !trimmed.is_empty() && !trimmed.starts_with('^') {
+                    message = trimmed.to_string();
+                }
+            }
+            if message.is_empty() {
+                if let Some(last) = lines.last() {
+                    let t = last.trim();
+                    if !t.is_empty() {
+                        message = t.to_string();
+                    }
+                }
+            }
+            let fingerprint = diagnostic_fingerprint(&file, line_no, None, None, &message);
+            out.push(Diagnostic {
+                file: file.clone(),
+                line: line_no,
+                column: None,
+                code: None,
+                fingerprint: Some(fingerprint),
+                message,
+            });
+            i += 1;
+            continue;
         }
 
         i += 1;

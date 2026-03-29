@@ -9,7 +9,7 @@ metadata:
     # Substitute REPLACE_WITH_REPO_URL with the actual Git remote before kubectl apply.
     argocd.argoproj.io/sync-wave: "0"
     # ArgoCD Image Updater: track the lula image using semver strategy
-    argocd-image-updater.argoproj.io/image-list: "lula=registry.digitalocean.com/lula-registry/lula"
+    argocd-image-updater.argoproj.io/image-list: "lula=registry.digitalocean.com/lula-orch/lula-orch"
     argocd-image-updater.argoproj.io/lula.update-strategy: semver
     argocd-image-updater.argoproj.io/lula.semver-constraint: ">=1.0.0"
     argocd-image-updater.argoproj.io/lula.pull-secret: pullsecret:lula-orch/docr-secret

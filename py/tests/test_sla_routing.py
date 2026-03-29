@@ -229,3 +229,93 @@ def test_inference_client_model_substitution() -> None:
     called_model = mock_exec.call_args.kwargs["model"]
     assert called_model == "gpt-3.5-turbo"
     assert result.text == "hello"
+
+
+# ---------------------------------------------------------------------------
+# Fix 10.2: SLA policy is consulted in _planner_model_output when present
+# ---------------------------------------------------------------------------
+
+
+def test_sla_policy_consulted_in_planner_model_output() -> None:
+    """When _sla_routing_policy is in state, _planner_model_output uses it to override model."""
+    import json
+    from typing import Any
+
+    from lg_orch.model_routing import SlaRoutingPolicy
+    from lg_orch.nodes.planner import _planner_model_output
+
+    # Build a policy that always routes "anthropic-claude-3.5-haiku" → "fallback-model"
+    policy = SlaRoutingPolicy(
+        thresholds={"anthropic-claude-3.5-haiku": 0.001},
+        fallbacks={"anthropic-claude-3.5-haiku": "fallback-model"},
+    )
+    for _ in range(10):
+        policy.record_latency("anthropic-claude-3.5-haiku", 9.0)
+
+    captured_model: list[str] = []
+
+    class _FakeInferenceClient:
+        def __init__(self, *, base_url: str, api_key: str, timeout_s: int = 60) -> None:
+            pass
+
+        def close(self) -> None:
+            return None
+
+        def chat_completion(
+            self,
+            *,
+            model: str,
+            system_prompt: str,
+            user_prompt: str,
+            temperature: float,
+            max_tokens: int = 1200,
+        ) -> str:
+            captured_model.append(model)
+            return json.dumps(
+                {
+                    "steps": [
+                        {
+                            "id": "sla-step-1",
+                            "description": "SLA-routed plan.",
+                            "tools": [],
+                            "expected_outcome": "Plan generated.",
+                            "files_touched": [],
+                        }
+                    ],
+                    "verification": [],
+                    "rollback": "No rollback.",
+                    "acceptance_criteria": ["Done."],
+                    "max_iterations": 1,
+                }
+            )
+
+    with patch("lg_orch.tools.InferenceClient", _FakeInferenceClient):
+        state: dict[str, Any] = {
+            "request": "test sla routing",
+            "_repo_root": ".",
+            "repo_context": {},
+            "_models": {
+                "planner": {
+                    "provider": "remote_digitalocean",
+                    "model": "anthropic-claude-3.5-haiku",
+                    "temperature": 0.0,
+                }
+            },
+            "_model_provider_runtime": {
+                "digitalocean": {
+                    "base_url": "https://inference.do-ai.run/v1",
+                    "api_key": "test-key",
+                    "timeout_s": 30,
+                }
+            },
+            "_sla_routing_policy": policy,
+        }
+        route_decision: dict[str, Any] = {
+            "provider_used": "remote",
+            "lane": "deep_planning",
+        }
+        result, _response = _planner_model_output(state, route_decision=route_decision)
+
+    assert result is not None
+    assert len(captured_model) == 1
+    assert captured_model[0] == "fallback-model"

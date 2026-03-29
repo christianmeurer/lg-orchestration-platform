@@ -39,27 +39,31 @@ impl opentelemetry::propagation::Extractor for HeaderMapCarrier<'_> {
 }
 
 /// Extract the W3C `traceparent` header (and optional `tracestate`) from
-/// the incoming request and attach the remote span context to the current
-/// `tracing` span via the OTel layer.
-fn propagate_trace_context(headers: &axum::http::HeaderMap) {
+/// the incoming request and store the extracted OTel context in request
+/// extensions so that tower-http's TraceLayer can attach it when creating
+/// the request span.
+///
+/// The context must NOT be attached via a guard here — the guard would be
+/// dropped before the handler runs, losing the parent span link.  Instead,
+/// we store the context in `req.extensions_mut()` and let downstream layers
+/// or the handler attach it at the appropriate point.
+fn propagate_trace_context(req: &mut Request) {
     let propagator = TraceContextPropagator::new();
-    let parent_ctx = propagator.extract(&HeaderMapCarrier(headers));
-    // Attach the extracted context so the tracing-opentelemetry layer can
-    // pick it up when a new span is created for this request.
-    let _guard = opentelemetry::Context::attach(parent_ctx);
-    // The guard is intentionally dropped here; the actual span creation
-    // happens via tower-http's TraceLayer which runs after this middleware.
-    // We record the trace/span IDs into the current tracing span fields so
+    let parent_ctx = propagator.extract(&HeaderMapCarrier(req.headers()));
+    // Store the extracted context in request extensions so it can be used
+    // by the TraceLayer or handler to attach the parent span context.
+    req.extensions_mut().insert(parent_ctx);
+    // Record the traceparent value into the current tracing span fields so
     // they are visible in structured logs.
     use tracing::Span;
-    if let Some(tp) = headers.get("traceparent").and_then(|v| v.to_str().ok()) {
+    if let Some(tp) = req.headers().get("traceparent").and_then(|v| v.to_str().ok()) {
         Span::current().record("traceparent", tp);
     }
 }
 
 pub async fn require_api_key(
     axum::extract::State(cfg): axum::extract::State<RunnerConfig>,
-    req: Request,
+    mut req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
     let request_id = req
@@ -69,7 +73,7 @@ pub async fn require_api_key(
         .unwrap_or("")
         .to_string();
 
-    propagate_trace_context(req.headers());
+    propagate_trace_context(&mut req);
 
     let Some(expected) = cfg.api_key.as_deref() else {
         return Ok(next.run(req).await);
@@ -147,18 +151,22 @@ mod tests {
     #[test]
     fn test_propagate_trace_context_no_header() {
         // Should not panic when no traceparent header is present.
-        let headers = axum::http::HeaderMap::new();
-        propagate_trace_context(&headers);
+        let mut req = Request::builder().body(axum::body::Body::empty()).unwrap();
+        propagate_trace_context(&mut req);
     }
 
     #[test]
     fn test_propagate_trace_context_valid_header() {
-        let mut headers = axum::http::HeaderMap::new();
-        headers.insert(
-            "traceparent",
-            "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01".parse().unwrap(),
-        );
+        let mut req = Request::builder()
+            .header(
+                "traceparent",
+                "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+            )
+            .body(axum::body::Body::empty())
+            .unwrap();
         // Should not panic with a well-formed traceparent.
-        propagate_trace_context(&headers);
+        propagate_trace_context(&mut req);
+        // Verify the OTel context was stored in extensions.
+        assert!(req.extensions().get::<opentelemetry::Context>().is_some());
     }
 }

@@ -220,8 +220,22 @@ impl RunnerConfig {
             runtime_class = %sandbox.runtime_class,
             workspace_path = %sandbox.workspace_path.display(),
             enforce_read_only_root = sandbox.enforce_read_only_root,
+            root_dir = %root_dir.display(),
             "sandbox configuration loaded"
         );
+
+        // Warn when root_dir and workspace_path diverge with enforce_read_only_root=true.
+        // This combination causes exec commands to run in a read-only directory,
+        // producing empty stdout for any tool that writes temp files or output.
+        if sandbox.enforce_read_only_root && root_dir != sandbox.workspace_path {
+            tracing::warn!(
+                root_dir = %root_dir.display(),
+                workspace_path = %sandbox.workspace_path.display(),
+                "root_dir != workspace_path with enforce_read_only_root=true; \
+                 exec commands will run in a potentially read-only directory — \
+                 set --root-dir to match LG_SANDBOX_WORKSPACE_PATH (/workspace)"
+            );
+        }
 
         let approval_token_ttl_secs = std::env::var("LG_RUNNER_APPROVAL_TOKEN_TTL_SECS")
             .ok()
@@ -379,7 +393,12 @@ fn allowlists_for_profile(profile: &str) -> (Vec<&'static str>, Vec<&'static str
                 ".editorconfig",
                 ".gitignore",
             ],
-            vec![],
+            // In prod the runner's --root-dir is /workspace (writable emptyDir).
+            // Allow writes anywhere under the workspace root so that apply_patch,
+            // cargo, uv, and pytest can create files during a coding session.
+            // The read-only application filesystem (/app) is not under root_dir
+            // and is therefore not reachable via these globs.
+            vec![".", "**"],
         ),
         _ => (
             vec![
@@ -509,10 +528,13 @@ mod tests {
     }
 
     #[test]
-    fn test_prod_disables_writes() {
+    fn test_prod_allows_writes_under_workspace() {
+        // In prod the runner's --root-dir is /workspace (writable emptyDir).
+        // The write allowlist is [".", "**"] so all relative paths are writable.
         let td = tempfile::tempdir().unwrap();
         let cfg = RunnerConfig::new(td.path(), Some("prod"), None).unwrap();
-        assert!(!cfg.can_write("py/src/lg_orch/main.py"));
+        assert!(cfg.can_write("py/src/lg_orch/main.py"));
+        assert!(cfg.can_write("rs/runner/src/main.rs"));
     }
 
     #[tokio::test]

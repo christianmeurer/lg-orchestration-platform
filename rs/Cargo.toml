@@ -7,7 +7,7 @@ members = [
 
 [workspace.package]
 edition = "2021"
-license = "Apache-2.0"
+license = "MIT"
 
 [workspace.dependencies]
 anyhow = "1.0"
@@ -42,3 +42,9 @@ rand = "0.8"
 pdf-extract = "0.7"
 metrics = "0.22"
 metrics-exporter-prometheus = "0.13"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

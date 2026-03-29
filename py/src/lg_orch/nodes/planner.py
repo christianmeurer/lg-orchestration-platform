@@ -88,6 +88,13 @@ def _planner_model_output(
     except ValueError:
         return None, None
 
+    # SLA routing: if an SlaRoutingPolicy is available, let it override the model
+    sla_policy = state.get("_sla_routing_policy")
+    if sla_policy is not None and hasattr(sla_policy, "select_model"):
+        preferred_model = sla_policy.select_model(model)
+        if preferred_model:
+            model = preferred_model
+
     repo_root = Path(str(state.get("_repo_root", "."))).resolve()
     repo_context_raw = state.get("repo_context", {})
     repo_context = repo_context_raw if isinstance(repo_context_raw, dict) else {}
@@ -135,6 +142,10 @@ def _planner_model_output(
 
     raw = response if isinstance(response, str) else response.text
     parsed = json.loads(_extract_json_block(raw))
+    if parsed is None:
+        log = get_logger()
+        log.warning("planner_output_is_none_using_default")
+        return None, None
     if not isinstance(parsed, dict):
         raise ValueError("planner completion did not return an object")
     if PLANNER_SCHEMA:
@@ -191,7 +202,9 @@ def planner(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
     try:
         intent = str(route.get("intent", "")).strip() or _classify_intent(request)
         remote_plan, response = _planner_model_output(state, route_decision=route_decision)
-        plan = remote_plan if remote_plan is not None else _default_plan(request)
+        plan = remote_plan if remote_plan is not None else _default_plan(
+            request, verification=state.get("verification") or {},
+        )
         plan_payload = plan.model_dump()
         configured_max_loops = int(state.get("_budget_max_loops", 1) or 1)
         plan_payload["max_iterations"] = max(
@@ -199,7 +212,9 @@ def planner(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
             min(int(plan_payload.get("max_iterations", 1) or 1), configured_max_loops),
         )
         if not plan_payload.get("acceptance_criteria"):
-            plan_payload["acceptance_criteria"] = _default_plan(request).acceptance_criteria
+            plan_payload["acceptance_criteria"] = _default_plan(
+                request, verification=state.get("verification") or {},
+            ).acceptance_criteria
         verification_raw = state.get("verification", {})
         verification = dict(verification_raw) if isinstance(verification_raw, dict) else {}
         recovery_packet_raw = state.get("recovery_packet", verification.get("recovery_packet", {}))
@@ -247,7 +262,9 @@ def planner(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
         return prune_pre_verification_history(out)
     except Exception as exc:
         log.error("planner_failed", error=str(exc))
-        fallback_plan = _default_plan(request).model_dump()
+        fallback_plan = _default_plan(
+            request, verification=state.get("verification") or {},
+        ).model_dump()
         fallback_plan["rollback"] = "Plan generation failed; deterministic fallback used."
         fallback_plan = _apply_semantic_memory_constraints(
             fallback_plan,

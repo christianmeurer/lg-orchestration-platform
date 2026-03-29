@@ -174,9 +174,21 @@ def _stream_llm_with_events(
             push_run_event(run_id, {"type": "llm_chunk", "node": node, "delta": token})
         return "".join(chunks)
 
+    # MEDIUM FIX 3: Safely run async coroutine regardless of whether an
+    # event loop is already running (e.g. inside LangGraph's async context).
+    # Using a dedicated thread avoids "RuntimeError: This event loop is
+    # already running" when called from a ThreadPoolExecutor.
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(asyncio.run, _run())
-        text = future.result()
+        try:
+            text = future.result()
+        except RuntimeError:
+            # Fallback: if asyncio.run fails (nested loop), create a new loop
+            loop = asyncio.new_event_loop()
+            try:
+                text = loop.run_until_complete(_run())
+            finally:
+                loop.close()
 
     latency_ms = int((time.perf_counter() - started) * 1000)
     return InferenceResponse(

@@ -38,7 +38,7 @@ dependencies = [
 
 [project.optional-dependencies]
 redis = ["redis[hiredis]>=5.0", "msgpack>=1.0"]
-postgres = ["asyncpg>=0.29", "psycopg[binary,pool]>=3.1"]
+postgres = ["psycopg[binary,pool]>=3.1"]
 
 [build-system]
 requires = ["hatchling>=1.25,<2"]
