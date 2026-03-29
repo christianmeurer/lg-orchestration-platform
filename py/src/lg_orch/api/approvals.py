@@ -49,7 +49,8 @@ def approval_token_for_challenge(challenge_id: str) -> str:
     iat = int(time.time())
     message = f"{challenge_id}|{iat}|{nonce}"
     signature = hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
-    return f"{message}|{signature}"
+    # Rust runner verify_token splits on '.' — use dot-separated format.
+    return f"{challenge_id}.{iat}.{nonce}.{signature}"
 
 
 def tool_name_for_approval(*, operation_class: str, challenge_id: str) -> str:
@@ -71,3 +72,45 @@ def approval_summary_text(details: dict[str, Any]) -> str:
     if reason not in {"approval_required", "challenge_required", "missing_approval_token"}:
         summary = f"{summary}: {reason}"
     return summary
+
+
+def handle_spa_approve(
+    service: Any,
+    run_id: str,
+    payload: dict[str, Any],
+    *,
+    auth_subject: str = "",
+) -> dict[str, Any]:
+    """Handle POST /v1/runs/{run_id}/approve from the SPA.
+
+    Generates an HMAC approval token for the challenge and delegates to
+    ``service.approve_run`` which spawns the resume subprocess.
+
+    Parameters
+    ----------
+    service:
+        The ``RemoteAPIService`` instance.
+    run_id:
+        The run to approve and resume.
+    payload:
+        JSON body from the SPA. May contain ``challenge_id`` and ``actor``.
+    auth_subject:
+        Authenticated user identity (from bearer token or JWT).
+
+    Returns
+    -------
+    dict
+        The resumed run payload, or raises ``ValueError`` / ``RuntimeError``.
+    """
+    challenge_id = _non_empty_str(payload.get("challenge_id"))
+    actor = _non_empty_str(payload.get("actor")) or auth_subject or "spa"
+    approve_payload: dict[str, Any] = {"actor": actor}
+    if challenge_id is not None:
+        approve_payload["challenge_id"] = challenge_id
+    rationale = _non_empty_str(payload.get("rationale"))
+    if rationale is not None:
+        approve_payload["rationale"] = rationale
+    result = service.approve_run(run_id, approve_payload, auth_subject=auth_subject)
+    if result is None:
+        raise ValueError("run_not_found")
+    return result

@@ -195,6 +195,7 @@ function selectRun(runId) {
   clearToolStdout();
   resetNodeGraph();
   hideBanner();
+  hideResumePanel();
   hideCompleteBanner();
   hideFinalOutput();
   updateStatusBadge('connecting\u2026');
@@ -289,6 +290,15 @@ function handleSSEEvent(event) {
       showApprovalBanner(
         event.pending_approval_summary || 'Approval required'
       );
+      // Show detailed resume panel for suspended runs
+      if (event.status === 'suspended') {
+        const details = event.pending_approval_details || {};
+        showResumePanel(event.run_id, {
+          challenge_id: details.challenge_id || '',
+          operation_class: details.operation_class || 'mutation',
+          summary: event.pending_approval_summary || '',
+        });
+      }
     }
     // Extract final output from old-style SSE payload (trace.final)
     const trace = event.trace;
@@ -737,6 +747,51 @@ function showApprovalBanner(summary) {
 function hideBanner() {
   const el = document.getElementById('approval-banner');
   if (el) el.classList.remove('visible');
+}
+
+// ── Resume panel for suspended runs ───────────────────────────
+
+/**
+ * Show the resume panel with challenge details for a suspended run.
+ * @param {string} runId
+ * @param {object} approvalInfo  Object with challenge_id, operation_class, summary.
+ */
+function showResumePanel(runId, approvalInfo) {
+  const panel = document.getElementById('resume-panel');
+  if (!panel) return;
+  panel.style.display = 'block';
+
+  const challengeId = (approvalInfo && approvalInfo.challenge_id) || 'unknown';
+  const operation = (approvalInfo && approvalInfo.operation_class) || 'mutation';
+
+  const challengeEl = document.getElementById('resume-challenge-id');
+  const operationEl = document.getElementById('resume-operation');
+  if (challengeEl) challengeEl.textContent = challengeId;
+  if (operationEl) operationEl.textContent = operation;
+
+  const btn = document.getElementById('resume-approve-btn');
+  if (btn) {
+    btn.onclick = function () {
+      fetch('/runs/' + encodeURIComponent(runId) + '/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challenge_id: challengeId, actor: 'spa' }),
+      })
+        .then(function (resp) {
+          if (resp.ok) {
+            hideResumePanel();
+            selectRun(runId);
+          }
+        })
+        .catch(function () {});
+    };
+  }
+}
+
+/** Hide the resume panel. */
+function hideResumePanel() {
+  const el = document.getElementById('resume-panel');
+  if (el) el.style.display = 'none';
 }
 
 /**
