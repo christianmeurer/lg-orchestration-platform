@@ -192,9 +192,11 @@ function selectRun(runId) {
   _llmStreamEls = {};
   clearEventLog();
   clearLlmStreams();
+  clearToolStdout();
   resetNodeGraph();
   hideBanner();
   hideCompleteBanner();
+  hideFinalOutput();
   updateStatusBadge('connecting\u2026');
 
   refreshRunList();
@@ -266,6 +268,16 @@ function handleSSEEvent(event) {
     return;
   }
 
+  if (event.type === 'final_output') {
+    showFinalOutput(event.text || '');
+    return;
+  }
+
+  if (event.type === 'tool_stdout') {
+    appendToolStdout(event.tool || '', event.line || '');
+    return;
+  }
+
   if (event.type === 'llm_chunk') {
     handleLlmChunk(event);
     return;
@@ -277,6 +289,11 @@ function handleSSEEvent(event) {
       showApprovalBanner(
         event.pending_approval_summary || 'Approval required'
       );
+    }
+    // Extract final output from old-style SSE payload (trace.final)
+    const trace = event.trace;
+    if (trace && typeof trace === 'object' && trace.final) {
+      showFinalOutput(String(trace.final));
     }
     return;
   }
@@ -395,6 +412,34 @@ function clearEventLog() {
   if (log) log.innerHTML = '';
 }
 
+// ── Tool stdout terminal ──────────────────────────────────────
+
+/**
+ * Append a tool stdout line to the scrollable terminal-style div.
+ * @param {string} tool  Tool name that produced the output.
+ * @param {string} line  Single stdout line.
+ */
+function appendToolStdout(tool, line) {
+  const el = document.getElementById('tool-stdout');
+  if (!el) return;
+  el.style.display = 'block';
+  const prefix = tool ? '[' + esc(tool) + '] ' : '';
+  const row = document.createElement('div');
+  row.className = 'tool-stdout-line';
+  row.textContent = prefix + line;
+  el.appendChild(row);
+  el.scrollTop = el.scrollHeight;
+}
+
+/** Clear the tool stdout terminal (called on run change). */
+function clearToolStdout() {
+  const el = document.getElementById('tool-stdout');
+  if (el) {
+    el.innerHTML = '';
+    el.style.display = 'none';
+  }
+}
+
 // ── Spinner & status badge ────────────────────────────────────
 
 /**
@@ -425,6 +470,28 @@ function showCompleteBanner() {
 function hideCompleteBanner() {
   const el = document.getElementById('run-complete-banner');
   if (el) el.classList.remove('visible');
+}
+
+// ── Final output display ──────────────────────────────────────
+
+/**
+ * Display the reporter's final output text in the dedicated panel.
+ * @param {string} text  The final output from the reporter node.
+ */
+function showFinalOutput(text) {
+  if (!text) return;
+  const el = document.getElementById('final-output');
+  if (!el) return;
+  el.textContent = text;
+  el.style.display = 'block';
+}
+
+/** Hide and clear the final output panel (called on run change). */
+function hideFinalOutput() {
+  const el = document.getElementById('final-output');
+  if (!el) return;
+  el.textContent = '';
+  el.style.display = 'none';
 }
 
 // ── D3 Force Graph ────────────────────────────────────────────

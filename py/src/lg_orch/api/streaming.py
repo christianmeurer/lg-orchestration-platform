@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import queue
 import threading
+import time
 from typing import TYPE_CHECKING, Any
 
 from lg_orch.logging import get_logger
@@ -33,6 +34,54 @@ def push_run_event(run_id: str, event: dict[str, Any]) -> None:
         q = _run_streams.get(run_id)
     if q is not None:
         q.put_nowait(event)
+
+
+def _emit_tool_stdout_lines(event: dict[str, Any], wfile: Any) -> None:
+    """Extract stdout from tool_result events and emit as tool_stdout SSE frames.
+
+    Each non-empty line of stdout is sent as a separate SSE event with type
+    ``tool_stdout``, enabling real-time terminal-style display in the SPA.
+    """
+    kind = event.get("kind", "")
+    if kind not in ("tool_result", "tool_call"):
+        return
+    data = event.get("data", {})
+    if not isinstance(data, dict):
+        return
+    stdout = data.get("stdout", "")
+    if not stdout:
+        return
+    tool_name = str(data.get("tool", data.get("name", "")))
+    for line in stdout.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            payload = json.dumps(
+                {"type": "tool_stdout", "tool": tool_name, "line": line},
+                ensure_ascii=False,
+            )
+            wfile.write(f"data: {payload}\n\n".encode())
+        except OSError:
+            return
+
+
+def _send_final_output(run: dict[str, Any] | None, wfile: Any) -> None:
+    """Send a ``final_output`` SSE event if the run has a ``trace.final`` value."""
+    if run is None:
+        return
+    trace_data = run.get("trace")
+    if not isinstance(trace_data, dict):
+        return
+    final_text = str(trace_data.get("final", "")).strip()
+    if not final_text:
+        return
+    try:
+        payload = json.dumps({"type": "final_output", "text": final_text}, ensure_ascii=False)
+        wfile.write(f"data: {payload}\n\n".encode())
+        wfile.flush()
+    except OSError:
+        pass
 
 
 def stream_new_sse(service: Any, run_id: str, wfile: Any) -> None:
@@ -81,6 +130,8 @@ def stream_new_sse(service: Any, run_id: str, wfile: Any) -> None:
         try:
             data = json.dumps(ev, ensure_ascii=False)
             wfile.write(f"data: {data}\n\n".encode())
+            # Emit tool_stdout lines from tool_result events
+            _emit_tool_stdout_lines(ev, wfile)
         except OSError:
             return
     try:
@@ -88,8 +139,9 @@ def stream_new_sse(service: Any, run_id: str, wfile: Any) -> None:
     except OSError:
         return
 
-    # Completed run — send done sentinel and return
+    # Completed run — send final output (if available) then done sentinel
     if run.get("finished_at") is not None:
+        _send_final_output(run, wfile)
         try:
             wfile.write(b'data: {"type":"done"}\n\n')
             wfile.flush()
@@ -101,14 +153,26 @@ def stream_new_sse(service: Any, run_id: str, wfile: Any) -> None:
     q: queue.Queue[dict[str, Any] | None] = queue.Queue()
     with _run_streams_lock:
         _run_streams[run_id] = q
+    KEEPALIVE_INTERVAL = 30  # seconds between SSE keepalive comments
+    last_event_time = time.monotonic()
     try:
-        for _ in range(1200):  # up to ~20 minutes at 1 s each
+        for _ in range(3000):  # up to ~50 minutes at 1 s each
             try:
                 event = q.get(timeout=1.0)
             except queue.Empty:
+                # Send keepalive comment to prevent proxy/CDN timeout
+                now = time.monotonic()
+                if now - last_event_time > KEEPALIVE_INTERVAL:
+                    try:
+                        wfile.write(b": keepalive\n\n")
+                        wfile.flush()
+                        last_event_time = now
+                    except OSError:
+                        return
                 # Fallback: poll run status for completion
                 current = service.get_run(run_id)
                 if current is None or current.get("finished_at") is not None:
+                    _send_final_output(current, wfile)
                     try:
                         wfile.write(b'data: {"type":"done"}\n\n')
                         wfile.flush()
@@ -118,6 +182,8 @@ def stream_new_sse(service: Any, run_id: str, wfile: Any) -> None:
                 continue
             if event is None:
                 # None is the sentinel meaning "stream is done"
+                current = service.get_run(run_id)
+                _send_final_output(current, wfile)
                 try:
                     wfile.write(b'data: {"type":"done"}\n\n')
                     wfile.flush()
@@ -127,7 +193,10 @@ def stream_new_sse(service: Any, run_id: str, wfile: Any) -> None:
             try:
                 data = json.dumps(event, ensure_ascii=False)
                 wfile.write(f"data: {data}\n\n".encode())
+                # Emit tool_stdout lines from live tool_result events
+                _emit_tool_stdout_lines(event, wfile)
                 wfile.flush()
+                last_event_time = time.monotonic()
             except OSError:
                 return
     except OSError:

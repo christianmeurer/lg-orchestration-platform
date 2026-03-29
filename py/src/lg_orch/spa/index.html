@@ -109,6 +109,22 @@ body {
   color: var(--ok); background: #122217; border-top: 1px solid var(--border); flex-shrink: 0;
 }
 #run-complete-banner.visible { display: block; }
+/* ── Final output panel ───────────────────────────────────────*/
+#final-output {
+  display: none; margin: 0; padding: 10px 14px; font-size: 12px; line-height: 1.5;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  color: #c9d1d9; background: #161b22; border-top: 1px solid var(--border);
+  white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow-y: auto;
+  flex-shrink: 0;
+}
+/* ── Tool stdout terminal ─────────────────────────────────────*/
+#tool-stdout {
+  display: none; margin: 0; padding: 8px 14px; font-size: 11px; line-height: 1.5;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  color: #a8d8a8; background: #0d1117; border-top: 1px solid var(--border);
+  max-height: 200px; overflow-y: auto; flex-shrink: 0;
+}
+.tool-stdout-line { white-space: pre-wrap; word-break: break-all; padding: 1px 0; }
 /* ── Event rows ───────────────────────────────────────────────*/
 .event-row {
   padding: 3px 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all;
@@ -211,6 +227,8 @@ body {
         <!-- rows appended by JS -->
       </div>
       <div id="run-complete-banner">Run complete &#x2713;</div>
+      <pre id="final-output"></pre>
+      <div id="tool-stdout" style="display:none"></div>
     </div>
 
     <!-- Node graph (bottom 40%) — hidden until a run is selected -->
@@ -325,9 +343,11 @@ function selectRun(runId) {
   _completedNodes = new Set();
   _activeNode = null;
   clearEventLog();
+  clearToolStdout();
   resetNodeGraph();
   hideBanner();
   hideCompleteBanner();
+  hideFinalOutput();
   updateStatusBadge('connecting\u2026');
   refreshRunList();
 
@@ -373,9 +393,21 @@ function handleSSEEvent(event) {
     showApprovalBanner(summary);
     return;
   }
+  if (event.type === 'final_output') {
+    showFinalOutput(event.text || '');
+    return;
+  }
+  if (event.type === 'tool_stdout') {
+    appendToolStdout(event.tool || '', event.line || '');
+    return;
+  }
   if ('status' in event && 'run_id' in event) {
     updateStatusBadge(event.status || '?');
     if (event.pending_approval) showApprovalBanner(event.pending_approval_summary || 'Approval required');
+    var trace = event.trace;
+    if (trace && typeof trace === 'object' && trace.final) {
+      showFinalOutput(String(trace.final));
+    }
     return;
   }
   if (event.kind) {
@@ -415,6 +447,23 @@ function clearEventLog() {
   if (log) log.innerHTML = '';
 }
 
+function appendToolStdout(tool, line) {
+  var el = document.getElementById('tool-stdout');
+  if (!el) return;
+  el.style.display = 'block';
+  var prefix = tool ? '[' + esc(tool) + '] ' : '';
+  var row = document.createElement('div');
+  row.className = 'tool-stdout-line';
+  row.textContent = prefix + line;
+  el.appendChild(row);
+  el.scrollTop = el.scrollHeight;
+}
+
+function clearToolStdout() {
+  var el = document.getElementById('tool-stdout');
+  if (el) { el.innerHTML = ''; el.style.display = 'none'; }
+}
+
 function showSpinner(on) {
   var el = document.getElementById('event-spinner');
   if (el) el.classList.toggle('active', on);
@@ -433,6 +482,21 @@ function showCompleteBanner() {
 function hideCompleteBanner() {
   var el = document.getElementById('run-complete-banner');
   if (el) el.classList.remove('visible');
+}
+
+function showFinalOutput(text) {
+  if (!text) return;
+  var el = document.getElementById('final-output');
+  if (!el) return;
+  el.textContent = text;
+  el.style.display = 'block';
+}
+
+function hideFinalOutput() {
+  var el = document.getElementById('final-output');
+  if (!el) return;
+  el.textContent = '';
+  el.style.display = 'none';
 }
 
 // ── D3 Force Graph ────────────────────────────────────────────

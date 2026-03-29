@@ -419,6 +419,28 @@ body {
   font-size: 14px;
 }
 
+/* ── Tool stdout terminal ────────────────────────────────────── */
+#tool-stdout {
+  display: none;
+  margin: 0;
+  padding: 8px 14px;
+  font-size: 11px;
+  line-height: 1.5;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  color: #a8d8a8;
+  background: #0d1117;
+  border-top: 1px solid var(--border);
+  max-height: 200px;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.tool-stdout-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding: 1px 0;
+}
+
 /* ── LLM streaming output blocks ────────────────────────────── */
 .llm-stream {
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
