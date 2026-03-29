@@ -1,7 +1,7 @@
 {
-  "name": "lg-orchestration",
-  "displayName": "Lula",
-  "description": "VS Code extension for Lula.",
+  "name": "lula",
+  "displayName": "Lula — AI Coding Agent",
+  "description": "Submit coding tasks to the Lula autonomous coding agent",
   "version": "0.1.0",
   "publisher": "lg-orchestration",
   "repository": {
@@ -9,25 +9,17 @@
     "url": "https://github.com/christianmeurer/Lula.git"
   },
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.85.0"
   },
   "categories": [
+    "AI",
     "Other"
   ],
   "activationEvents": [
-    "onCommand:lgOrch.openPanel",
-    "onCommand:lgOrch.runRequest",
-    "onCommand:lgOrch.startRunner",
-    "onCommand:lgOrch.stopRunner",
-    "onCommand:lgOrch.openRunHistory",
-    "onCommand:lgOrch.clearRunHistory",
-    "onChatParticipant:lula",
-    "onView:orchestratorRuns",
-    "onCommand:orchestrator.refreshRuns",
-    "onCommand:orchestrator.openRun",
-    "onCommand:orchestrator.newRun"
+    "onCommand:lula.runTask"
   ],
   "main": "./out/extension.js",
+  "icon": "resources/icon.svg",
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -66,48 +58,22 @@
         }
       ]
     },
-    "chatParticipants": [
-      {
-        "id": "lula",
-        "name": "lula",
-        "description": "Talk to the Lula Orchestration Platform",
-        "isDefault": true,
-        "commands": [
-          {
-            "name": "run",
-            "description": "Execute an agentic coding task"
-          }
-        ]
-      }
-    ],
     "commands": [
       {
-        "command": "lgOrch.openPanel",
-        "title": "Lula: Open Panel"
+        "command": "lula.runTask",
+        "title": "Lula: Run Task"
       },
       {
-        "command": "lgOrch.runRequest",
-        "title": "Lula: Run Request"
+        "command": "lula.showRuns",
+        "title": "Lula: Show Recent Runs"
       },
       {
-        "command": "lgOrch.startRunner",
-        "title": "Lula: Start Runner"
+        "command": "lula.openConsole",
+        "title": "Lula: Open Web Console"
       },
       {
-        "command": "lgOrch.stopRunner",
-        "title": "Lula: Stop Runner"
-      },
-      {
-        "command": "lgOrch.openRunHistory",
-        "title": "Lula: Open Run History"
-      },
-      {
-        "command": "lgOrch.clearRunHistory",
-        "title": "Lula: Clear Run History"
-      },
-      {
-        "command": "lgOrch.viewInlineDiff",
-        "title": "Lula: View Inline Diff"
+        "command": "lula.configure",
+        "title": "Lula: Configure"
       },
       {
         "command": "orchestrator.refreshRuns",
@@ -127,64 +93,25 @@
     "configuration": {
       "title": "Lula",
       "properties": {
-        "lula.remoteApiBaseUrl": {
+        "lula.serverUrl": {
           "type": "string",
-          "default": "",
-          "description": "Base URL for the hosted Lula remote API. When set, Run Request uses the remote API instead of local uv/cargo execution."
-        },
-        "lula.remoteApiBearerToken": {
-          "type": "string",
-          "default": "",
-          "description": "Bearer token for the hosted Lula remote API when remote API auth is enabled. Prefer user settings over workspace settings."
-        },
-        "lula.remotePollIntervalMs": {
-          "type": "number",
-          "default": 1000,
-          "minimum": 250,
-          "description": "Polling interval in milliseconds for remote run status and logs."
-        },
-        "lula.runnerBindAddress": {
-          "type": "string",
-          "default": "127.0.0.1:8088",
-          "description": "Bind address for the local Rust runner process (host:port)."
-        },
-        "lula.runnerApiKey": {
-          "type": "string",
-          "default": "dev-insecure",
-          "description": "API key for the local Rust runner. Prefer user settings over workspace settings."
-        },
-        "lula.runnerBinaryPath": {
-          "type": "string",
-          "default": "",
-          "description": "Path to a pre-built lg-runner binary. When empty, the extension builds via cargo run."
-        },
-        "lula.showInlineDiff": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show inline diff of file changes from apply_patch tool results in the panel."
-        },
-        "lula.maxRunHistory": {
-          "type": "number",
-          "default": 20,
-          "minimum": 1,
-          "maximum": 200,
-          "description": "Maximum number of past runs to show in the run history section."
+          "default": "https://lula.eiv.eng.br",
+          "description": "Lula server URL"
         }
       }
     }
   },
   "scripts": {
-    "vscode:prepublish": "node esbuild.js --production",
-    "compile": "node esbuild.js",
-    "watch": "node esbuild.js --watch",
+    "vscode:prepublish": "tsc -p ./",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
     "package": "vsce package",
     "publish": "vsce publish"
   },
   "devDependencies": {
     "@vscode/vsce": "^3.0.0",
-    "@types/node": "^20.14.10",
-    "@types/vscode": "^1.90.0",
-    "esbuild": "^0.20.0",
-    "typescript": "^5.5.4"
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.0.0"
   }
 }

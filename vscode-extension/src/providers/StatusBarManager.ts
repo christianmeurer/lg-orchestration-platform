@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { RunSummary } from '../api/OrchestratorClient.js';
+import type { RunSummary } from '../api/OrchestratorClient';
 
 export class StatusBarManager {
   private readonly item: vscode.StatusBarItem;
