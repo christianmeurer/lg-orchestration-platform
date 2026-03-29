@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from unittest.mock import patch
 
@@ -315,3 +316,66 @@ def test_semantic_scan_large_warning(tmp_path: pytest.TempPathFactory) -> None:
     assert "long_term_memory.semantic_scan_large" in events, (
         f"expected semantic_scan_large warning; got events: {events}"
     )
+
+
+# ---------------------------------------------------------------------------
+# FIX 11.1: Configurable embedding provider
+# ---------------------------------------------------------------------------
+
+
+def test_make_embedder_returns_stub_by_default():
+    from lg_orch.long_term_memory import make_embedder, _stub_embedder_as_list
+    embedder = make_embedder("stub")
+    assert embedder is _stub_embedder_as_list
+
+
+def test_make_embedder_ollama_returns_callable():
+    from lg_orch.long_term_memory import make_embedder, OllamaEmbedder
+    embedder = make_embedder("ollama")
+    assert callable(embedder)
+    assert isinstance(embedder, OllamaEmbedder)
+
+
+def test_ollama_embedder_falls_back_to_stub_when_unavailable():
+    from lg_orch.long_term_memory import OllamaEmbedder
+    # Use a port that is definitely not listening
+    embedder = OllamaEmbedder(base_url="http://127.0.0.1:19999")
+    result = embedder("test text")
+    # Should return stub result (list of floats, length 128)
+    assert isinstance(result, list)
+    assert len(result) == 128
+    assert all(isinstance(v, float) for v in result)
+
+
+def test_long_term_memory_store_accepts_custom_embedder():
+    from lg_orch.long_term_memory import LongTermMemoryStore
+    custom_embedder = lambda text: np.zeros(128, dtype=np.float32)
+    store = LongTermMemoryStore(db_path=":memory:", embedder=custom_embedder)
+    assert store._embedder is custom_embedder
+    store.close()
+
+
+# ---------------------------------------------------------------------------
+# Wave B: probe_ollama and make_embedder env var
+# ---------------------------------------------------------------------------
+
+
+def test_probe_ollama_returns_false_when_unreachable():
+    from lg_orch.long_term_memory import probe_ollama
+    # Port 19999 should not be listening
+    assert probe_ollama("http://127.0.0.1:19999") is False
+
+
+def test_make_embedder_uses_env_var():
+    from lg_orch.long_term_memory import make_embedder, OllamaEmbedder, _stub_embedder_as_list
+
+    # Default (no env var) returns stub
+    with patch.dict("os.environ", {}, clear=False):
+        os.environ.pop("LG_EMBED_PROVIDER", None)
+        embedder = make_embedder()
+        assert embedder is _stub_embedder_as_list
+
+    # With LG_EMBED_PROVIDER=ollama returns OllamaEmbedder
+    with patch.dict("os.environ", {"LG_EMBED_PROVIDER": "ollama"}):
+        embedder = make_embedder()
+        assert isinstance(embedder, OllamaEmbedder)

@@ -8,10 +8,35 @@ Extracted from ``lg_orch.main.cli`` to keep the dispatcher under 200 lines.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 from lg_orch.logging import get_logger
+from lg_orch.long_term_memory import probe_ollama
+
+
+def _log_embedding_provider() -> None:
+    """Log the configured embedding provider status at startup."""
+    log = get_logger()
+    embed_provider = os.environ.get("LG_EMBED_PROVIDER", "stub")
+    if embed_provider == "ollama":
+        ollama_url = os.environ.get("LG_EMBED_OLLAMA_URL", "http://localhost:11434")
+        if probe_ollama(ollama_url):
+            log.info("embedding_provider_ready", provider="ollama", url=ollama_url)
+        else:
+            log.warning(
+                "embedding_provider_unavailable",
+                provider="ollama",
+                url=ollama_url,
+                fallback="stub_embedder",
+            )
+    else:
+        log.info(
+            "embedding_provider",
+            provider="stub",
+            note="set LG_EMBED_PROVIDER=ollama for semantic search",
+        )
 
 
 def serve_command(args: Any, *, repo_root: Path) -> int:
@@ -30,6 +55,8 @@ def serve_command(args: Any, *, repo_root: Path) -> int:
     if port <= 0 or port > 65535:
         log.error("remote_api_port_invalid", port=port)
         return 2
+
+    _log_embedding_provider()
 
     from lg_orch.remote_api import serve_remote_api
 

@@ -16,7 +16,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
 import sqlite3
+import struct
 import threading
 import time
 from collections.abc import Callable
@@ -31,6 +34,8 @@ _log = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Public types
 # ---------------------------------------------------------------------------
+
+EmbedderFn = Callable[[str], list[float]]
 
 Embedder = Callable[[str], "np.ndarray[Any, np.dtype[np.float32]]"]
 
@@ -77,6 +82,125 @@ def stub_embedder(text: str, dim: int = 128) -> np.ndarray[Any, np.dtype[np.floa
         vec[0] = 1.0
         norm = 1.0
     return (vec / norm).astype(np.float32)
+
+
+def _stub_embedder_as_list(text: str) -> list[float]:
+    """Wrapper around stub_embedder that returns list[float] for EmbedderFn compat."""
+    return stub_embedder(text).tolist()
+
+
+class OllamaEmbedder:
+    """Embedding provider using Ollama's local embedding API.
+
+    Requires Ollama to be running at the configured endpoint.
+    Falls back to stub_embedder on connection failure.
+    """
+
+    def __init__(
+        self,
+        model: str = "nomic-embed-text",
+        base_url: str = "http://localhost:11434",
+        timeout: float = 10.0,
+    ) -> None:
+        self._model = model
+        self._base_url = base_url.rstrip("/")
+        self._timeout = timeout
+        self._available: bool | None = None  # None = not yet probed
+
+    def _probe(self) -> bool:
+        """Check if Ollama is reachable. Cached after first call."""
+        if self._available is not None:
+            return self._available
+        try:
+            import urllib.request
+
+            req = urllib.request.Request(
+                f"{self._base_url}/api/tags",
+                method="GET",
+            )
+            with urllib.request.urlopen(req, timeout=2.0):
+                self._available = True
+        except Exception:
+            self._available = False
+            logging.warning(
+                "OllamaEmbedder: Ollama not reachable at %s; "
+                "falling back to stub_embedder",
+                self._base_url,
+            )
+        return self._available
+
+    def __call__(self, text: str) -> list[float]:
+        if not self._probe():
+            return stub_embedder(text).tolist()
+        try:
+            import json as _json
+            import urllib.request
+
+            payload = _json.dumps({"model": self._model, "prompt": text}).encode()
+            req = urllib.request.Request(
+                f"{self._base_url}/api/embeddings",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                data = _json.loads(resp.read())
+                embedding = data.get("embedding", [])
+                if not embedding:
+                    return stub_embedder(text).tolist()
+                return [float(v) for v in embedding]
+        except Exception as e:
+            logging.warning("OllamaEmbedder: embedding failed: %s; using stub", e)
+            return stub_embedder(text).tolist()
+
+
+def probe_ollama(base_url: str = "http://localhost:11434") -> bool:
+    """Check if Ollama is reachable. Called at startup to log embedding status."""
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(f"{base_url}/api/tags", timeout=2.0):
+            return True
+    except Exception:
+        return False
+
+
+def make_embedder(provider: str | None = None, **kwargs: object) -> EmbedderFn:
+    """Factory function for embedding providers.
+
+    Args:
+        provider: One of "ollama", "stub", or None (auto-detect from env).
+        **kwargs: Provider-specific arguments (model, base_url, timeout).
+
+    Environment variables:
+        LG_EMBED_PROVIDER: "ollama" | "stub" (default: "stub")
+        LG_EMBED_OLLAMA_URL: Ollama base URL (default: "http://localhost:11434")
+        LG_EMBED_OLLAMA_MODEL: Ollama model name (default: "nomic-embed-text")
+
+    Returns:
+        A callable that takes a string and returns a list of floats.
+    """
+    if provider is None:
+        provider = os.environ.get("LG_EMBED_PROVIDER", "stub")
+
+    if provider == "ollama":
+        base_url = str(
+            kwargs.get(
+                "base_url",
+                os.environ.get("LG_EMBED_OLLAMA_URL", "http://localhost:11434"),
+            )
+        )
+        model = str(
+            kwargs.get(
+                "model",
+                os.environ.get("LG_EMBED_OLLAMA_MODEL", "nomic-embed-text"),
+            )
+        )
+        timeout = float(kwargs.get("timeout", 10.0))
+        return OllamaEmbedder(model=model, base_url=base_url, timeout=timeout)
+
+    # Default: stub
+    return _stub_embedder_as_list
 
 
 # ---------------------------------------------------------------------------
@@ -189,23 +313,25 @@ class LongTermMemoryStore:
     def __init__(
         self,
         db_path: str,
-        embedder: Embedder | None = None,
+        embedder: Embedder | EmbedderFn | None = None,
         embedding_dim: int = 128,
     ) -> None:
         self._db_path = db_path
-        _using_stub = embedder is None
-        self._embedder: Embedder = (
-            embedder
-            if embedder is not None
-            else (lambda text: stub_embedder(text, dim=embedding_dim))
-        )
+        if embedder is not None:
+            self._embedder: Embedder | EmbedderFn = embedder
+            _using_stub = False
+        else:
+            resolved = make_embedder()
+            self._embedder = resolved
+            # Check if the resolved embedder is the stub
+            _using_stub = resolved is _stub_embedder_as_list
         self._embedding_dim = embedding_dim
         if _using_stub:
             _log.warning(
                 "long_term_memory.stub_embedder_active",
                 reason=(
                     "No real embedder provided; semantic search will return meaningless results. "
-                    "Set an embedding provider via config to enable semantic retrieval."
+                    "Set LG_EMBED_PROVIDER=ollama to enable semantic retrieval."
                 ),
             )
         self._lock = threading.Lock()
@@ -220,8 +346,11 @@ class LongTermMemoryStore:
     # ------------------------------------------------------------------
 
     def _embed(self, text: str) -> np.ndarray[Any, np.dtype[np.float32]]:
-        vec = self._embedder(text)
-        return vec.astype(np.float32)
+        raw = self._embedder(text)
+        if isinstance(raw, np.ndarray):
+            return raw.astype(np.float32)
+        # EmbedderFn returns list[float]
+        return np.array(raw, dtype=np.float32)
 
     @staticmethod
     def _blob_to_vec(blob: bytes, dim: int) -> np.ndarray[Any, np.dtype[np.float32]]:
@@ -557,9 +686,13 @@ class LongTermMemoryStore:
 __all__ = [
     "_TASK_TYPE_KEYWORDS",
     "Embedder",
+    "EmbedderFn",
     "LongTermMemoryStore",
     "MemoryRecord",
+    "OllamaEmbedder",
     "Tier",
     "_infer_task_type",
+    "make_embedder",
+    "probe_ollama",
     "stub_embedder",
 ]

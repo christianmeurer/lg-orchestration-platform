@@ -4,7 +4,6 @@ metadata:
   name: lula-orch
   namespace: {{ .Release.Namespace }}
 spec:
-  replicas: {{ .Values.orchestrator.replicaCount }}
   selector:
     matchLabels:
       app: lula-orch
@@ -21,7 +20,8 @@ spec:
         - name: orchestrator
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["/app/py/.venv/bin/python", "-m", "lg_orch", "serve", "--host", "0.0.0.0", "--port", "8001"]
+          workingDir: /app/artifacts
+          command: ["/app/py/.venv/bin/lg-orch", "serve-api", "--host", "0.0.0.0", "--port", "8001"]
           ports:
             - containerPort: 8001
           envFrom:
@@ -32,6 +32,39 @@ spec:
               value: {{ .Values.orchestrator.profile | quote }}
             - name: LG_RUNNER_BASE_URL
               value: "http://lula-runner:8088"
+            - name: LG_RUN_TIMEOUT_SECS
+              value: "600"
+            - name: LG_ROUTER_MODEL
+              value: {{ .Values.orchestrator.routerModel | default "anthropic-claude-4.6-sonnet" | quote }}
+            - name: LG_PLANNER_MODEL
+              value: {{ .Values.orchestrator.plannerModel | default "anthropic-claude-4.6-sonnet" | quote }}
+            - name: LG_CODER_MODEL
+              value: {{ .Values.orchestrator.coderModel | default "anthropic-claude-4.6-sonnet" | quote }}
+            - name: LG_REPORTER_MODEL
+              value: {{ .Values.orchestrator.reporterModel | default "anthropic-claude-4.6-sonnet" | quote }}
+            - name: LG_EMBED_PROVIDER
+              value: {{ .Values.orchestrator.embedProvider | default "stub" | quote }}
+            - name: LG_EMBED_OLLAMA_URL
+              value: {{ .Values.orchestrator.embedOllamaUrl | default "http://localhost:11434" | quote }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8001
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8001
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
           resources:
             {{- toYaml .Values.orchestrator.resources | nindent 12 }}
           securityContext:
@@ -44,9 +77,13 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: artifacts
+              mountPath: /app/artifacts
       securityContext:
         seccompProfile:
           type: RuntimeDefault
       volumes:
         - name: tmp
+          emptyDir: {}
+        - name: artifacts
           emptyDir: {}
