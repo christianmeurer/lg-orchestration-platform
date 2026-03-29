@@ -37,6 +37,7 @@ sha2.workspace = true
 pdf-extract.workspace = true
 metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
+cap-std = "3"
 
 [features]
 verify = []
