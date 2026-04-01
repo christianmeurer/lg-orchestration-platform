@@ -1,6 +1,6 @@
 use leptos::prelude::*;
-use crate::api::types::TraceEvent;
-use crate::api::sse::RunState;
+
+use crate::api::{sse::RunState, types::TraceEvent};
 
 #[derive(Debug, Clone)]
 struct NodeGroup {
@@ -12,10 +12,7 @@ struct NodeGroup {
 fn build_groups(events: &[TraceEvent]) -> Vec<NodeGroup> {
     let mut groups: Vec<NodeGroup> = Vec::new();
     for ev in events {
-        let node_name = ev
-            .node
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string());
+        let node_name = ev.node.clone().unwrap_or_else(|| "unknown".to_string());
         if let Some(group) = groups.iter_mut().find(|g| g.name == node_name) {
             if ev.kind.as_deref() == Some("node_end") {
                 group.done = true;
@@ -23,11 +20,7 @@ fn build_groups(events: &[TraceEvent]) -> Vec<NodeGroup> {
             group.events.push(ev.clone());
         } else {
             let done = ev.kind.as_deref() == Some("node_end");
-            groups.push(NodeGroup {
-                name: node_name,
-                events: vec![ev.clone()],
-                done,
-            });
+            groups.push(NodeGroup { name: node_name, events: vec![ev.clone()], done });
         }
     }
     groups
@@ -44,10 +37,7 @@ fn event_color(kind: Option<&str>) -> &'static str {
 }
 
 #[component]
-pub fn RunStream(
-    #[prop(into)]
-    state: Signal<RunState>,
-) -> impl IntoView {
+pub fn RunStream(#[prop(into)] state: Signal<RunState>) -> impl IntoView {
     view! {
         <div style="display:flex;flex-direction:column;gap:4px;">
             {move || {
@@ -72,18 +62,10 @@ fn NodeSection(group: NodeGroup) -> impl IntoView {
     let (expanded, set_expanded) = signal(true);
     let name = group.name.clone();
     let done = group.done;
-    let tool_count = group
-        .events
-        .iter()
-        .filter(|e| e.kind.as_deref() == Some("tool_call"))
-        .count();
+    let tool_count = group.events.iter().filter(|e| e.kind.as_deref() == Some("tool_call")).count();
 
     let elapsed: u64 = {
-        let timestamps: Vec<u64> = group
-            .events
-            .iter()
-            .filter_map(|e| e.ts_ms)
-            .collect();
+        let timestamps: Vec<u64> = group.events.iter().filter_map(|e| e.ts_ms).collect();
         if timestamps.len() >= 2 {
             timestamps.last().unwrap_or(&0) - timestamps.first().unwrap_or(&0)
         } else {
@@ -166,10 +148,7 @@ fn NodeSection(group: NodeGroup) -> impl IntoView {
 }
 
 #[component]
-fn StdoutPanel(
-    #[prop(into)]
-    state: Signal<RunState>,
-) -> impl IntoView {
+fn StdoutPanel(#[prop(into)] state: Signal<RunState>) -> impl IntoView {
     view! {
         <div style="margin-top:8px;">
             {move || {

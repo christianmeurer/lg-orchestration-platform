@@ -1,13 +1,17 @@
 use leptos::prelude::*;
 use leptos_meta::provide_meta_context;
-use leptos_router::components::{ParentRoute, Route, Router, Routes};
-use leptos_router::path;
+use leptos_router::{
+    components::{ParentRoute, Route, Router, Routes},
+    path,
+};
 
-use crate::layouts::console::ConsoleLayout;
-use crate::pages::approvals::ApprovalsPage;
-use crate::pages::dashboard::DashboardPage;
-use crate::pages::run_detail::RunDetailPage;
-use crate::pages::settings::SettingsPage;
+use crate::{
+    layouts::console::ConsoleLayout,
+    pages::{
+        approvals::ApprovalsPage, dashboard::DashboardPage, run_detail::RunDetailPage,
+        settings::SettingsPage,
+    },
+};
 
 #[component]
 pub fn App() -> impl IntoView {

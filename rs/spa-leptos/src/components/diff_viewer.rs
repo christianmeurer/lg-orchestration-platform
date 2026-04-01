@@ -1,11 +1,9 @@
 use leptos::prelude::*;
+
 use crate::api::sse::RunState;
 
 #[component]
-pub fn DiffViewer(
-    #[prop(into)]
-    state: Signal<RunState>,
-) -> impl IntoView {
+pub fn DiffViewer(#[prop(into)] state: Signal<RunState>) -> impl IntoView {
     let diffs = move || {
         let s = state.get();
         s.events
@@ -68,9 +66,7 @@ fn line_color(line: &str) -> &'static str {
 }
 
 #[component]
-fn DiffBlock(
-    content: String,
-) -> impl IntoView {
+fn DiffBlock(content: String) -> impl IntoView {
     let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
 
     view! {

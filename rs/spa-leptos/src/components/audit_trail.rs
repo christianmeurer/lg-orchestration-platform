@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+
 use crate::api::sse::RunState;
 
 fn format_timestamp(ts_ms: Option<u64>) -> String {
@@ -25,10 +26,7 @@ fn kind_color(kind: Option<&str>) -> &'static str {
 }
 
 #[component]
-pub fn AuditTrail(
-    #[prop(into)]
-    state: Signal<RunState>,
-) -> impl IntoView {
+pub fn AuditTrail(#[prop(into)] state: Signal<RunState>) -> impl IntoView {
     view! {
         <div style="font-family:monospace;font-size:12px;">
             <div style="display:grid;grid-template-columns:80px 120px 1fr;gap:0;border-bottom:1px solid var(--border);padding-bottom:4px;margin-bottom:4px;">

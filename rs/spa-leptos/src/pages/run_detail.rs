@@ -1,22 +1,22 @@
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
-use crate::api::client::ApiConfig;
-use crate::api::sse::{connect_sse, RunState};
-use crate::api::types::ApprovalRequest;
-use crate::components::audit_trail::AuditTrail;
-use crate::components::diff_viewer::DiffViewer;
-use crate::components::pipeline_graph::PipelineGraph;
-use crate::components::run_stream::RunStream;
-use crate::components::tabs::Tabs;
-use crate::components::verifier_panel::VerifierPanel;
+use crate::{
+    api::{
+        client::ApiConfig,
+        sse::{connect_sse, RunState},
+        types::ApprovalRequest,
+    },
+    components::{
+        audit_trail::AuditTrail, diff_viewer::DiffViewer, pipeline_graph::PipelineGraph,
+        run_stream::RunStream, tabs::Tabs, verifier_panel::VerifierPanel,
+    },
+};
 
 #[component]
 pub fn RunDetailPage() -> impl IntoView {
     let params = use_params_map();
-    let run_id = move || {
-        params.with(|p| p.get("id").unwrap_or_default())
-    };
+    let run_id = move || params.with(|p| p.get("id").unwrap_or_default());
 
     let config = use_context::<ApiConfig>().unwrap();
     let approval_signal = use_context::<RwSignal<Option<ApprovalRequest>>>().unwrap();

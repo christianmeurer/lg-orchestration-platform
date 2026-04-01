@@ -1,9 +1,12 @@
 use leptos::prelude::*;
 
-use crate::api::client::{fetch_runs, ApiConfig};
-use crate::api::types::RunSummary;
-use crate::components::metrics_cards::MetricsCards;
-use crate::components::run_card::RunCard;
+use crate::{
+    api::{
+        client::{fetch_runs, ApiConfig},
+        types::RunSummary,
+    },
+    components::{metrics_cards::MetricsCards, run_card::RunCard},
+};
 
 #[component]
 pub fn DashboardPage() -> impl IntoView {

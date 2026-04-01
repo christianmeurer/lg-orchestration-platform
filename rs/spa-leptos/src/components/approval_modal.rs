@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+
 use crate::api::types::ApprovalRequest;
 
 #[component]
@@ -13,20 +14,11 @@ pub fn ApprovalModal(
         .summary
         .clone()
         .unwrap_or_else(|| "An operation requires your approval.".to_string());
-    let operation_class = request
-        .operation_class
-        .clone()
-        .unwrap_or_else(|| "unknown".to_string());
+    let operation_class = request.operation_class.clone().unwrap_or_else(|| "unknown".to_string());
     let challenge_display = request
         .challenge_id
         .as_ref()
-        .map(|id| {
-            if id.len() > 12 {
-                format!("{}...", &id[..12])
-            } else {
-                id.clone()
-            }
-        })
+        .map(|id| if id.len() > 12 { format!("{}...", &id[..12]) } else { id.clone() })
         .unwrap_or_else(|| "--".to_string());
 
     view! {

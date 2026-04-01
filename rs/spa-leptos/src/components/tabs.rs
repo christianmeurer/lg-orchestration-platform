@@ -1,11 +1,7 @@
 use leptos::prelude::*;
 
 #[component]
-pub fn Tabs(
-    tabs: Vec<String>,
-    active: RwSignal<usize>,
-    children: Children,
-) -> impl IntoView {
+pub fn Tabs(tabs: Vec<String>, active: RwSignal<usize>, children: Children) -> impl IntoView {
     view! {
         <div>
             <div style="display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:16px;">

@@ -26,27 +26,18 @@ impl ApiConfig {
         let (base_url, token) = web_sys::window()
             .and_then(|w| w.local_storage().ok().flatten())
             .map(|storage| {
-                let url = storage
-                    .get_item("lula_api_url")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default();
+                let url = storage.get_item("lula_api_url").ok().flatten().unwrap_or_default();
                 let tok = storage.get_item("lula_token").ok().flatten();
                 (url, tok)
             })
             .unwrap_or_default();
 
-        Self {
-            base_url,
-            token: RwSignal::new(token),
-        }
+        Self { base_url, token: RwSignal::new(token) }
     }
 
     /// Persist `base_url` and the current token value back to `localStorage`.
     pub fn save(&self) {
-        if let Some(storage) = web_sys::window()
-            .and_then(|w| w.local_storage().ok().flatten())
-        {
+        if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
             let _ = storage.set_item("lula_api_url", &self.base_url);
             match self.token.get_untracked() {
                 Some(tok) => {
@@ -83,20 +74,13 @@ impl ApiConfig {
 
 /// GET /v1/runs
 pub async fn fetch_runs(config: &ApiConfig) -> Result<Vec<RunSummary>, String> {
-    let resp = config
-        .build_request("GET", "/v1/runs")
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let resp = config.build_request("GET", "/v1/runs").send().await.map_err(|e| e.to_string())?;
 
     if !resp.ok() {
         return Err(format!("HTTP {}", resp.status()));
     }
 
-    resp.json::<RunsResponse>()
-        .await
-        .map(|r| r.runs)
-        .map_err(|e| format!("Parse error: {e}"))
+    resp.json::<RunsResponse>().await.map(|r| r.runs).map_err(|e| format!("Parse error: {e}"))
 }
 
 /// GET /v1/runs/{id}
@@ -139,10 +123,7 @@ pub async fn approve_run(
     run_id: &str,
     challenge_id: Option<String>,
 ) -> Result<(), String> {
-    let body = ApproveRequest {
-        actor: "spa".to_string(),
-        challenge_id,
-    };
+    let body = ApproveRequest { actor: "spa".to_string(), challenge_id };
     let body_str = serde_json::to_string(&body).map_err(|e| e.to_string())?;
 
     let resp = config

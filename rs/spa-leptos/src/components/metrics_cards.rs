@@ -1,11 +1,9 @@
 use leptos::prelude::*;
-use crate::api::types::{RunSummary, RunStatus};
+
+use crate::api::types::{RunStatus, RunSummary};
 
 #[component]
-pub fn MetricsCards(
-    #[prop(into)]
-    runs: Signal<Vec<RunSummary>>,
-) -> impl IntoView {
+pub fn MetricsCards(#[prop(into)] runs: Signal<Vec<RunSummary>>) -> impl IntoView {
     let total = move || runs.get().len();
 
     let pass_rate = move || {
@@ -14,26 +12,13 @@ pub fn MetricsCards(
         if finished == 0 {
             return 0_u32;
         }
-        let passed = r
-            .iter()
-            .filter(|r| r.status == RunStatus::Completed)
-            .count();
+        let passed = r.iter().filter(|r| r.status == RunStatus::Completed).count();
         ((passed as f64 / finished as f64) * 100.0) as u32
     };
 
-    let pending = move || {
-        runs.get()
-            .iter()
-            .filter(|r| r.pending_approval)
-            .count()
-    };
+    let pending = move || runs.get().iter().filter(|r| r.pending_approval).count();
 
-    let active = move || {
-        runs.get()
-            .iter()
-            .filter(|r| r.status == RunStatus::Running)
-            .count()
-    };
+    let active = move || runs.get().iter().filter(|r| r.status == RunStatus::Running).count();
 
     let card_style = "background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:16px 20px;";
 

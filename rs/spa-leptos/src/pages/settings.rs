@@ -8,9 +8,7 @@ use crate::api::client::ApiConfig;
 pub fn SettingsPage() -> impl IntoView {
     let config = use_context::<ApiConfig>().unwrap();
     let server_url = config.base_url.clone();
-    let (token_value, set_token_value) = signal(
-        config.token.get_untracked().unwrap_or_default(),
-    );
+    let (token_value, set_token_value) = signal(config.token.get_untracked().unwrap_or_default());
     let (saved, set_saved) = signal(false);
 
     let on_save = {

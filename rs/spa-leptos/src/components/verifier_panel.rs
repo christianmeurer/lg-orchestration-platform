@@ -1,12 +1,9 @@
 use leptos::prelude::*;
-use crate::api::types::VerifierReport;
-use crate::api::sse::RunState;
+
+use crate::api::{sse::RunState, types::VerifierReport};
 
 #[component]
-pub fn VerifierPanel(
-    #[prop(into)]
-    state: Signal<RunState>,
-) -> impl IntoView {
+pub fn VerifierPanel(#[prop(into)] state: Signal<RunState>) -> impl IntoView {
     let report = move || {
         let s = state.get();
         s.events

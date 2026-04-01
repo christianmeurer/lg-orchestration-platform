@@ -1,7 +1,9 @@
 use leptos::prelude::*;
 
-use crate::api::client::{fetch_runs, ApiConfig};
-use crate::api::types::RunSummary;
+use crate::api::{
+    client::{fetch_runs, ApiConfig},
+    types::RunSummary,
+};
 
 #[component]
 pub fn ApprovalsPage() -> impl IntoView {
@@ -13,16 +15,12 @@ pub fn ApprovalsPage() -> impl IntoView {
         leptos::task::spawn_local(async move {
             match fetch_runs(&config).await {
                 Ok(all_runs) => {
-                    let filtered: Vec<RunSummary> = all_runs
-                        .into_iter()
-                        .filter(|r| r.pending_approval)
-                        .collect();
+                    let filtered: Vec<RunSummary> =
+                        all_runs.into_iter().filter(|r| r.pending_approval).collect();
                     pending_runs.set(filtered);
                 }
                 Err(e) => {
-                    web_sys::console::error_1(
-                        &format!("Failed to fetch runs: {}", e).into(),
-                    );
+                    web_sys::console::error_1(&format!("Failed to fetch runs: {}", e).into());
                 }
             }
         });

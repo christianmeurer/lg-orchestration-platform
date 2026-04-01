@@ -1,6 +1,5 @@
 use leptos::prelude::*;
-use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
+use wasm_bindgen::{prelude::*, JsCast};
 use web_sys::{EventSource, MessageEvent};
 
 use super::types::*;
@@ -43,10 +42,7 @@ pub fn connect_sse(
 
     // Build the URL, appending the token as a query parameter when present.
     let url = match token {
-        Some(ref tok) => format!(
-            "{}/v1/runs/{}/stream?access_token={}",
-            base_url, run_id, tok
-        ),
+        Some(ref tok) => format!("{}/v1/runs/{}/stream?access_token={}", base_url, run_id, tok),
         None => format!("{}/v1/runs/{}/stream", base_url, run_id),
     };
     let run_id_owned = run_id.clone();
@@ -77,11 +73,7 @@ pub fn connect_sse(
                     SseEvent::FinalOutput { text } => {
                         sw.update(|s| s.final_output = Some(text));
                     }
-                    SseEvent::ApprovalRequested {
-                        challenge_id,
-                        summary,
-                        operation_class,
-                    } => {
+                    SseEvent::ApprovalRequested { challenge_id, summary, operation_class } => {
                         let rid = run_id_owned.clone();
                         sw.update(move |s| {
                             s.approval = Some(ApprovalRequest {
@@ -117,11 +109,10 @@ pub fn connect_sse(
         let es_close = es.clone();
         let sw = state_write;
 
-        let on_error =
-            Closure::<dyn FnMut(web_sys::Event)>::new(move |_event: web_sys::Event| {
-                sw.update(|s| s.is_done = true);
-                es_close.close();
-            });
+        let on_error = Closure::<dyn FnMut(web_sys::Event)>::new(move |_event: web_sys::Event| {
+            sw.update(|s| s.is_done = true);
+            es_close.close();
+        });
 
         es.set_onerror(Some(on_error.as_ref().unchecked_ref()));
         on_error.forget();

@@ -5,8 +5,7 @@ use web_sys::HtmlInputElement;
 #[component]
 pub fn CommandBar(
     on_submit: Callback<String>,
-    #[prop(optional, into)]
-    approval_count: Option<Signal<usize>>,
+    #[prop(optional, into)] approval_count: Option<Signal<usize>>,
 ) -> impl IntoView {
     let (value, set_value) = signal(String::new());
     let (is_submitting, set_is_submitting) = signal(false);

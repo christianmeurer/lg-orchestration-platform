@@ -1,10 +1,10 @@
 use leptos::prelude::*;
-use crate::api::types::{RunSummary, RunStatus};
-use super::status_badge::StatusBadge;
 
-const PIPELINE_STAGES: [&str; 7] = [
-    "ingest", "router", "planner", "coder", "executor", "verifier", "reporter",
-];
+use super::status_badge::StatusBadge;
+use crate::api::types::{RunStatus, RunSummary};
+
+const PIPELINE_STAGES: [&str; 7] =
+    ["ingest", "router", "planner", "coder", "executor", "verifier", "reporter"];
 
 fn format_elapsed(ms: Option<u64>) -> String {
     match ms {
@@ -18,20 +18,14 @@ fn format_elapsed(ms: Option<u64>) -> String {
 fn stage_index(current_node: &Option<String>) -> usize {
     match current_node {
         None => 0,
-        Some(node) => PIPELINE_STAGES
-            .iter()
-            .position(|s| node.contains(s))
-            .map(|i| i + 1)
-            .unwrap_or(0),
+        Some(node) => {
+            PIPELINE_STAGES.iter().position(|s| node.contains(s)).map(|i| i + 1).unwrap_or(0)
+        }
     }
 }
 
 #[component]
-pub fn RunCard(
-    run: RunSummary,
-    #[prop(optional)]
-    selected: bool,
-) -> impl IntoView {
+pub fn RunCard(run: RunSummary, #[prop(optional)] selected: bool) -> impl IntoView {
     let is_active = run.status == RunStatus::Running;
     let active_class = if is_active { " run-card-active" } else { "" };
     let border = if selected {

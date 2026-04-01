@@ -1,10 +1,13 @@
 use leptos::prelude::*;
 use leptos_router::components::Outlet;
 
-use crate::api::client::{approve_run, reject_run, submit_run, ApiConfig};
-use crate::api::types::ApprovalRequest;
-use crate::components::approval_modal::ApprovalModal;
-use crate::components::command_bar::CommandBar;
+use crate::{
+    api::{
+        client::{approve_run, reject_run, submit_run, ApiConfig},
+        types::ApprovalRequest,
+    },
+    components::{approval_modal::ApprovalModal, command_bar::CommandBar},
+};
 
 #[component]
 pub fn ConsoleLayout() -> impl IntoView {
@@ -25,15 +28,10 @@ pub fn ConsoleLayout() -> impl IntoView {
                 match submit_run(&config, &request).await {
                     Ok(summary) => {
                         let href = format!("/app/runs/{}", summary.run_id);
-                        let _ = web_sys::window()
-                            .unwrap()
-                            .location()
-                            .set_href(&href);
+                        let _ = web_sys::window().unwrap().location().set_href(&href);
                     }
                     Err(e) => {
-                        web_sys::console::error_1(
-                            &format!("submit_run failed: {}", e).into(),
-                        );
+                        web_sys::console::error_1(&format!("submit_run failed: {}", e).into());
                     }
                 }
             });

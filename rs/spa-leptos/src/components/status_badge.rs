@@ -1,12 +1,9 @@
 use leptos::prelude::*;
+
 use crate::api::types::RunStatus;
 
 #[component]
-pub fn StatusBadge(
-    status: RunStatus,
-    #[prop(optional)]
-    pending_approval: bool,
-) -> impl IntoView {
+pub fn StatusBadge(status: RunStatus, #[prop(optional)] pending_approval: bool) -> impl IntoView {
     let base_style = "font-size:11px;padding:2px 10px;border-radius:4px;font-weight:600;letter-spacing:0.5px;display:inline-block;";
 
     if pending_approval {
