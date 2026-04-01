@@ -119,7 +119,12 @@ _Derived from `docs/quality_report.md` (2026-03-20). Items are ordered by severi
 - [x] sqlite-vec vector index replaces O(n) numpy cosine scan in `long_term_memory.py` — indexed search with transparent numpy fallback
 - [x] SYMPHONY-inspired `DiversityRoutingPolicy` — round-robin heterogeneous model selection via `LG_MODEL_DIVERSITY=true` env var (`model_routing.py`)
 
-## Backlog (Medium-term)
-- [ ] Implement External Secrets Operator integration for K8s secret management
-- [ ] Add SBOM generation (CycloneDX) to release workflow
-- [ ] Publish VS Code extension to marketplace (requires `VSCE_PAT` secret in GitHub repo)
+## Backlog (Medium-term) — Completed
+- [x] Implement External Secrets Operator integration for K8s secret management — manifests at infra/k8s/external-secrets/
+- [x] Add SBOM generation (CycloneDX) to release workflow — anchore/sbom-action in release.yml
+- [x] VS Code extension published — vscode-publish.yml workflow, VSIX built, marketplace metadata complete
+
+## Remaining Items
+- [ ] Wire DiversityRoutingPolicy into planner (currently opt-in class, not wired to planner.py)
+- [ ] Debug VSCE marketplace propagation (extension packaged and CI ready, marketplace listing pending)
+- [ ] Ratchet coverage gate from 75% to 80%

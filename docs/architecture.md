@@ -1,6 +1,6 @@
 # Architecture & Codebase Overview
 
-**Version:** v1.0-rc4 — All waves complete through Wave F (Firecracker vsock guest agent). All CRITICAL and HIGH sprint items resolved. Full eval framework coverage with SWE-bench adapter active. The sole remaining operational dependency is external secrets management (ESO/Vault).
+**Version:** v1.0 — All waves complete through Wave 14. All CRITICAL and HIGH sprint items resolved. Full eval framework coverage with SWE-bench adapter active. ESO manifests deployed at `infra/k8s/external-secrets/`. Leptos SPA, VS Code extension, rich CLI, sqlite-vec vector indexing, and DiversityRoutingPolicy all implemented.
 
 This document provides comprehensive documentation on how the Lula Platform codebase currently works. The platform is designed as a split-architecture system: a Python-based intelligent orchestrator and a Rust-based secure tool runner. All features described here are implemented and wired in the current codebase — no stubs or roadmap items are referenced as present unless explicitly marked.
 
@@ -178,6 +178,44 @@ bash scripts/build_guest_rootfs.sh
 scripts\build_guest_rootfs.cmd
 ```
 
+## Leptos SPA (`rs/spa-leptos/`)
+
+The primary web frontend is a Leptos single-page application compiled to WebAssembly via [Trunk](https://trunkrs.dev/). It runs in CSR (client-side rendering) mode and communicates with the Python API over HTTP and SSE.
+
+| Aspect | Detail |
+|---|---|
+| Framework | Leptos 0.7, compiled to `wasm32-unknown-unknown` |
+| Build tool | Trunk (`trunk serve` for dev, `trunk build --release` for production) |
+| Design system | Cyberpunk Minimal — dark backgrounds, neon accents, monospace typography |
+| Pages | Dashboard, Run Detail, Settings, New Run |
+| Streaming | Signal-based SSE subscription; reactive UI updates on each event |
+| Approvals | Inline approve/reject modals with HMAC token flow and diff preview |
+| Theme | CSS custom properties with dark/light hybrid mode |
+
+The SPA is built in CI (`build-spa` job in `ci.yml`) and the dist output is uploaded as an artifact for downstream jobs.
+
+## VS Code Extension (`vscode-extension/`)
+
+The VS Code extension provides a native IDE integration for Lula. It is built with TypeScript and bundled with esbuild.
+
+| Aspect | Detail |
+|---|---|
+| Build tool | esbuild (`node esbuild.js`) |
+| Commands | `lula.runTask`, `lula.showRuns`, `lula.configure`, `lula.approveRun` |
+| Webview | HTML panel with live SSE streaming, styled to match Cyberpunk Minimal |
+| Communication | `postMessage` protocol between extension host and webview |
+| SSE proxy | Extension host subscribes to API SSE and forwards events to webview |
+| Auth storage | VS Code `SecretStorage` for API tokens |
+| Publishing | `vscode-publish.yml` workflow, triggered on `vscode-v*` tags |
+
+## Rich CLI (`py/src/lg_orch/commands/`)
+
+The CLI uses the `rich` library for formatted terminal output. Key features:
+
+- **Themed console:** Styled panels, tables, progress bars, and syntax-highlighted code blocks
+- **Log separation:** Structured log output goes to stderr; results go to stdout for clean piping
+- **Color output:** Status indicators, severity-colored messages, and branded header panels
+
 ## Eval Framework (`eval/run.py`)
 
 The eval runner gained the following capabilities in Wave D:
@@ -191,6 +229,22 @@ The eval runner gained the following capabilities in Wave D:
 Both sides of the codebase are heavily tested:
 - Python uses `pytest` and `hypothesis` for property-based testing.
 - Rust uses `cargo test` with comprehensive unit tests for fs boundaries and allowed commands.
+
+## Long-Term Memory (`py/src/lg_orch/long_term_memory.py`)
+
+The tripartite long-term memory store (semantic/episodic/procedural) uses SQLite with FTS5 and WAL mode. Vector search is now backed by **sqlite-vec**, which provides indexed approximate nearest-neighbor queries. This replaces the previous O(n) numpy cosine scan. When sqlite-vec is not available, the system falls back transparently to numpy-based search.
+
+The embedding provider is configurable via `LG_EMBED_PROVIDER`:
+- `ollama` — Uses the `OllamaEmbedder` with `nomic-embed-text` (default in production, deployed as a sidecar)
+- `openai` — Uses the OpenAI embeddings API
+- `stub` — Hash-based stub embedder for testing (semantically meaningless)
+
+## Model Routing (`py/src/lg_orch/model_routing.py`)
+
+Model routing supports multiple policies:
+
+- **SlaRoutingPolicy:** P95 latency tracking with automatic fallback when thresholds are exceeded
+- **DiversityRoutingPolicy:** SYMPHONY-inspired heterogeneous model selection via round-robin routing across different model providers. Opt-in via `LG_MODEL_DIVERSITY=true`. Currently implemented as a standalone class; wiring into the planner is a remaining backlog item.
 
 ## Getting Started / Run Flow
 When a user issues a command via the CLI (`uv run lg-orch run "task"`):

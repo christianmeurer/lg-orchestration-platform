@@ -4,12 +4,13 @@
 
 | Item | Value |
 |---|---|
-| Current gate | 30% (`--cov-fail-under=30`) enforced in CI and `pyproject.toml` |
-| Target | 80% — to be ratcheted up as the test suite grows |
-| Baseline measurement | 16.3% (partial local run, 2026-03-31) |
+| pyproject.toml gate | 75% (`--cov-fail-under=75`) |
+| CI gate | 75% (`--cov-fail-under=75` in ci.yml) |
+| Actual coverage | ~76% (827 tests) |
+| Target | 80% — next ratchet milestone |
 | CI coverage | Fresh coverage generated on every PR via `pytest --cov=lg_orch` |
 
-The 16.3% figure was from a partial local run against a subset of source files. CI now runs the full test suite on every pull request and enforces the 30% floor. The gate will be raised incrementally as new tests are added; the 80% target is the long-term goal.
+The coverage gate was ratcheted from 30% to 75% after 65 new tests were added in the test ratchet PR. The pyproject.toml and CI workflow are now aligned at 75%. The next milestone is 80%.
 
 ---
 

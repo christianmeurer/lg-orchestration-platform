@@ -27,6 +27,7 @@
 | [market_maturity_analysis.md](market_maturity_analysis.md) | Competitive analysis vs Devin, SWE-agent, OpenHands, Aider, Claude Code |
 | [platform_console.md](platform_console.md) | Platform console / operator UI design |
 | [sota_2026_plan.md](sota_2026_plan.md) | State-of-the-art 2026 feature roadmap |
+| [agent_collaboration_2026.md](agent_collaboration_2026.md) | Multi-agent collaboration design and SOTA 2026 direction |
 | [wave7_spa_sse.md](wave7_spa_sse.md) | Wave 7 — SPA + SSE streaming implementation notes |
 
 ## Superpowers (Specs & Plans)

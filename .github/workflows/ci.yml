@@ -65,7 +65,7 @@ jobs:
 
       - name: Run pytest
         working-directory: py
-        run: uv run pytest tests/ -x -q --tb=short --cov=lg_orch --cov-fail-under=30
+        run: uv run pytest tests/ -x -q --tb=short --cov=lg_orch --cov-fail-under=75
 
       - name: Upload coverage report
         if: always()
