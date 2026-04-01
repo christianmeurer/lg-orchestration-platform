@@ -1,25 +1,38 @@
 {
-  "name": "lula",
+  "name": "lula-ai-agent",
   "displayName": "Lula — AI Coding Agent",
-  "description": "Submit coding tasks to the Lula autonomous coding agent",
+  "description": "Submit coding tasks to the Lula autonomous coding agent. Sandboxed execution, structured verification, real-time streaming.",
   "version": "0.1.0",
-  "publisher": "lg-orchestration",
+  "publisher": "christianmeurer",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/christianmeurer/Lula.git"
+  },
+  "homepage": "https://github.com/christianmeurer/Lula#readme",
+  "bugs": {
+    "url": "https://github.com/christianmeurer/Lula/issues"
   },
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
     "AI",
+    "Machine Learning",
     "Other"
   ],
+  "keywords": [
+    "ai",
+    "coding-agent",
+    "autonomous",
+    "sandbox",
+    "code-repair"
+  ],
   "activationEvents": [
-    "onCommand:lula.runTask"
+    "onView:orchestrator.runTree"
   ],
   "main": "./out/extension.js",
-  "icon": "resources/icon.svg",
+  "icon": "resources/icon.png",
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -68,8 +81,20 @@
         "title": "Lula: Show Recent Runs"
       },
       {
-        "command": "lula.openConsole",
-        "title": "Lula: Open Web Console"
+        "command": "lula.approveRun",
+        "title": "Lula: Approve Run"
+      },
+      {
+        "command": "lula.rejectRun",
+        "title": "Lula: Reject Run"
+      },
+      {
+        "command": "lula.cancelRun",
+        "title": "Lula: Cancel Run"
+      },
+      {
+        "command": "lula.openRunPanel",
+        "title": "Lula: Open Run Panel"
       },
       {
         "command": "lula.configure",
@@ -99,12 +124,19 @@
           "description": "Lula server URL"
         }
       }
-    }
+    },
+    "keybindings": [
+      {
+        "command": "lula.runTask",
+        "key": "ctrl+shift+l",
+        "mac": "cmd+shift+l"
+      }
+    ]
   },
   "scripts": {
-    "vscode:prepublish": "tsc -p ./",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "node esbuild.js --production",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
     "package": "vsce package",
     "publish": "vsce publish"
   },

@@ -6,7 +6,7 @@ export class StatusBarManager {
 
   public constructor() {
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10);
-    this.item.command = 'lgOrch.openPanel';
+    this.item.command = 'lula.openRunPanel';
     this.item.text = '$(hubot) Lula';
     this.item.tooltip = 'Open Lula Panel';
     this.item.show();

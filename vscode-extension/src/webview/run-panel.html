@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src {{cspSource}} 'unsafe-inline'; script-src 'nonce-{{nonce}}';">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{{cssUri}}">
+    <title>Lula Run</title>
+</head>
+<body>
+    <div id="run-header">
+        <div id="run-title"></div>
+        <div id="run-status"></div>
+        <div id="run-elapsed"></div>
+    </div>
+    <div id="pipeline-bar"></div>
+    <div id="approval-banner" class="hidden">
+        <span class="approval-icon">&#9888;</span>
+        <span id="approval-text">Approval Required</span>
+        <div class="approval-actions">
+            <button id="btn-approve" class="btn btn-approve">Approve</button>
+            <button id="btn-reject" class="btn btn-reject">Reject</button>
+        </div>
+    </div>
+    <div id="event-stream"></div>
+    <div id="diff-panel" class="hidden"></div>
+    <div id="final-output" class="hidden"></div>
+    <script nonce="{{nonce}}" src="{{jsUri}}"></script>
+</body>
+</html>
