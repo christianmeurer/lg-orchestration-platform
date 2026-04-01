@@ -104,7 +104,7 @@ files = ["src"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 # Coverage gate: ratchet up as test suite grows (target: 80%)
-addopts = "--cov=lg_orch --cov-report=xml:coverage.xml --cov-report=term-missing --cov-fail-under=30"
+addopts = "--cov=lg_orch --cov-report=xml:coverage.xml --cov-report=term-missing --cov-fail-under=75"
 markers = [
     "e2e: end-to-end smoke tests (run with LG_E2E=1)",
 ]
