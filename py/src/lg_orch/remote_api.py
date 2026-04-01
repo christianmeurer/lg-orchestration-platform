@@ -251,7 +251,12 @@ def _hdl_root_ui(
     """Redirect root to SPA."""
     if method != "GET":
         return _json_response(405, {"error": "method_not_allowed"})
-    html = b'<html><head><meta http-equiv="refresh" content="0;url=/app/"></head><body>Redirecting to <a href="/app/">/app/</a></body></html>'
+    html = (
+        b"<html><head>"
+        b'<meta http-equiv="refresh" content="0;url=/app/">'
+        b"</head><body>Redirecting to "
+        b'<a href="/app/">/app/</a></body></html>'
+    )
     return 200, "text/html; charset=utf-8", html
 
 
