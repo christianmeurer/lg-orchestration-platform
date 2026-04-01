@@ -641,20 +641,21 @@ mod tests {
             panic!("unexpected error: {e:?}");
         }
 
-        #[test]
-        fn test_timeout_cap_applied() {
-            const MAX_TIMEOUT_SECS: u64 = 3600;
-            let requested: u64 = 99999;
-            let actual = requested.min(MAX_TIMEOUT_SECS);
-            assert_eq!(actual, MAX_TIMEOUT_SECS);
-        }
+    }
 
-        #[test]
-        fn test_timeout_within_cap_unchanged() {
-            const MAX_TIMEOUT_SECS: u64 = 3600;
-            let requested: u64 = 300;
-            let actual = requested.min(MAX_TIMEOUT_SECS);
-            assert_eq!(actual, 300);
-        }
+    #[test]
+    fn test_timeout_cap_applied() {
+        const MAX_TIMEOUT_SECS: u64 = 3600;
+        let requested: u64 = 99999;
+        let actual = requested.min(MAX_TIMEOUT_SECS);
+        assert_eq!(actual, MAX_TIMEOUT_SECS);
+    }
+
+    #[test]
+    fn test_timeout_within_cap_unchanged() {
+        const MAX_TIMEOUT_SECS: u64 = 3600;
+        let requested: u64 = 300;
+        let actual = requested.min(MAX_TIMEOUT_SECS);
+        assert_eq!(actual, 300);
     }
 }
