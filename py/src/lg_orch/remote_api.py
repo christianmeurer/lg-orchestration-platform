@@ -248,13 +248,11 @@ def _hdl_root_ui(
     request_id: str,
     client_ip: str,
 ) -> tuple[int, str, bytes]:
+    """Redirect root to SPA."""
     if method != "GET":
         return _json_response(405, {"error": "method_not_allowed"})
-    from lg_orch.graph import export_mermaid
-    from lg_orch.visualize import render_run_viewer_spa
-
-    html = render_run_viewer_spa(api_base_url="", mermaid_graph=export_mermaid())
-    return 200, "text/html; charset=utf-8", html.encode("utf-8")
+    html = b'<html><head><meta http-equiv="refresh" content="0;url=/app/"></head><body>Redirecting to <a href="/app/">/app/</a></body></html>'
+    return 200, "text/html; charset=utf-8", html
 
 
 def _hdl_healthz(
@@ -595,26 +593,13 @@ def _hdl_spa(
     request_id: str,
     client_ip: str,
 ) -> tuple[int, str, bytes]:
+    """Serve Leptos SPA from dist/."""
     if method != "GET":
         return _json_response(405, {"error": "method_not_allowed"})
-    subpath = "/".join(path_parts[1:]) if len(path_parts) > 1 else ""
-    if not subpath:
-        return _hdl_root_ui(
-            service,
-            method,
-            request_path,
-            request_body,
-            auth_subject,
-            path_parts,
-            request_id,
-            client_ip,
-        )
-    spa_dir = Path(__file__).parent / "spa"
-    if not spa_dir.exists():
-        return _json_response(503, {"error": "spa_not_available"})
     from lg_orch.spa.router import create_spa_router
 
-    return create_spa_router(spa_dir)(subpath)
+    subpath = "/".join(path_parts[1:]) if len(path_parts) > 1 else ""
+    return create_spa_router()(subpath)
 
 
 # ---------------------------------------------------------------------------
