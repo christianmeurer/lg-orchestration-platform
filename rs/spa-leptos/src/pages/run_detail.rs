@@ -24,7 +24,8 @@ pub fn RunDetailPage() -> impl IntoView {
     let current_id = run_id();
     let token = config.token.get_untracked();
 
-    let (sse_state, _cleanup) = connect_sse(&config.base_url, &current_id, token);
+    let (sse_state, cleanup) = connect_sse(&config.base_url, &current_id, token);
+    on_cleanup(cleanup);
 
     let active_tab: RwSignal<usize> = RwSignal::new(0);
 

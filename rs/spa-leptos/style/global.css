@@ -14,6 +14,7 @@
     --accent: #00d4aa;
     --accent-blue: #0088ff;
     --accent-gradient: linear-gradient(135deg, #00d4aa, #0088ff);
+    --accent-alt: #0088ff;
 
     /* Semantic */
     --ok: #00d4aa;

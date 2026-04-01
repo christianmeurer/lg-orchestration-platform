@@ -7,12 +7,12 @@ ignore = ["dist"]
 
 [[proxy]]
 rewrite = "/v1/"
-backend = "http://127.0.0.1:8765/v1/"
+backend = "http://127.0.0.1:8001/v1/"
 
 [[proxy]]
 rewrite = "/runs/"
-backend = "http://127.0.0.1:8765/runs/"
+backend = "http://127.0.0.1:8001/runs/"
 
 [[proxy]]
 rewrite = "/healthz"
-backend = "http://127.0.0.1:8765/healthz"
+backend = "http://127.0.0.1:8001/healthz"

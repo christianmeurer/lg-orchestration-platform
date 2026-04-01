@@ -11,6 +11,11 @@ pub fn DashboardPage() -> impl IntoView {
     let runs: RwSignal<Vec<RunSummary>> = RwSignal::new(Vec::new());
     let error: RwSignal<Option<String>> = RwSignal::new(None);
 
+    // Abort flag — set to false by on_cleanup so the polling loop exits on
+    // component teardown.
+    let should_poll = RwSignal::new(true);
+    on_cleanup(move || should_poll.set(false));
+
     // Update the approval count context whenever runs change
     let approval_count = use_context::<RwSignal<usize>>();
 
@@ -18,6 +23,9 @@ pub fn DashboardPage() -> impl IntoView {
         let config = config.clone();
         leptos::task::spawn_local(async move {
             loop {
+                if !should_poll.get_untracked() {
+                    break;
+                }
                 match fetch_runs(&config).await {
                     Ok(fetched) => {
                         if let Some(ac) = approval_count {
@@ -32,6 +40,9 @@ pub fn DashboardPage() -> impl IntoView {
                     }
                 }
                 gloo_timers::future::TimeoutFuture::new(5_000).await;
+                if !should_poll.get_untracked() {
+                    break;
+                }
             }
         });
     }

@@ -39,6 +39,7 @@ pub fn connect_sse(
     token: Option<String>,
 ) -> (ReadSignal<RunState>, impl Fn()) {
     let (state_read, state_write) = signal(RunState::default());
+    let run_id = run_id.to_owned();
 
     // Build the URL, appending the token as a query parameter when present.
     let url = match token {
@@ -48,6 +49,7 @@ pub fn connect_sse(
         ),
         None => format!("{}/v1/runs/{}/stream", base_url, run_id),
     };
+    let run_id_owned = run_id.clone();
 
     let es = EventSource::new(&url).expect("EventSource::new failed");
 
@@ -80,11 +82,10 @@ pub fn connect_sse(
                         summary,
                         operation_class,
                     } => {
+                        let rid = run_id_owned.clone();
                         sw.update(move |s| {
                             s.approval = Some(ApprovalRequest {
-                                // run_id is not in the SSE payload; the caller
-                                // can fill it in from the surrounding context.
-                                run_id: String::new(),
+                                run_id: rid,
                                 challenge_id,
                                 summary,
                                 operation_class,

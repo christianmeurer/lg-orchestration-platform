@@ -1,8 +1,14 @@
 use gloo_net::http::{Request, RequestBuilder};
 use leptos::prelude::*;
+use serde::Deserialize;
 use serde_json::json;
 
 use super::types::*;
+
+#[derive(Deserialize)]
+struct RunsResponse {
+    runs: Vec<RunSummary>,
+}
 
 // ---------------------------------------------------------------------------
 // ApiConfig
@@ -87,9 +93,10 @@ pub async fn fetch_runs(config: &ApiConfig) -> Result<Vec<RunSummary>, String> {
         return Err(format!("HTTP {}", resp.status()));
     }
 
-    resp.json::<Vec<RunSummary>>()
+    resp.json::<RunsResponse>()
         .await
-        .map_err(|e| e.to_string())
+        .map(|r| r.runs)
+        .map_err(|e| format!("Parse error: {e}"))
 }
 
 /// GET /v1/runs/{id}
