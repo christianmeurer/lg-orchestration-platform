@@ -130,6 +130,21 @@ export function activate(context: vscode.ExtensionContext): void {
                 return;
             }
 
+            // Capture active editor context (file path and selection)
+            const editor = vscode.window.activeTextEditor;
+            let editorContext = '';
+            if (editor) {
+                const selection = editor.selection;
+                const selectedText = editor.document.getText(selection);
+                const filePath = vscode.workspace.asRelativePath(editor.document.uri);
+                if (selectedText) {
+                    editorContext = `\n\nContext — ${filePath} (selected):\n\`\`\`\n${selectedText}\n\`\`\``;
+                } else {
+                    editorContext = `\n\nContext — active file: ${filePath}`;
+                }
+            }
+            const fullTask = task + editorContext;
+
             const currentServerUrl = getServerUrl();
 
             await vscode.window.withProgress(
@@ -140,14 +155,14 @@ export function activate(context: vscode.ExtensionContext): void {
                 },
                 async () => {
                     try {
-                        const result = await submitTask(task, currentServerUrl, token);
+                        const result = await submitTask(fullTask, currentServerUrl, token);
                         if (result?.run_id) {
                             const shortId = result.run_id.slice(0, 8);
                             // Update status bar
                             onStatusUpdate({
                                 run_id: result.run_id,
                                 status: 'running',
-                                request: task,
+                                request: fullTask,
                                 started_at: new Date().toISOString(),
                                 cancellable: true,
                                 pending_approval: false
