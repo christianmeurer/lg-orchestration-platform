@@ -15,7 +15,22 @@ COPY rs/ ./rs/
 
 RUN cargo build --manifest-path ./rs/Cargo.toml --release --locked -p lg-runner
 
-# Stage 2: Python + uv setup
+# ── Stage 2: SPA (Leptos/WASM) ──────────────────────────────────────
+FROM rust:1.88-bookworm AS spa-builder
+RUN rustup target add wasm32-unknown-unknown \
+    && curl -sSL https://github.com/trunk-rs/trunk/releases/latest/download/trunk-x86_64-unknown-linux-gnu.tar.gz | tar xz \
+    && mv trunk /usr/local/bin/
+WORKDIR /app
+COPY rs/spa-leptos/ rs/spa-leptos/
+COPY rs/Cargo.toml rs/Cargo.toml
+RUN mkdir -p rs/runner/src && echo "fn main(){}" > rs/runner/src/main.rs \
+    && mkdir -p rs/guest-agent/src && echo "fn main(){}" > rs/guest-agent/src/main.rs
+COPY rs/runner/Cargo.toml rs/runner/Cargo.toml
+COPY rs/guest-agent/Cargo.toml rs/guest-agent/Cargo.toml
+WORKDIR /app/rs/spa-leptos
+RUN trunk build --release
+
+# Stage 3: Python + uv setup
 FROM python:3.12-slim-bookworm AS python-builder
 
 WORKDIR /app
@@ -39,7 +54,7 @@ COPY schemas/ ./schemas/
 
 RUN uv sync --project ./py --python /usr/local/bin/python --no-dev --all-extras
 
-# Stage 3: Runtime image
+# Stage 4: Runtime image
 FROM python:3.12-slim-bookworm AS runtime
 
 WORKDIR /app
@@ -64,6 +79,9 @@ COPY --from=python-builder /app/py /app/py
 COPY --from=python-builder /app/configs /app/configs
 COPY --from=python-builder /app/prompts /app/prompts
 COPY --from=python-builder /app/schemas /app/schemas
+
+COPY --from=spa-builder /app/rs/spa-leptos/dist/ /app/spa-dist/
+ENV LG_SPA_DIST_DIR=/app/spa-dist
 
 # Copy startup script
 COPY scripts/start_remote_stack.sh ./scripts/start_remote_stack.sh
