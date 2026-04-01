@@ -13,7 +13,7 @@ import hmac
 import os
 import secrets
 import time
-from typing import Any
+from typing import Any, cast
 
 from lg_orch.logging import get_logger
 
@@ -113,4 +113,4 @@ def handle_spa_approve(
     result = service.approve_run(run_id, approve_payload, auth_subject=auth_subject)
     if result is None:
         raise ValueError("run_not_found")
-    return result
+    return cast(dict[str, Any], result)

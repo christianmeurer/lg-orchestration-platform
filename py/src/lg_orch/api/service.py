@@ -392,7 +392,7 @@ class RunRecord:
     argv: list[str]
     trace_out_dir: Path
     trace_path: Path
-    process: subprocess.Popen[str]
+    process: subprocess.Popen[str] | None
     created_at: str
     started_at: str
     status: str = "running"
@@ -530,7 +530,7 @@ class RemoteAPIService:
                 argv=argv,
                 trace_out_dir=trace_out_dir,
                 trace_path=trace_path,
-                process=None,  # type: ignore[arg-type]  # set after spawn
+                process=None,  # set after spawn
                 created_at=created_at,
                 started_at=created_at,
                 request_id=request_id,
@@ -892,6 +892,8 @@ class RemoteAPIService:
                 return
             process = record.process
 
+        if process is None:
+            return
         stdout = process.stdout
         try:
             if stdout is not None:

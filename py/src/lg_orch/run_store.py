@@ -11,7 +11,7 @@ import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 _log = logging.getLogger(__name__)
 
@@ -632,7 +632,7 @@ class RedisRunStore:
         raw = self._client.get(key)
         if raw is None:
             return None
-        return json.loads(raw)
+        return cast(dict[str, Any], json.loads(raw))
 
     def list_runs(self, namespace: str | None = None) -> list[dict[str, Any]]:
         ns = namespace if namespace is not None else self._namespace
@@ -683,8 +683,6 @@ class RedisRunStore:
         now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         idx_key = self._recovery_index_key()
         for fact in facts:
-            if not isinstance(fact, dict):
-                continue
             fingerprint = str(fact.get("failure_fingerprint", "")).strip()
             if not fingerprint:
                 continue
@@ -767,8 +765,6 @@ class RedisRunStore:
         now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         idx_key = self._semantic_index_key()
         for memory in memories:
-            if not isinstance(memory, dict):
-                continue
             summary = str(memory.get("summary", "")).strip()
             if not summary:
                 continue

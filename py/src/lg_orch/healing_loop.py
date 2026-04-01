@@ -244,18 +244,15 @@ class HealingLoop:
                 }
             )
             # Check if healing actually succeeded via verification
-            if isinstance(result, dict):
-                verification = result.get("verification", {})
-                if isinstance(verification, dict) and verification.get("ok", False):
-                    job.status = "healed"
-                else:
-                    job.status = "failed"
-                    logging.warning(
-                        "Healing job %s completed but verification did not pass",
-                        job.job_id,
-                    )
+            verification = result.get("verification", {}) if isinstance(result, dict) else {}
+            if isinstance(verification, dict) and verification.get("ok", False):
+                job.status = "healed"
             else:
-                job.status = "healed"  # fallback: assume success if no verification info
+                job.status = "failed"
+                logging.warning(
+                    "Healing job %s completed but verification did not pass",
+                    job.job_id,
+                )
         except Exception:
             job.status = "failed"
 

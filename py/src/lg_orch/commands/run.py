@@ -16,6 +16,7 @@ from typing import Any, cast
 
 from langchain_core.runnables.config import RunnableConfig
 
+from lg_orch.backends.redis import RedisCheckpointSaver
 from lg_orch.checkpointing import (
     create_checkpoint_saver,
     resolve_checkpoint_db_path,
@@ -121,7 +122,7 @@ def run_command(args: Any, *, cfg: AppConfig, repo_root: Path) -> int:
                 # Verify connectivity before committing to Redis backend.
                 # The socket_connect_timeout (default 5s) on the client
                 # ensures this does not hang indefinitely.
-                _redis_saver._sync_client.ping()  # type: ignore[union-attr]
+                cast(RedisCheckpointSaver, _redis_saver)._sync_client.ping()
                 checkpointer = _redis_saver
                 log.info("checkpoint_redis_ok", url=cfg.checkpoint.redis_url[:30])
             except Exception as exc:

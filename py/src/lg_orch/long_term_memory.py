@@ -23,7 +23,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 import structlog
@@ -85,7 +85,7 @@ def stub_embedder(text: str, dim: int = 128) -> np.ndarray[Any, np.dtype[np.floa
 
 def _stub_embedder_as_list(text: str) -> list[float]:
     """Wrapper around stub_embedder that returns list[float] for EmbedderFn compat."""
-    return stub_embedder(text).tolist()
+    return cast(list[float], stub_embedder(text).tolist())
 
 
 class OllamaEmbedder:
@@ -129,7 +129,7 @@ class OllamaEmbedder:
 
     def __call__(self, text: str) -> list[float]:
         if not self._probe():
-            return stub_embedder(text).tolist()
+            return cast(list[float], stub_embedder(text).tolist())
         try:
             import json as _json
             import urllib.request
@@ -145,11 +145,11 @@ class OllamaEmbedder:
                 data = _json.loads(resp.read())
                 embedding = data.get("embedding", [])
                 if not embedding:
-                    return stub_embedder(text).tolist()
+                    return cast(list[float], stub_embedder(text).tolist())
                 return [float(v) for v in embedding]
         except Exception as e:
             logging.warning("OllamaEmbedder: embedding failed: %s; using stub", e)
-            return stub_embedder(text).tolist()
+            return cast(list[float], stub_embedder(text).tolist())
 
 
 def probe_ollama(base_url: str = "http://localhost:11434") -> bool:
@@ -194,7 +194,8 @@ def make_embedder(provider: str | None = None, **kwargs: object) -> EmbedderFn:
                 os.environ.get("LG_EMBED_OLLAMA_MODEL", "nomic-embed-text"),
             )
         )
-        timeout = float(kwargs.get("timeout", 10.0))
+        timeout_raw = kwargs.get("timeout", 10.0)
+        timeout = float(timeout_raw) if isinstance(timeout_raw, (int, float)) else 10.0
         return OllamaEmbedder(model=model, base_url=base_url, timeout=timeout)
 
     # Default: stub
