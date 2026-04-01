@@ -101,7 +101,8 @@ files = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "--cov=lg_orch --cov-report=xml:coverage.xml"
+# Coverage gate: ratchet up as test suite grows (target: 80%)
+addopts = "--cov=lg_orch --cov-report=xml:coverage.xml --cov-report=term-missing --cov-fail-under=30"
 markers = [
     "e2e: end-to-end smoke tests (run with LG_E2E=1)",
 ]
