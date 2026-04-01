@@ -33,7 +33,7 @@ jobs:
           LG_API_KEY: ${{ secrets.LG_API_KEY }}
           LG_MODEL: ${{ secrets.LG_MODEL }}
         run: |
-          uv run --project ../py python run.py \
+          uv run --quiet --project ../py python run.py \
             --pass-at-k ${{ inputs.pass_k || '1' }} \
             --tasks canary test-repair real-world-repair \
             --format json \
@@ -64,7 +64,7 @@ jobs:
           LG_API_KEY: ${{ secrets.LG_API_KEY }}
           LG_MODEL: ${{ secrets.LG_MODEL }}
         run: |
-          uv run --project ../py python run.py \
+          uv run --quiet --project ../py python run.py \
             --tasks real-world-repair \
             --format json \
             | tee ../eval-results-repair.json
