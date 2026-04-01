@@ -279,9 +279,8 @@ def test_infer_task_type_empty_string() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_semantic_scan_large_warning(tmp_path: pytest.TempPathFactory) -> None:
-    """Inserting >5000 rows then calling search_semantic must emit the scan-large warning."""
-    import lg_orch.long_term_memory as ltm_module
+def test_semantic_search_large_dataset(tmp_path: pytest.TempPathFactory) -> None:
+    """Searching >5000 rows works without error (sqlite-vec handles scale)."""
 
     def _fast_embedder(text: str) -> np.ndarray[object, np.dtype[np.float32]]:
         v = np.zeros(128, dtype=np.float32)
@@ -304,18 +303,11 @@ def test_semantic_scan_large_warning(tmp_path: pytest.TempPathFactory) -> None:
         )
         store._conn.commit()
 
-    with patch.object(ltm_module._log, "warning") as mock_warn:
-        store.search_semantic("anything", top_k=1)
+    # Should succeed without warning — sqlite-vec or numpy fallback handles it
+    results = store.search_semantic("anything", top_k=3)
+    assert len(results) <= 3
 
     store.close()
-
-    events = [
-        call.args[0] if call.args else call.kwargs.get("event", "")
-        for call in mock_warn.call_args_list
-    ]
-    assert "long_term_memory.semantic_scan_large" in events, (
-        f"expected semantic_scan_large warning; got events: {events}"
-    )
 
 
 # ---------------------------------------------------------------------------

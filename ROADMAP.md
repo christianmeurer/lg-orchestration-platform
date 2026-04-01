@@ -99,7 +99,7 @@ _Derived from `docs/quality_report.md` (2026-03-20). Items are ordered by severi
 - [x] `config.rs` prod allowlist — documented; root_dir=/workspace makes `[".", "**"]` correct
 - [x] `startupProbe` — present in all four deployment manifests
 
-## Wave 13 — 9.5/10 Feature Set (2026-03-29)
+## Wave 13 — 9.5/10 Feature Set (2026-03-29) ✅
 
 - [x] TOCTOU path traversal fixed with cap-std confinement (rs/runner/src/tools/fs.rs, invariants.rs)
 - [x] OllamaEmbedder wired as default embedding provider (LG_EMBED_PROVIDER env var)
@@ -108,9 +108,18 @@ _Derived from `docs/quality_report.md` (2026-03-20). Items are ordered by severi
 - [x] Resume/approval UI in SPA for suspended runs
 - [x] VS Code extension implemented (lula.runTask, lula.showRuns, lula.configure)
 
+## Wave 14 — Closing the Final 0.5 (2026-03-30) ✅
+
+- [x] Ollama deployed as sidecar — `nomic-embed-text` model pulled at init, `LG_EMBED_PROVIDER=ollama` set in production
+- [x] Firecracker Tier 3 node scheduling — `runner.firecracker.enabled` Helm value with KVM nodeSelector/tolerations, `/dev/kvm` device mount, env var activation
+- [x] VS Code extension packaged — VSIX built, marketplace metadata complete, CI/CD workflow for automated publishing (`vscode-publish.yml`)
+- [x] Helm chart updated — Ollama sidecar container, init container for model pull, conditional Firecracker volumes/env
+
+## Research-Driven Optimizations (2026-04-01) ✅
+- [x] sqlite-vec vector index replaces O(n) numpy cosine scan in `long_term_memory.py` — indexed search with transparent numpy fallback
+- [x] SYMPHONY-inspired `DiversityRoutingPolicy` — round-robin heterogeneous model selection via `LG_MODEL_DIVERSITY=true` env var (`model_routing.py`)
+
 ## Backlog (Medium-term)
-- [ ] Add vector index (sqlite-vec or pgvector) to replace full-table cosine scan
 - [ ] Implement External Secrets Operator integration for K8s secret management
-- [ ] Add `deployment.yaml` static replicas = 2 to match HPA `minReplicas`
 - [ ] Add SBOM generation (CycloneDX) to release workflow
-- [ ] TOCTOU path traversal fix — requires `cap-std` dependency addition (`invariants.rs`, `fs.rs`)
+- [ ] Publish VS Code extension to marketplace (requires `VSCE_PAT` secret in GitHub repo)

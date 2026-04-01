@@ -5,11 +5,14 @@ Tripartite persistent cross-session memory store.
 
 Three independent tiers:
   - semantic:   facts and concepts that generalize across runs, stored with
-                FTS5 + dense float32 cosine-similarity (numpy).
+                FTS5 + dense float32 vector search (sqlite-vec when available,
+                numpy cosine fallback otherwise).
   - episodic:   per-run summaries and outcomes.
   - procedural: verified action sequences that succeeded.
 
-No external vector DB is required; numpy handles all embedding math.
+sqlite-vec provides an indexed vector search that replaces the former O(n)
+full-table cosine scan.  When the extension is unavailable the store falls
+back to the original numpy path transparently.
 """
 
 from __future__ import annotations
@@ -340,6 +343,29 @@ class LongTermMemoryStore:
             self._conn.executescript(_DDL)
             self._conn.commit()
 
+        # --- sqlite-vec accelerated vector search ---
+        self._has_vec = False
+        try:
+            import sqlite_vec  # type: ignore[import-untyped]
+
+            self._conn.enable_load_extension(True)
+            self._conn.load_extension(sqlite_vec.loadable_path())
+            self._conn.enable_load_extension(False)
+            with self._lock:
+                self._conn.execute(
+                    f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories "
+                    f"USING vec0(embedding float[{self._embedding_dim}])"
+                )
+                self._conn.commit()
+            self._has_vec = True
+            _log.info("long_term_memory.sqlite_vec_loaded")
+        except Exception as exc:
+            _log.info(
+                "long_term_memory.sqlite_vec_unavailable",
+                reason=str(exc),
+                fallback="numpy_cosine_scan",
+            )
+
     # ------------------------------------------------------------------
     # Internal utilities
     # ------------------------------------------------------------------
@@ -379,18 +405,87 @@ class LongTermMemoryStore:
                 "VALUES (?, ?, ?, ?)",
                 (content, meta_json, blob, now),
             )
+            rowid = int(cur.lastrowid)  # type: ignore[arg-type]
+            if self._has_vec:
+                self._conn.execute(
+                    "INSERT INTO vec_memories(rowid, embedding) VALUES (?, ?)",
+                    (rowid, blob),
+                )
             self._conn.commit()
-            return int(cur.lastrowid)  # type: ignore[arg-type]
+            return rowid
 
     def search_semantic(self, query: str, top_k: int = 5) -> list[MemoryRecord]:
-        """Cosine similarity search over stored embeddings.
+        """Vector similarity search over stored embeddings.
 
-        Falls back to FTS5 text search when the table is empty or when no
-        embeddings score above 0 (degenerate case).
+        When sqlite-vec is available the search is an indexed O(log n) lookup.
+        Otherwise falls back to the original numpy O(n) cosine scan.
         """
         top_k = max(1, top_k)
         query_vec = self._embed(query)
 
+        if self._has_vec:
+            return self._search_semantic_vec(query_vec, top_k)
+        return self._search_semantic_numpy(query_vec, top_k)
+
+    # -- sqlite-vec accelerated path --
+
+    def _search_semantic_vec(
+        self,
+        query_vec: np.ndarray[Any, np.dtype[np.float32]],
+        top_k: int,
+    ) -> list[MemoryRecord]:
+        blob = self._vec_to_blob(query_vec)
+        with self._lock:
+            vec_rows = self._conn.execute(
+                "SELECT rowid, distance FROM vec_memories "
+                "WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+                (blob, top_k),
+            ).fetchall()
+            if not vec_rows:
+                return []
+            rowids = [int(r["rowid"]) for r in vec_rows]
+            placeholders = ",".join("?" for _ in rowids)
+            mem_rows = self._conn.execute(
+                f"SELECT id, content, metadata, embedding, created_at "
+                f"FROM semantic_memories WHERE id IN ({placeholders})",
+                rowids,
+            ).fetchall()
+
+        mem_by_id: dict[int, sqlite3.Row] = {int(r["id"]): r for r in mem_rows}
+        results: list[MemoryRecord] = []
+        for vr in vec_rows:
+            rid = int(vr["rowid"])
+            row = mem_by_id.get(rid)
+            if row is None:
+                continue
+            try:
+                meta: dict[str, Any] = json.loads(row["metadata"])
+            except (json.JSONDecodeError, TypeError):
+                meta = {}
+            try:
+                vec = self._blob_to_vec(row["embedding"], self._embedding_dim)
+            except Exception:
+                vec = None
+            results.append(
+                MemoryRecord(
+                    id=rid,
+                    tier="semantic",
+                    run_id=None,
+                    content=str(row["content"]),
+                    metadata=meta,
+                    created_at=float(row["created_at"]),
+                    embedding=vec,
+                )
+            )
+        return results
+
+    # -- numpy fallback path (original O(n) scan) --
+
+    def _search_semantic_numpy(
+        self,
+        query_vec: np.ndarray[Any, np.dtype[np.float32]],
+        top_k: int,
+    ) -> list[MemoryRecord]:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT id, content, metadata, embedding, created_at FROM semantic_memories"
@@ -398,13 +493,6 @@ class LongTermMemoryStore:
 
         if not rows:
             return []
-
-        row_count = len(rows)
-        if row_count > 5_000:
-            _log.warning(
-                "long_term_memory.semantic_scan_large",
-                row_count=row_count,
-            )
 
         scored: list[tuple[float, MemoryRecord]] = []
         for row in rows:

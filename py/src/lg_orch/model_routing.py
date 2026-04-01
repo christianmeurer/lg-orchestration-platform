@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import collections
+import os
 import threading
 from dataclasses import dataclass, field
 from typing import Any
@@ -497,3 +498,73 @@ def build_sla_policy(config: SlaConfig) -> SlaRoutingPolicy | None:
         thresholds[entry.model_id] = entry.threshold_p95_s
         fallbacks[entry.model_id] = entry.fallback_model_id
     return SlaRoutingPolicy(thresholds=thresholds, fallbacks=fallbacks)
+
+
+# ---------------------------------------------------------------------------
+# SYMPHONY-inspired heterogeneous model diversity
+# ---------------------------------------------------------------------------
+
+
+class DiversityRoutingPolicy:
+    """Round-robin model selection to inject cognitive diversity across planning iterations.
+
+    Inspired by the SYMPHONY framework (NeurIPS 2025) which demonstrated that
+    heterogeneous model ensembles outperform homogeneous ones by avoiding the
+    "Artificial Hivemind" effect where a single model's biases compound.
+
+    When ``LG_MODEL_DIVERSITY=true`` and multiple models are available, each
+    successive call to ``select_model`` returns the next model in the pool.
+    """
+
+    def __init__(self, models: list[str]) -> None:
+        if not models:
+            raise ValueError("DiversityRoutingPolicy requires at least one model")
+        self._models = list(models)
+        self._index = 0
+        self._lock = threading.Lock()
+
+    @property
+    def models(self) -> list[str]:
+        return list(self._models)
+
+    def select_model(self, _requested_model: str | None = None) -> str:
+        """Return the next model in the round-robin pool.
+
+        The *_requested_model* parameter is accepted for interface compatibility
+        with ``SlaRoutingPolicy.select_model`` but is ignored — diversity
+        routing always cycles through the full pool.
+        """
+        with self._lock:
+            model = self._models[self._index % len(self._models)]
+            self._index += 1
+            return model
+
+    def reset(self) -> None:
+        """Reset the rotation index (useful between independent planning runs)."""
+        with self._lock:
+            self._index = 0
+
+
+def get_routing_policy(
+    *,
+    sla_config: SlaConfig | None = None,
+    diversity_models: list[str] | None = None,
+) -> SlaRoutingPolicy | DiversityRoutingPolicy | None:
+    """Factory that selects the active routing policy based on configuration.
+
+    Priority:
+      1. ``LG_MODEL_DIVERSITY=true`` with a non-empty *diversity_models* list
+         → ``DiversityRoutingPolicy``
+      2. A valid *sla_config* → ``SlaRoutingPolicy``
+      3. Otherwise → ``None`` (caller uses default model selection)
+    """
+    diversity_enabled = os.environ.get("LG_MODEL_DIVERSITY", "false").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
+    if diversity_enabled and diversity_models:
+        return DiversityRoutingPolicy(models=diversity_models)
+    if sla_config is not None:
+        return build_sla_policy(sla_config)
+    return None

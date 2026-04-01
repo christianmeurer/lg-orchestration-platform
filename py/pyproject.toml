@@ -24,6 +24,7 @@ dependencies = [
   "langgraph>=1.0.10,<2",
   "langgraph-checkpoint>=4.0.0,<5",
   "numpy>=1.26,<3",
+  "sqlite-vec>=0.1.1,<1",
   "opentelemetry-api>=1.24",
   "opentelemetry-sdk>=1.24",
   "opentelemetry-exporter-otlp-proto-grpc>=1.24",
