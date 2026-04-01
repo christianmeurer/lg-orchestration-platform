@@ -19,6 +19,7 @@ allow = [
     "OpenSSL",
     "CC0-1.0",
     "Zlib",
+    "BSL-1.0",
 ]
 # Any license not in the allow list above is denied.
 # Copyleft licenses (GPL, LGPL, AGPL, MPL, etc.) are therefore blocked.
