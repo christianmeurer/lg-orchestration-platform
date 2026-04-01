@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import mimetypes
 import os
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Tuple
 
 mimetypes.add_type("application/wasm", ".wasm")
 
-_DEFAULT_DIST = Path(__file__).resolve().parent.parent.parent.parent.parent / "rs" / "spa-leptos" / "dist"
+_DEFAULT_DIST = (
+    Path(__file__).resolve().parent.parent.parent.parent.parent / "rs" / "spa-leptos" / "dist"
+)
 
 
 def _dist_dir() -> Path:
@@ -20,10 +22,10 @@ def _dist_dir() -> Path:
     return _DEFAULT_DIST
 
 
-def create_spa_router() -> Callable[[str], Tuple[int, str, bytes]]:
+def create_spa_router() -> Callable[[str], tuple[int, str, bytes]]:
     """Return a dispatcher that serves Leptos dist/ files with SPA fallback."""
 
-    def dispatch(subpath: str) -> Tuple[int, str, bytes]:
+    def dispatch(subpath: str) -> tuple[int, str, bytes]:
         dist = _dist_dir()
         if not dist.is_dir():
             body = b"SPA dist not found. Run: cd rs/spa-leptos && trunk build"

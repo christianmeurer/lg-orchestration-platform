@@ -512,4 +512,3 @@ def render_trace_site_index_html(runs: list[dict[str, Any]]) -> str:
         body="\n".join(cards),
         include_mermaid=False,
     )
-
