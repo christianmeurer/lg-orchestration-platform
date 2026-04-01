@@ -315,7 +315,9 @@ class TestWorktreeLease:
 
 
 class TestCleanupOrphanedWorktrees:
-    def test_cleanup_orphaned_worktrees_returns_list(self, tmp_path: pytest.TempPathFactory) -> None:
+    def test_cleanup_orphaned_worktrees_returns_list(
+        self, tmp_path: pytest.TempPathFactory
+    ) -> None:
         """cleanup_orphaned_worktrees returns a list (may be empty in test env)."""
         import subprocess as sp
 
@@ -340,7 +342,6 @@ class TestCleanupOrphanedWorktrees:
         self, tmp_path: pytest.TempPathFactory
     ) -> None:
         """cleanup_orphaned_worktrees removes worktrees whose path no longer exists."""
-        import subprocess as sp
 
         # Simulate porcelain output with an orphaned lg-orch worktree
         porcelain_output = (

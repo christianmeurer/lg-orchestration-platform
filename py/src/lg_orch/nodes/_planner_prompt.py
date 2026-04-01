@@ -200,7 +200,9 @@ def _default_plan(
                     f" {recovery_action} with updated context."
                 ),
                 tools=[],
-                expected_outcome=f"Recovery action '{recovery_action}' applied for {failure_class}.",
+                expected_outcome=(
+                    f"Recovery action '{recovery_action}' applied for {failure_class}."
+                ),
                 files_touched=[],
                 handoff=None,
             )

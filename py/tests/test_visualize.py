@@ -198,7 +198,8 @@ def test_render_run_viewer_spa_bootstraps_bearer_token_and_sse_query_auth() -> N
 
 def test_render_run_viewer_spa_uses_button_type_for_run_submission() -> None:
     result = render_run_viewer_spa()
-    assert '<button type="button" class="btn btn-primary" onclick="submitRun()">▶ Run</button>' in result
+    expected = '<button type="button" class="btn btn-primary" onclick="submitRun()">▶ Run</button>'
+    assert expected in result
 
 
 def test_render_run_viewer_spa_contains_no_python_noqa_artifacts() -> None:

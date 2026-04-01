@@ -2,6 +2,7 @@
 # Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -826,10 +827,8 @@ class RedisRunStore:
         return results
 
     def close(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self._client.close()
-        except Exception:
-            pass
 
 
 # ---------------------------------------------------------------------------

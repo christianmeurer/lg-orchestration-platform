@@ -522,7 +522,9 @@ class InferenceClient:
         )
         try:
 
-            req = client.build_request("POST", "/chat/completions", json=payload, headers=req_headers)
+            req = client.build_request(
+                "POST", "/chat/completions", json=payload, headers=req_headers
+            )
 
             @retry(
                 reraise=True,

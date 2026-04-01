@@ -101,7 +101,7 @@ class PythonInvariantChecker:
             else:
                 resolved = Path(os.path.normpath(candidate))
         except OSError:
-            # Fall back to lexical normalization if permissions prevent stats (e.g., inside uv/cargo caches)
+            # Lexical fallback when permissions prevent stat (e.g., uv/cargo caches)
             resolved = Path(os.path.normpath(candidate))
 
         try:

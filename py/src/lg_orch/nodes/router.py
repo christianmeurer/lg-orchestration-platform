@@ -47,7 +47,10 @@ def _classify_intent(request: str) -> str:
     r = request.lower()
     words = set(_WORD_RE.findall(r))
     if words.intersection(
-        {"implement", "add", "change", "fix", "refactor", "write", "create", "build", "generate", "make"}
+        {
+            "implement", "add", "change", "fix", "refactor",
+            "write", "create", "build", "generate", "make",
+        }
     ):
         return "code_change"
     if words.intersection({"debug", "error", "panic", "exception"}) or "stack trace" in r:
