@@ -13,12 +13,16 @@
 //!   Request:  `{"cmd":"cargo","args":["test","--quiet"],"cwd":"/workspace","env":{},"timeout_ms":30000}\n`
 //!   Response: `{"ok":true,"exit_code":0,"stdout":"...","stderr":"...","timing_ms":1234}\n`
 
-use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::time::timeout;
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    time::timeout,
+};
 
 // ---------------------------------------------------------------------------
 // Protocol types
@@ -206,9 +210,11 @@ where
 
 #[cfg(target_os = "linux")]
 mod listener {
-    use super::handle_connection;
     use std::os::unix::io::FromRawFd;
+
     use tokio::net::UnixListener;
+
+    use super::handle_connection;
 
     /// Vsock port the agent listens on.
     fn agent_port() -> u32 {
@@ -321,8 +327,9 @@ mod listener {
 // On Unix systems that are not Linux (e.g., macOS), use a Unix domain socket.
 #[cfg(all(unix, not(target_os = "linux")))]
 mod listener {
-    use super::handle_connection;
     use tokio::net::UnixListener;
+
+    use super::handle_connection;
 
     fn uds_path() -> String {
         std::env::var("GUEST_AGENT_SOCK").unwrap_or_else(|_| "/tmp/lula-agent.sock".to_string())

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 use axum::{http::StatusCode, response::IntoResponse, Json};
-
 use serde_json::json;
 
 use crate::envelope::ApprovalMetadata;

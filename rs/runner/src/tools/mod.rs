@@ -4,11 +4,13 @@ use std::time::Instant;
 
 use serde_json::json;
 
-use crate::config::RunnerConfig;
-use crate::envelope::{CheckpointPointer, SnapshotMetadata, ToolEnvelope, ToolExecuteRequest};
-use crate::errors::ApiError;
-use crate::indexing::{SemanticSearchHit, StructuralSnapshot};
-use crate::snapshots::{create_snapshot, SnapshotError};
+use crate::{
+    config::RunnerConfig,
+    envelope::{CheckpointPointer, SnapshotMetadata, ToolEnvelope, ToolExecuteRequest},
+    errors::ApiError,
+    indexing::{SemanticSearchHit, StructuralSnapshot},
+    snapshots::{create_snapshot, SnapshotError},
+};
 
 mod exec;
 mod fs;
@@ -132,9 +134,10 @@ pub(super) fn serialize_semantic_hits(hits: Vec<SemanticSearchHit>) -> serde_jso
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
     use crate::envelope::ToolExecuteRequest;
-    use std::time::Duration;
 
     fn test_cfg() -> (tempfile::TempDir, RunnerConfig) {
         let td = tempfile::tempdir().unwrap();

@@ -5,11 +5,12 @@
 //! Validates tool requests against a set of symbolic boundary invariants
 //! before execution. Each invariant is a named, composable contract check.
 
-use std::path::{Component, PathBuf};
-use std::sync::Arc;
+use std::{
+    path::{Component, PathBuf},
+    sync::Arc,
+};
 
-use cap_std::ambient_authority;
-use cap_std::fs::Dir;
+use cap_std::{ambient_authority, fs::Dir};
 
 use crate::errors::ApiError;
 
@@ -61,8 +62,10 @@ impl Invariant for PathConfinementInvariant {
         // Use cap-std to verify path confinement — TOCTOU-immune.
         // Opening the root as a Dir and attempting to access the path through it
         // ensures the path cannot escape via symlink races.
-        let root_dir = Dir::open_ambient_dir(&req.allowed_root, ambient_authority())
-            .map_err(|e| format!("invariant: open root dir '{}': {e}", req.allowed_root.display()))?;
+        let root_dir =
+            Dir::open_ambient_dir(&req.allowed_root, ambient_authority()).map_err(|e| {
+                format!("invariant: open root dir '{}': {e}", req.allowed_root.display())
+            })?;
 
         // Strip the root prefix to get a relative path; if the path is already
         // relative (or doesn't share the root prefix), use it as-is.
@@ -282,9 +285,11 @@ pub fn build_checker(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use proptest::prelude::*;
     use std::path::Path;
+
+    use proptest::prelude::*;
+
+    use super::*;
 
     // ---------------------------------------------------------------------------
     // Property-based tests

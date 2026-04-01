@@ -1,18 +1,21 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-
-use crate::approval::DEFAULT_TOKEN_TTL_SECS;
-use std::sync::Arc;
-use std::time::Instant;
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Instant,
+};
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use tokio::sync::Mutex;
 
-use crate::indexing::IndexingService;
-use crate::invariants::{build_checker, InvariantChecker};
-use crate::sandbox::SandboxPolicy;
+use crate::{
+    approval::DEFAULT_TOKEN_TTL_SECS,
+    indexing::IndexingService,
+    invariants::{build_checker, InvariantChecker},
+    sandbox::SandboxPolicy,
+};
 
 /// Configuration for the Kubernetes sandbox environment.
 ///

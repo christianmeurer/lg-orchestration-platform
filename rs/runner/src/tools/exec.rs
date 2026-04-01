@@ -1,25 +1,24 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
-use std::collections::HashMap;
-use std::process::Stdio;
-use std::time::Duration;
+use std::{collections::HashMap, process::Stdio, time::Duration};
 
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::process::Command;
-use tokio::time::timeout;
+use tokio::{process::Command, time::timeout};
 
-use crate::approval::{require_approval, ApprovalTokenInput};
-use crate::config::{RunnerConfig, ALLOWED_EXEC_COMMANDS};
-use crate::diagnostics::parse_structured_diagnostics;
-use crate::envelope::{Diagnostic, ToolEnvelope};
-use crate::errors::ApiError;
-use crate::sandbox::{
-    apply_cgroup_v2_limits, cleanup_cgroup, pre_validate_exec, CgroupLimits, SandboxBackend,
-};
-use crate::tools::{snapshot_for_operation, ToolContext};
 #[cfg(target_os = "linux")]
 use crate::vsock::GuestCommandRequest;
+use crate::{
+    approval::{require_approval, ApprovalTokenInput},
+    config::{RunnerConfig, ALLOWED_EXEC_COMMANDS},
+    diagnostics::parse_structured_diagnostics,
+    envelope::{Diagnostic, ToolEnvelope},
+    errors::ApiError,
+    sandbox::{
+        apply_cgroup_v2_limits, cleanup_cgroup, pre_validate_exec, CgroupLimits, SandboxBackend,
+    },
+    tools::{snapshot_for_operation, ToolContext},
+};
 
 const STDERR_ARTIFACT_MAX_CHARS: usize = 8_000;
 
@@ -171,8 +170,8 @@ pub async fn exec(
     let tmpdir = std::env::var("TMPDIR").unwrap_or_else(|_| "/workspace/tmp".to_string());
     filtered_env.insert("TMPDIR".to_string(), tmpdir);
     // XDG_CACHE_HOME: redirect XDG caches (uv, pip, cargo) to the workspace.
-    let xdg_cache = std::env::var("XDG_CACHE_HOME")
-        .unwrap_or_else(|_| "/workspace/.cache".to_string());
+    let xdg_cache =
+        std::env::var("XDG_CACHE_HOME").unwrap_or_else(|_| "/workspace/.cache".to_string());
     filtered_env.insert("XDG_CACHE_HOME".to_string(), xdg_cache);
     if let Ok(v) = std::env::var("CARGO_HOME") {
         filtered_env.insert("CARGO_HOME".to_string(), v);
@@ -641,7 +640,7 @@ mod tests {
         } else if let Err(e) = result {
             panic!("unexpected error: {e:?}");
         }
-    
+
         #[test]
         fn test_timeout_cap_applied() {
             const MAX_TIMEOUT_SECS: u64 = 3600;
@@ -649,7 +648,7 @@ mod tests {
             let actual = requested.min(MAX_TIMEOUT_SECS);
             assert_eq!(actual, MAX_TIMEOUT_SECS);
         }
-    
+
         #[test]
         fn test_timeout_within_cap_unchanged() {
             const MAX_TIMEOUT_SECS: u64 = 3600;

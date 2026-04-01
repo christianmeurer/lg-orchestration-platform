@@ -1,19 +1,23 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
-use std::env;
-use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 #[cfg(unix)]
 use std::time::Duration;
+use std::{
+    env,
+    io::ErrorKind,
+    path::{Path, PathBuf},
+    sync::LazyLock,
+};
 
 use regex::Regex;
 use thiserror::Error;
 
-use crate::config::SandboxConfig;
-use crate::envelope::IsolationMetadata;
-use crate::errors::ApiError;
-use crate::invariants::{InvariantChecker, InvariantRequest};
+use crate::{
+    config::SandboxConfig,
+    envelope::IsolationMetadata,
+    errors::ApiError,
+    invariants::{InvariantChecker, InvariantRequest},
+};
 
 // ---------------------------------------------------------------------------
 // Cgroup v2 resource limits

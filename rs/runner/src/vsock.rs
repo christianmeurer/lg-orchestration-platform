@@ -16,8 +16,7 @@
 //! Response: {"ok":true,"exit_code":0,"stdout":"...","stderr":"...","timing_ms":1234}\n
 //! ```
 
-use std::collections::HashMap;
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

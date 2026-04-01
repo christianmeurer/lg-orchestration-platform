@@ -13,21 +13,26 @@ mod snapshots;
 mod tools;
 mod vsock;
 
-use axum::http::header::CONTENT_TYPE;
-use axum::response::IntoResponse;
-use axum::{routing::get, routing::post, Json, Router};
+use std::{net::SocketAddr, sync::Arc};
+
+use axum::{
+    http::header::CONTENT_TYPE,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
 use clap::Parser;
-use std::net::SocketAddr;
-use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 use tracing::Level;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use crate::config::RunnerConfig;
-use crate::envelope::{
-    ToolBatchExecuteRequest, ToolBatchExecuteResponse, ToolEnvelope, ToolExecuteRequest,
+use crate::{
+    config::RunnerConfig,
+    envelope::{
+        ToolBatchExecuteRequest, ToolBatchExecuteResponse, ToolEnvelope, ToolExecuteRequest,
+    },
+    tools::dispatch_tool,
 };
-use crate::tools::dispatch_tool;
 
 #[derive(Parser, Debug)]
 struct Args {

@@ -1,22 +1,28 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
-use std::collections::BTreeMap;
-use std::fmt::Write;
-use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::{
+    collections::BTreeMap,
+    fmt::Write,
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::time::timeout;
+use tokio::{
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+    process::{Child, ChildStdin, ChildStdout, Command},
+    time::timeout,
+};
 
-use crate::config::{McpPool, RunnerConfig};
-use crate::envelope::{McpMetadata, RedactionMetadata, ToolEnvelope};
-use crate::errors::ApiError;
-use crate::tools::fs::resolve_under_root;
+use crate::{
+    config::{McpPool, RunnerConfig},
+    envelope::{McpMetadata, RedactionMetadata, ToolEnvelope},
+    errors::ApiError,
+    tools::fs::resolve_under_root,
+};
 
 const JSONRPC_VERSION: &str = "2.0";
 const DEFAULT_MCP_TIMEOUT_S: u64 = 20;
@@ -925,11 +931,12 @@ fn is_safe_env_key(key: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
+    use proptest::prelude::*;
+
     use super::*;
     use crate::config::RunnerConfig;
-    use proptest::prelude::*;
-    use std::path::Path;
-    use std::path::PathBuf;
 
     proptest! {
         /// For any printable ASCII string, `redact_string` must never produce

@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    process::Stdio,
+    sync::{Arc, LazyLock, Mutex},
+};
 
 use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
-use tokio::fs;
-use tokio::process::Command;
-use tokio::sync::Mutex as TokioMutex;
+use tokio::{fs, process::Command, sync::Mutex as TokioMutex};
 
-use crate::envelope::CheckpointPointer;
-use crate::errors::ApiError;
+use crate::{envelope::CheckpointPointer, errors::ApiError};
 
 const SNAPSHOT_REF_PREFIX: &str = "refs/lg_orch/snapshots/";
 
@@ -35,9 +34,7 @@ fn validate_snapshot_id(id: &str) -> Result<(), ApiError> {
     }
     // Reject IDs starting with '-' to prevent git flag injection (e.g. `--force`).
     if id.starts_with('-') {
-        return Err(ApiError::BadRequest(
-            "snapshot_id must not start with '-'".to_string(),
-        ));
+        return Err(ApiError::BadRequest("snapshot_id must not start with '-'".to_string()));
     }
     Ok(())
 }
@@ -178,8 +175,7 @@ pub async fn undo_to_snapshot(
 
     let resolved_snapshot = if let Some(id) = snapshot_id {
         let trimmed = id.trim().to_string();
-        validate_snapshot_id(&trimmed)
-            .map_err(|e| SnapshotError::Other(anyhow::anyhow!("{e}")))?;
+        validate_snapshot_id(&trimmed).map_err(|e| SnapshotError::Other(anyhow::anyhow!("{e}")))?;
         trimmed
     } else {
         let (ok, stdout, stderr) = run_git(

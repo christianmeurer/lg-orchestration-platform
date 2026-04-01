@@ -158,10 +158,7 @@ mod tests {
     #[test]
     fn test_propagate_trace_context_valid_header() {
         let mut req = Request::builder()
-            .header(
-                "traceparent",
-                "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
-            )
+            .header("traceparent", "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01")
             .body(axum::body::Body::empty())
             .unwrap();
         // Should not panic with a well-formed traceparent.

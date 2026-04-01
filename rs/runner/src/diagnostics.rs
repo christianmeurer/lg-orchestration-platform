@@ -18,8 +18,7 @@ static RE_RUST: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Rust compiler location line: ` --> src/main.rs:10:5`
 static RE_RUST_AT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*-->\s*(?P<file>[^:]+):(?P<line>\d+):(?P<col>\d+)\s*$")
-        .expect("static regex")
+    Regex::new(r"^\s*-->\s*(?P<file>[^:]+):(?P<line>\d+):(?P<col>\d+)\s*$").expect("static regex")
 });
 
 /// GCC / Clippy / generic `file:line:col: severity: message` format
@@ -31,14 +30,12 @@ static RE_GCC_LIKE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Trailing bracket code: `[clippy::manual_map]`
-static RE_BRACKET_CODE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\[(?P<code>[A-Za-z0-9_:.\-]+)\]\s*$").expect("static regex")
-});
+static RE_BRACKET_CODE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[(?P<code>[A-Za-z0-9_:.\-]+)\]\s*$").expect("static regex"));
 
 /// Python traceback file/line: `  File "app.py", line 7, in <module>`
 static RE_PYTHON: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"^\s*File\s+"(?P<file>[^"]+)",\s+line\s+(?P<line>\d+).*$"#)
-        .expect("static regex")
+    Regex::new(r#"^\s*File\s+"(?P<file>[^"]+)",\s+line\s+(?P<line>\d+).*$"#).expect("static regex")
 });
 
 fn fnv1a_64(text: &str) -> u64 {
@@ -89,8 +86,7 @@ pub fn parse_structured_diagnostics(stderr: &str) -> Vec<Diagnostic> {
             let line_no = parse_u32(caps.name("line").map(|m| m.as_str()));
             let col_no = parse_u32(caps.name("col").map(|m| m.as_str()));
             let mut code = caps.name("code").map(|m| m.as_str().trim().to_string());
-            let mut message =
-                caps.name("message").map_or("", |m| m.as_str()).trim().to_string();
+            let mut message = caps.name("message").map_or("", |m| m.as_str()).trim().to_string();
 
             if code.is_none() {
                 if let Some(bc) = RE_BRACKET_CODE.captures(&message) {
@@ -185,8 +181,9 @@ pub fn parse_structured_diagnostics(stderr: &str) -> Vec<Diagnostic> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use proptest::prelude::*;
+
+    use super::*;
 
     // ---------------------------------------------------------------------------
     // Property-based tests

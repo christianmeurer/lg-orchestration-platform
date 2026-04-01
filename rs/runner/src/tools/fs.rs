@@ -2,19 +2,20 @@
 // Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
 use std::path::{Component, PathBuf};
 
-use cap_std::ambient_authority;
-use cap_std::fs::Dir;
+use cap_std::{ambient_authority, fs::Dir};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::fs;
 
 use super::{serialize_semantic_hits, serialize_snapshot, snapshot_for_operation, ToolContext};
-use crate::approval::{require_approval, ApprovalTokenInput};
-use crate::config::RunnerConfig;
-use crate::envelope::{ApprovalMetadata, ToolEnvelope, UndoMetadata};
-use crate::errors::ApiError;
-use crate::sandbox::pre_validate_path;
-use crate::snapshots::{undo_to_snapshot, SnapshotError};
+use crate::{
+    approval::{require_approval, ApprovalTokenInput},
+    config::RunnerConfig,
+    envelope::{ApprovalMetadata, ToolEnvelope, UndoMetadata},
+    errors::ApiError,
+    sandbox::pre_validate_path,
+    snapshots::{undo_to_snapshot, SnapshotError},
+};
 
 fn normalize_path(base: &std::path::Path, rel: &str) -> std::path::PathBuf {
     let mut result = base.to_path_buf();
@@ -44,10 +45,7 @@ pub fn open_root_dir(root_dir: &std::path::Path) -> Result<Dir, ApiError> {
 /// Returns `Err(ApiError::Forbidden)` if the path escapes the root.
 /// This is TOCTOU-immune: the path is resolved through the Dir handle,
 /// not via a separate canonicalize() + starts_with() check.
-pub fn resolve_under_root_capstd(
-    root_dir: &Dir,
-    rel_path: &str,
-) -> Result<PathBuf, ApiError> {
+pub fn resolve_under_root_capstd(root_dir: &Dir, rel_path: &str) -> Result<PathBuf, ApiError> {
     let normalized = rel_path.trim_start_matches('/');
     if normalized.is_empty() {
         return Err(ApiError::BadRequest("empty path".to_string()));
@@ -60,9 +58,7 @@ pub fn resolve_under_root_capstd(
     }
     // Path doesn't exist yet (e.g., for write operations) — check parent
     // to verify the path doesn't escape the root.
-    let parent = std::path::Path::new(normalized)
-        .parent()
-        .unwrap_or(std::path::Path::new("."));
+    let parent = std::path::Path::new(normalized).parent().unwrap_or(std::path::Path::new("."));
     if parent == std::path::Path::new(".") || parent == std::path::Path::new("") {
         return Ok(PathBuf::from(normalized));
     }
@@ -605,12 +601,10 @@ pub async fn undo(
 
 #[cfg(test)]
 mod tests {
+    use std::{fs as stdfs, path::Path, time::Duration};
+
     use super::*;
-    use crate::config::RunnerConfig;
-    use crate::tools::ToolContext;
-    use std::fs as stdfs;
-    use std::path::Path;
-    use std::time::Duration;
+    use crate::{config::RunnerConfig, tools::ToolContext};
 
     fn test_cfg() -> (tempfile::TempDir, RunnerConfig) {
         let td = tempfile::tempdir().unwrap();

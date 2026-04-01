@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Christian Meurer — https://github.com/christianmeurer/Lula
-use std::sync::OnceLock;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    sync::OnceLock,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use hmac::{Hmac, Mac};
 use serde::Deserialize;
 use sha2::Sha256;
 
-use crate::envelope::ApprovalMetadata;
-use crate::errors::ApiError;
+use crate::{envelope::ApprovalMetadata, errors::ApiError};
 
 type HmacSha256 = Hmac<Sha256>;
 
