@@ -13,6 +13,7 @@ from lg_orch.audit import (
     AuditConfig,
     AuditEvent,
     AuditLogger,
+    AuditSink,
     GCSAuditSink,
     S3AuditSink,
     build_sink,
@@ -307,6 +308,74 @@ def test_audit_event_emitted_on_run_create(tmp_path: pathlib.Path) -> None:
     parsed: dict[str, Any] = json.loads(lines[0])
     assert parsed["action"] == "run.create"
     assert parsed["outcome"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# utc_now_iso
+# ---------------------------------------------------------------------------
+
+
+def test_utc_now_iso_ends_with_z() -> None:
+    ts = utc_now_iso()
+    assert ts.endswith("Z")
+    assert "+" not in ts
+
+
+# ---------------------------------------------------------------------------
+# AuditConfig defaults
+# ---------------------------------------------------------------------------
+
+
+def test_audit_config_defaults() -> None:
+    cfg = AuditConfig()
+    assert cfg.log_path == "audit.jsonl"
+    assert cfg.sink_type is None
+    assert cfg.s3_bucket is None
+    assert cfg.s3_prefix == "audit"
+    assert cfg.s3_region == "us-east-1"
+    assert cfg.gcs_bucket is None
+    assert cfg.gcs_prefix == "audit"
+
+
+# ---------------------------------------------------------------------------
+# AuditLogger with sink
+# ---------------------------------------------------------------------------
+
+
+def test_audit_logger_calls_sink_export(tmp_path: pathlib.Path) -> None:
+    """AuditLogger.log calls sink.export when a sink is configured."""
+    import time
+
+    log_path = tmp_path / "audit.jsonl"
+
+    async def _noop_export(event: AuditEvent) -> None:
+        pass
+
+    mock_sink = MagicMock(spec=AuditSink)
+    mock_sink.export = MagicMock(side_effect=lambda e: _noop_export(e))
+
+    logger = AuditLogger(log_path, sink=mock_sink)
+    try:
+        event = _make_event()
+        logger.log(event)
+        # Give the background thread a moment to call export
+        time.sleep(0.2)
+    finally:
+        logger.close()
+
+    # The file should still have the event
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+
+
+def test_audit_logger_close_flushes(tmp_path: pathlib.Path) -> None:
+    log_path = tmp_path / "audit.jsonl"
+    logger = AuditLogger(log_path)
+    logger.log(_make_event(action="run.list"))
+    logger.close()
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["action"] == "run.list"
 
 
 def test_audit_event_denied_on_auth_failure(tmp_path: pathlib.Path) -> None:

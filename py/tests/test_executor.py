@@ -3,7 +3,18 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from lg_orch.nodes.executor import _coerce_approval_token, executor
+from lg_orch.nodes.executor import (
+    _apply_patch_changed_paths,
+    _approval_for_tool,
+    _as_int,
+    _budget_failure_result,
+    _coerce_approval_token,
+    _configured_write_allowlist,
+    _estimate_patch_bytes,
+    _normalize_rel_path,
+    _path_matches_allowlist,
+    executor,
+)
 
 
 def _base_state(**overrides: Any) -> dict[str, Any]:
@@ -424,3 +435,240 @@ def test_coerce_approval_token_rejects_missing_fields() -> None:
     assert _coerce_approval_token({"challenge_id": "id"}) is None
     assert _coerce_approval_token({"token": "tok"}) is None
     assert _coerce_approval_token({}) is None
+
+
+# ---------------------------------------------------------------------------
+# _as_int
+# ---------------------------------------------------------------------------
+
+
+def test_as_int_returns_int_directly() -> None:
+    assert _as_int(42, default=0) == 42
+
+
+def test_as_int_returns_default_for_bool() -> None:
+    assert _as_int(True, default=7) == 7
+    assert _as_int(False, default=7) == 7
+
+
+def test_as_int_parses_string() -> None:
+    assert _as_int("  99  ", default=0) == 99
+
+
+def test_as_int_returns_default_for_bad_string() -> None:
+    assert _as_int("abc", default=5) == 5
+
+
+def test_as_int_returns_default_for_none() -> None:
+    assert _as_int(None, default=3) == 3
+
+
+def test_as_int_returns_default_for_float() -> None:
+    assert _as_int(3.14, default=0) == 0
+
+
+# ---------------------------------------------------------------------------
+# _estimate_patch_bytes
+# ---------------------------------------------------------------------------
+
+
+def test_estimate_patch_bytes_from_patch_string() -> None:
+    payload = {"patch": "hello world"}
+    assert _estimate_patch_bytes(payload) == len(b"hello world")
+
+
+def test_estimate_patch_bytes_from_changes_list() -> None:
+    payload = {"changes": [{"path": "a.py", "content": "abc"}, {"path": "b.py", "patch": "xyz"}]}
+    assert _estimate_patch_bytes(payload) == 6
+
+
+def test_estimate_patch_bytes_fallback_to_json() -> None:
+    payload = {"tool": "apply_patch", "some_key": "value"}
+    result = _estimate_patch_bytes(payload)
+    assert result > 0
+
+
+# ---------------------------------------------------------------------------
+# _budget_failure_result
+# ---------------------------------------------------------------------------
+
+
+def test_budget_failure_result_basic() -> None:
+    result = _budget_failure_result(
+        tool="apply_patch",
+        message="budget exceeded",
+        error_tag="budget_exceeded",
+        route_metadata={"lane": "interactive"},
+    )
+    assert result["tool"] == "apply_patch"
+    assert result["ok"] is False
+    assert result["stderr"] == "budget exceeded"
+    assert result["artifacts"]["error"] == "budget_exceeded"
+    assert result["route"] == {"lane": "interactive"}
+
+
+def test_budget_failure_result_with_extra_artifacts() -> None:
+    result = _budget_failure_result(
+        tool="apply_patch",
+        message="denied",
+        error_tag="write_path_not_allowed",
+        route_metadata={},
+        artifacts_extra={"path": "secret.env"},
+    )
+    assert result["artifacts"]["path"] == "secret.env"
+    assert result["artifacts"]["error"] == "write_path_not_allowed"
+
+
+# ---------------------------------------------------------------------------
+# _normalize_rel_path
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_rel_path_strips_and_converts_backslashes() -> None:
+    assert _normalize_rel_path("  py\\src\\main.py  ") == "py/src/main.py"
+
+
+def test_normalize_rel_path_noop_on_unix_path() -> None:
+    assert _normalize_rel_path("py/src/main.py") == "py/src/main.py"
+
+
+# ---------------------------------------------------------------------------
+# _configured_write_allowlist
+# ---------------------------------------------------------------------------
+
+
+def test_configured_write_allowlist_returns_tuple() -> None:
+    guards = {"allowed_write_paths": ["py/**", "docs/*.md"]}
+    result = _configured_write_allowlist(guards)
+    assert result == ("py/**", "docs/*.md")
+
+
+def test_configured_write_allowlist_empty_when_missing() -> None:
+    assert _configured_write_allowlist({}) == ()
+
+
+def test_configured_write_allowlist_skips_non_strings() -> None:
+    guards = {"allowed_write_paths": ["py/**", 42, None, "", "  "]}
+    result = _configured_write_allowlist(guards)
+    assert result == ("py/**",)
+
+
+def test_configured_write_allowlist_non_list_returns_empty() -> None:
+    assert _configured_write_allowlist({"allowed_write_paths": "py/**"}) == ()
+
+
+# ---------------------------------------------------------------------------
+# _apply_patch_changed_paths
+# ---------------------------------------------------------------------------
+
+
+def test_apply_patch_changed_paths_extracts_paths() -> None:
+    payload = {
+        "changes": [
+            {"path": "py/new.txt", "op": "add", "content": "hello"},
+            {"path": "py\\old.txt", "op": "modify", "content": "world"},
+        ]
+    }
+    result = _apply_patch_changed_paths(payload)
+    assert result == ["py/new.txt", "py/old.txt"]
+
+
+def test_apply_patch_changed_paths_returns_none_for_empty() -> None:
+    assert _apply_patch_changed_paths({"changes": []}) is None
+    assert _apply_patch_changed_paths({}) is None
+
+
+def test_apply_patch_changed_paths_returns_none_for_non_dict_change() -> None:
+    assert _apply_patch_changed_paths({"changes": ["not_a_dict"]}) is None
+
+
+def test_apply_patch_changed_paths_returns_none_for_missing_path() -> None:
+    assert _apply_patch_changed_paths({"changes": [{"op": "add"}]}) is None
+
+
+# ---------------------------------------------------------------------------
+# _path_matches_allowlist
+# ---------------------------------------------------------------------------
+
+
+def test_path_matches_allowlist_glob_match() -> None:
+    assert _path_matches_allowlist("py/src/main.py", ("py/**",)) is True
+
+
+def test_path_matches_allowlist_no_match() -> None:
+    assert _path_matches_allowlist("docs/README.md", ("py/**",)) is False
+
+
+def test_path_matches_allowlist_normalizes_backslashes() -> None:
+    assert _path_matches_allowlist("py\\src\\main.py", ("py/**",)) is True
+
+
+# ---------------------------------------------------------------------------
+# _approval_for_tool
+# ---------------------------------------------------------------------------
+
+
+def test_approval_for_tool_from_direct_input() -> None:
+    state: dict[str, Any] = {}
+    result = _approval_for_tool(
+        state,
+        tool_name="apply_patch",
+        input_payload={
+            "approval": {
+                "challenge_id": "approval:apply_patch",
+                "token": "approve:approval:apply_patch",
+            }
+        },
+    )
+    assert result is not None
+    assert result["token"] == "approve:approval:apply_patch"
+
+
+def test_approval_for_tool_from_state_approvals() -> None:
+    state: dict[str, Any] = {
+        "approvals": {
+            "apply_patch": {
+                "challenge_id": "cid",
+                "token": "tok",
+            }
+        }
+    }
+    result = _approval_for_tool(state, tool_name="apply_patch", input_payload={})
+    assert result is not None
+    assert result["token"] == "tok"
+
+
+def test_approval_for_tool_from_mutations_subkey() -> None:
+    state: dict[str, Any] = {
+        "approvals": {
+            "mutations": {
+                "apply_patch": {
+                    "challenge_id": "cid",
+                    "token": "tok2",
+                }
+            }
+        }
+    }
+    result = _approval_for_tool(state, tool_name="apply_patch", input_payload={})
+    assert result is not None
+    assert result["token"] == "tok2"
+
+
+def test_approval_for_tool_returns_none_when_missing() -> None:
+    result = _approval_for_tool({}, tool_name="apply_patch", input_payload={})
+    assert result is None
+
+
+def test_approval_for_tool_falls_back_to_resume_approvals() -> None:
+    state: dict[str, Any] = {
+        "approvals": {},
+        "_resume_approvals": {
+            "apply_patch": {
+                "challenge_id": "cid",
+                "token": "resumed",
+            }
+        },
+    }
+    result = _approval_for_tool(state, tool_name="apply_patch", input_payload={})
+    assert result is not None
+    assert result["token"] == "resumed"
