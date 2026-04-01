@@ -34,7 +34,12 @@ from lg_orch.memory import (
     get_compression_summary,
     prune_pre_verification_history,
 )
-from lg_orch.model_routing import latest_model_route, record_inference_telemetry, record_model_route
+from lg_orch.model_routing import (
+    get_routing_policy,
+    latest_model_route,
+    record_inference_telemetry,
+    record_model_route,
+)
 from lg_orch.nodes._planner_memory import (
     _apply_procedural_memory_constraints,
     _apply_semantic_memory_constraints,
@@ -88,10 +93,19 @@ def _planner_model_output(
     except ValueError:
         return None, None
 
-    # SLA routing: if an SlaRoutingPolicy is available, let it override the model
-    sla_policy = state.get("_sla_routing_policy")
-    if sla_policy is not None and hasattr(sla_policy, "select_model"):
-        preferred_model = sla_policy.select_model(model)
+    # Model routing: use get_routing_policy() to select diversity or SLA policy,
+    # falling back to any policy already stored on the state.
+    routing_cfg = state.get("_model_routing_policy", {})
+    routing_cfg = routing_cfg if isinstance(routing_cfg, dict) else {}
+    diversity_models_raw = routing_cfg.get("diversity_models", [])
+    diversity_models = (
+        list(diversity_models_raw) if isinstance(diversity_models_raw, list) else []
+    )
+    policy = get_routing_policy(diversity_models=diversity_models or None)
+    if policy is None:
+        policy = state.get("_sla_routing_policy")
+    if policy is not None and hasattr(policy, "select_model"):
+        preferred_model = policy.select_model(model)
         if preferred_model:
             model = preferred_model
 

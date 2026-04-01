@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from lg_orch.model_routing import decide_model_route, record_inference_telemetry, record_model_route
+from lg_orch.model_routing import (
+    DiversityRoutingPolicy,
+    SlaRoutingPolicy,
+    decide_model_route,
+    get_routing_policy,
+    record_inference_telemetry,
+    record_model_route,
+)
 
 
 def test_decide_model_route_uses_local_fallback_for_configured_task_class() -> None:
@@ -145,3 +152,53 @@ def test_record_inference_telemetry_captures_route_metadata() -> None:
     assert entry["latency_sensitive"] is False
     assert entry["usage"]["input_tokens"] == 120
     assert entry["cache_metadata"]["x-cache-hit"] == "true"
+
+
+def test_get_routing_policy_returns_sla_by_default() -> None:
+    """When LG_MODEL_DIVERSITY is unset, get_routing_policy returns SlaRoutingPolicy or None."""
+    import os
+
+    os.environ.pop("LG_MODEL_DIVERSITY", None)
+    policy = get_routing_policy()
+    assert policy is None  # no sla_config provided, no diversity
+
+
+def test_get_routing_policy_returns_diversity_when_enabled() -> None:
+    """When LG_MODEL_DIVERSITY=true, get_routing_policy returns DiversityRoutingPolicy."""
+    import os
+
+    os.environ["LG_MODEL_DIVERSITY"] = "true"
+    try:
+        policy = get_routing_policy(diversity_models=["model-a", "model-b"])
+        assert isinstance(policy, DiversityRoutingPolicy)
+        assert policy.models == ["model-a", "model-b"]
+    finally:
+        os.environ.pop("LG_MODEL_DIVERSITY", None)
+
+
+def test_get_routing_policy_falls_back_to_sla_when_diversity_disabled() -> None:
+    """When LG_MODEL_DIVERSITY is false, an sla_config yields SlaRoutingPolicy."""
+    import os
+
+    from lg_orch.model_routing import SlaConfig, SlaEntry
+
+    os.environ.pop("LG_MODEL_DIVERSITY", None)
+    cfg = SlaConfig(entries=[SlaEntry(model_id="m1", threshold_p95_s=2.0, fallback_model_id="m2")])
+    policy = get_routing_policy(sla_config=cfg, diversity_models=["model-a"])
+    assert isinstance(policy, SlaRoutingPolicy)
+
+
+def test_diversity_routing_policy_round_robin() -> None:
+    """DiversityRoutingPolicy cycles through models in order."""
+    policy = DiversityRoutingPolicy(models=["alpha", "beta", "gamma"])
+    results = [policy.select_model() for _ in range(7)]
+    assert results == ["alpha", "beta", "gamma", "alpha", "beta", "gamma", "alpha"]
+
+
+def test_diversity_routing_policy_reset() -> None:
+    """reset() restarts the round-robin from the first model."""
+    policy = DiversityRoutingPolicy(models=["alpha", "beta"])
+    policy.select_model()
+    policy.select_model()
+    policy.reset()
+    assert policy.select_model() == "alpha"
