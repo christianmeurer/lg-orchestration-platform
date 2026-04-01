@@ -61,5 +61,8 @@ py/mypy_results.txt
 py/_commit_msg.txt
 deploy_output.log
 docs/demo.gif
-node_modules/  
-out/  
+node_modules/
+out/
+
+# Leptos SPA build output
+rs/spa-leptos/dist/
