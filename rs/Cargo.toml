@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "runner",
   "guest-agent",
+  "spa-leptos",
 ]
 
 [workspace.package]

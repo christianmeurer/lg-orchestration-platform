@@ -1,0 +1,18 @@
+[build]
+target = "index.html"
+dist = "dist"
+
+[watch]
+ignore = ["dist"]
+
+[[proxy]]
+rewrite = "/v1/"
+backend = "http://127.0.0.1:8765/v1/"
+
+[[proxy]]
+rewrite = "/runs/"
+backend = "http://127.0.0.1:8765/runs/"
+
+[[proxy]]
+rewrite = "/healthz"
+backend = "http://127.0.0.1:8765/healthz"
