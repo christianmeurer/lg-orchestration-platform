@@ -5,7 +5,7 @@ use crate::{
         client::{fetch_runs, ApiConfig},
         types::RunSummary,
     },
-    components::{metrics_cards::MetricsCards, run_card::RunCard},
+    components::{metrics_cards::MetricsCards, run_card::RunCard, split_pane::SplitPane},
 };
 
 #[component]
@@ -52,10 +52,9 @@ pub fn DashboardPage() -> impl IntoView {
 
     let runs_signal: Signal<Vec<RunSummary>> = Signal::derive(move || runs.get());
 
-    view! {
-        <div style="display:flex;height:100%;">
-            // Left panel: runs list
-            <div style="width:380px;flex-shrink:0;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;">
+    let left_panel = ViewFn::from(move || {
+        view! {
+            <div style="border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;height:100%;">
                 <div style="padding:16px;font-size:11px;color:var(--text-muted);letter-spacing:0.5px;font-weight:600;">
                     "RUNS"
                 </div>
@@ -84,13 +83,21 @@ pub fn DashboardPage() -> impl IntoView {
                     }}
                 </div>
             </div>
-            // Right panel: overview
-            <div style="flex:1;padding:24px;overflow-y:auto;">
+        }
+    });
+
+    let right_panel = ViewFn::from(move || {
+        view! {
+            <div style="padding:24px;overflow-y:auto;height:100%;">
                 <div style="font-size:11px;color:var(--text-muted);letter-spacing:0.5px;font-weight:600;margin-bottom:16px;">
                     "OVERVIEW"
                 </div>
                 <MetricsCards runs=runs_signal />
             </div>
-        </div>
+        }
+    });
+
+    view! {
+        <SplitPane initial_left_width=35.0 left=left_panel right=right_panel />
     }
 }

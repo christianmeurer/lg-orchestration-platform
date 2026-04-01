@@ -6,6 +6,7 @@ pub mod metrics_cards;
 pub mod pipeline_graph;
 pub mod run_card;
 pub mod run_stream;
+pub mod split_pane;
 pub mod status_badge;
 pub mod tabs;
 pub mod verifier_panel;
