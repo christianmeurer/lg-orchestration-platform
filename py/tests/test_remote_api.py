@@ -1511,7 +1511,7 @@ def test_authorize_request_accepts_query_string_token() -> None:
 def test_audit_action_run_create() -> None:
     from lg_orch.remote_api import _audit_action_and_resource
 
-    action, resource = _audit_action_and_resource(
+    action, _resource = _audit_action_and_resource(
         method="POST", route="/v1/runs", path_parts=["v1", "runs"], status=201
     )
     assert action == "run.create"
@@ -1520,7 +1520,7 @@ def test_audit_action_run_create() -> None:
 def test_audit_action_run_list() -> None:
     from lg_orch.remote_api import _audit_action_and_resource
 
-    action, resource = _audit_action_and_resource(
+    action, _resource = _audit_action_and_resource(
         method="GET", route="/v1/runs", path_parts=["v1", "runs"], status=200
     )
     assert action == "run.list"
@@ -1614,7 +1614,7 @@ def test_audit_action_logs_stream() -> None:
 def test_audit_action_run_search() -> None:
     from lg_orch.remote_api import _audit_action_and_resource
 
-    action, resource = _audit_action_and_resource(
+    action, _resource = _audit_action_and_resource(
         method="GET",
         route="/runs/search",
         path_parts=["runs", "search"],
@@ -1697,7 +1697,9 @@ def test_match_parameterized_runs_approve() -> None:
 def test_match_parameterized_runs_approval_policy() -> None:
     from lg_orch.remote_api import _match_parameterized
 
-    h = _match_parameterized("/runs/abc/approval-policy", "POST", ["runs", "abc", "approval-policy"])
+    h = _match_parameterized(
+        "/runs/abc/approval-policy", "POST", ["runs", "abc", "approval-policy"]
+    )
     assert h is not None
 
 
@@ -1730,7 +1732,10 @@ def test_match_parameterized_no_match() -> None:
 def test_runs_list_endpoint(tmp_path: Path) -> None:
     service = RemoteAPIService(repo_root=tmp_path)
     status, _, body = _api_http_response(
-        service, method="GET", request_path="/runs", request_body=None,
+        service,
+        method="GET",
+        request_path="/runs",
+        request_body=None,
     )
     assert status == 200
     assert "runs" in json.loads(body.decode("utf-8"))
@@ -1738,8 +1743,11 @@ def test_runs_list_endpoint(tmp_path: Path) -> None:
 
 def test_runs_list_rejects_post(tmp_path: Path) -> None:
     service = RemoteAPIService(repo_root=tmp_path)
-    status, _, body = _api_http_response(
-        service, method="POST", request_path="/runs/", request_body=None,
+    status, _, _body = _api_http_response(
+        service,
+        method="POST",
+        request_path="/runs/",
+        request_body=None,
     )
     assert status == 405
 
@@ -1747,15 +1755,21 @@ def test_runs_list_rejects_post(tmp_path: Path) -> None:
 def test_healthz_rejects_post(tmp_path: Path) -> None:
     service = RemoteAPIService(repo_root=tmp_path)
     status, _, _ = _api_http_response(
-        service, method="POST", request_path="/healthz", request_body=None,
+        service,
+        method="POST",
+        request_path="/healthz",
+        request_body=None,
     )
     assert status == 405
 
 
 def test_v1_run_get_missing(tmp_path: Path) -> None:
     service = RemoteAPIService(repo_root=tmp_path)
-    status, _, body = _api_http_response(
-        service, method="GET", request_path="/v1/runs/nonexistent", request_body=None,
+    status, _, _body = _api_http_response(
+        service,
+        method="GET",
+        request_path="/v1/runs/nonexistent",
+        request_body=None,
     )
     assert status == 404
 
@@ -1763,15 +1777,21 @@ def test_v1_run_get_missing(tmp_path: Path) -> None:
 def test_v1_run_get_rejects_post(tmp_path: Path) -> None:
     service = RemoteAPIService(repo_root=tmp_path)
     status, _, _ = _api_http_response(
-        service, method="POST", request_path="/v1/runs/abc", request_body=None,
+        service,
+        method="POST",
+        request_path="/v1/runs/abc",
+        request_body=None,
     )
     assert status == 405
 
 
 def test_v1_run_logs_missing(tmp_path: Path) -> None:
     service = RemoteAPIService(repo_root=tmp_path)
-    status, _, body = _api_http_response(
-        service, method="GET", request_path="/v1/runs/nonexistent/logs", request_body=None,
+    status, _, _body = _api_http_response(
+        service,
+        method="GET",
+        request_path="/v1/runs/nonexistent/logs",
+        request_body=None,
     )
     assert status == 404
 
@@ -1779,7 +1799,10 @@ def test_v1_run_logs_missing(tmp_path: Path) -> None:
 def test_v1_run_logs_rejects_post(tmp_path: Path) -> None:
     service = RemoteAPIService(repo_root=tmp_path)
     status, _, _ = _api_http_response(
-        service, method="POST", request_path="/v1/runs/abc/logs", request_body=None,
+        service,
+        method="POST",
+        request_path="/v1/runs/abc/logs",
+        request_body=None,
     )
     assert status == 405
 
@@ -1787,7 +1810,10 @@ def test_v1_run_logs_rejects_post(tmp_path: Path) -> None:
 def test_v1_run_cancel_rejects_get(tmp_path: Path) -> None:
     service = RemoteAPIService(repo_root=tmp_path)
     status, _, _ = _api_http_response(
-        service, method="GET", request_path="/v1/runs/abc/cancel", request_body=None,
+        service,
+        method="GET",
+        request_path="/v1/runs/abc/cancel",
+        request_body=None,
     )
     assert status == 405
 
@@ -1795,15 +1821,20 @@ def test_v1_run_cancel_rejects_get(tmp_path: Path) -> None:
 def test_v1_run_approve_rejects_get(tmp_path: Path) -> None:
     service = RemoteAPIService(repo_root=tmp_path)
     status, _, _ = _api_http_response(
-        service, method="GET", request_path="/v1/runs/abc/approve", request_body=None,
+        service,
+        method="GET",
+        request_path="/v1/runs/abc/approve",
+        request_body=None,
     )
     assert status == 405
 
 
 def test_v1_run_approve_invalid_json(tmp_path: Path) -> None:
     service = RemoteAPIService(repo_root=tmp_path)
-    status, _, body = _api_http_response(
-        service, method="POST", request_path="/v1/runs/abc/approve",
+    status, _, _body = _api_http_response(
+        service,
+        method="POST",
+        request_path="/v1/runs/abc/approve",
         request_body=b"not json",
     )
     assert status == 400
@@ -1811,7 +1842,10 @@ def test_v1_run_approve_invalid_json(tmp_path: Path) -> None:
 
 def test_api_404_for_unknown_route(tmp_path: Path) -> None:
     service = RemoteAPIService(repo_root=tmp_path)
-    status, _, body = _api_http_response(
-        service, method="GET", request_path="/v1/unknown", request_body=None,
+    status, _, _body = _api_http_response(
+        service,
+        method="GET",
+        request_path="/v1/unknown",
+        request_body=None,
     )
     assert status == 404

@@ -151,7 +151,5 @@ def test_policy_gate_sets_tool_calls_and_patch_budgets() -> None:
 
 
 def test_policy_gate_sets_context_budget() -> None:
-    out = policy_gate(
-        _base_state(_budget_context={"max_tokens": 4096})
-    )
+    out = policy_gate(_base_state(_budget_context={"max_tokens": 4096}))
     assert out["budgets"]["context"] == {"max_tokens": 4096}

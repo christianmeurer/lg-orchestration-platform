@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # context_builder helpers
@@ -59,9 +57,7 @@ def test_runner_client_from_state_returns_none_for_missing_url() -> None:
 def test_runner_client_from_state_returns_none_for_bad_url() -> None:
     from lg_orch.nodes.context_builder import _runner_client_from_state
 
-    result = _runner_client_from_state(
-        {"_runner_enabled": True, "_runner_base_url": "not-a-url"}
-    )
+    result = _runner_client_from_state({"_runner_enabled": True, "_runner_base_url": "not-a-url"})
     assert result is None
 
 
@@ -97,11 +93,13 @@ def test_coerce_handoff_returns_none_for_missing_fields() -> None:
 def test_coerce_handoff_returns_dict_for_valid_input() -> None:
     from lg_orch.nodes.coder import _coerce_handoff
 
-    result = _coerce_handoff({
-        "producer": "planner",
-        "consumer": "coder",
-        "objective": "implement feature",
-    })
+    result = _coerce_handoff(
+        {
+            "producer": "planner",
+            "consumer": "coder",
+            "objective": "implement feature",
+        }
+    )
     assert result is not None
     assert result["producer"] == "planner"
     assert result["consumer"] == "coder"
@@ -157,30 +155,36 @@ def test_reporter_structured_summary() -> None:
 def test_reporter_get_inference_config_returns_none_for_local() -> None:
     from lg_orch.nodes.reporter import _get_inference_config
 
-    result = _get_inference_config({
-        "_models": {"planner": {"provider": "local", "model": "det"}},
-    })
+    result = _get_inference_config(
+        {
+            "_models": {"planner": {"provider": "local", "model": "det"}},
+        }
+    )
     assert result is None
 
 
 def test_reporter_get_inference_config_returns_none_for_missing_model() -> None:
     from lg_orch.nodes.reporter import _get_inference_config
 
-    result = _get_inference_config({
-        "_models": {"planner": {"provider": "digitalocean", "model": ""}},
-    })
+    result = _get_inference_config(
+        {
+            "_models": {"planner": {"provider": "digitalocean", "model": ""}},
+        }
+    )
     assert result is None
 
 
 def test_reporter_get_inference_config_returns_tuple_with_valid_do_config() -> None:
     from lg_orch.nodes.reporter import _get_inference_config
 
-    result = _get_inference_config({
-        "_models": {"planner": {"provider": "digitalocean", "model": "gpt-4.1"}},
-        "_model_provider_runtime": {
-            "digitalocean": {"api_key": "sk-test", "base_url": "https://inference.do-ai.run/v1"}
-        },
-    })
+    result = _get_inference_config(
+        {
+            "_models": {"planner": {"provider": "digitalocean", "model": "gpt-4.1"}},
+            "_model_provider_runtime": {
+                "digitalocean": {"api_key": "sk-test", "base_url": "https://inference.do-ai.run/v1"}
+            },
+        }
+    )
     assert result is not None
     model, api_key, base_url, timeout_s = result
     assert model == "gpt-4.1"
@@ -192,14 +196,16 @@ def test_reporter_get_inference_config_returns_tuple_with_valid_do_config() -> N
 def test_reporter_get_inference_config_returns_tuple_with_valid_openai_config() -> None:
     from lg_orch.nodes.reporter import _get_inference_config
 
-    result = _get_inference_config({
-        "_models": {"planner": {"provider": "openai_compatible", "model": "gpt-4o"}},
-        "_model_provider_runtime": {
-            "openai_compatible": {"api_key": "sk-test", "base_url": "https://api.openai.com/v1"}
-        },
-    })
+    result = _get_inference_config(
+        {
+            "_models": {"planner": {"provider": "openai_compatible", "model": "gpt-4o"}},
+            "_model_provider_runtime": {
+                "openai_compatible": {"api_key": "sk-test", "base_url": "https://api.openai.com/v1"}
+            },
+        }
+    )
     assert result is not None
-    model, api_key, base_url, timeout_s = result
+    model, api_key, _base_url, _timeout_s = result
     assert model == "gpt-4o"
     assert api_key == "sk-test"
 
@@ -207,12 +213,14 @@ def test_reporter_get_inference_config_returns_tuple_with_valid_openai_config() 
 def test_reporter_get_inference_config_returns_none_for_bad_base_url() -> None:
     from lg_orch.nodes.reporter import _get_inference_config
 
-    result = _get_inference_config({
-        "_models": {"planner": {"provider": "digitalocean", "model": "gpt-4.1"}},
-        "_model_provider_runtime": {
-            "digitalocean": {"api_key": "sk-test", "base_url": "ftp://bad"}
-        },
-    })
+    result = _get_inference_config(
+        {
+            "_models": {"planner": {"provider": "digitalocean", "model": "gpt-4.1"}},
+            "_model_provider_runtime": {
+                "digitalocean": {"api_key": "sk-test", "base_url": "ftp://bad"}
+            },
+        }
+    )
     assert result is None
 
 
@@ -223,10 +231,12 @@ def test_reporter_get_inference_config_uses_env_do_key() -> None:
 
     os.environ["MODEL_ACCESS_KEY"] = "sk-from-env"
     try:
-        result = _get_inference_config({
-            "_models": {"planner": {"provider": "digitalocean", "model": "gpt-4.1"}},
-            "_model_provider_runtime": {"digitalocean": {}},
-        })
+        result = _get_inference_config(
+            {
+                "_models": {"planner": {"provider": "digitalocean", "model": "gpt-4.1"}},
+                "_model_provider_runtime": {"digitalocean": {}},
+            }
+        )
         assert result is not None
         _, api_key, _, _ = result
         assert api_key == "sk-from-env"
@@ -241,10 +251,12 @@ def test_reporter_get_inference_config_uses_env_openai_key() -> None:
 
     os.environ["OPENAI_API_KEY"] = "sk-openai-env"
     try:
-        result = _get_inference_config({
-            "_models": {"planner": {"provider": "openai_compatible", "model": "gpt-4o"}},
-            "_model_provider_runtime": {"openai_compatible": {}},
-        })
+        result = _get_inference_config(
+            {
+                "_models": {"planner": {"provider": "openai_compatible", "model": "gpt-4o"}},
+                "_model_provider_runtime": {"openai_compatible": {}},
+            }
+        )
         assert result is not None
         _, api_key, _, _ = result
         assert api_key == "sk-openai-env"
@@ -260,10 +272,12 @@ def test_reporter_get_inference_config_returns_none_for_missing_api_key() -> Non
 
     from lg_orch.nodes.reporter import _get_inference_config
 
-    result = _get_inference_config({
-        "_models": {"planner": {"provider": "digitalocean", "model": "gpt-4.1"}},
-        "_model_provider_runtime": {"digitalocean": {"api_key": ""}},
-    })
+    result = _get_inference_config(
+        {
+            "_models": {"planner": {"provider": "digitalocean", "model": "gpt-4.1"}},
+            "_model_provider_runtime": {"digitalocean": {"api_key": ""}},
+        }
+    )
     assert result is None
 
 
@@ -577,7 +591,7 @@ def test_build_planner_prompts_with_repair_mode(tmp_path: Path) -> None:
         "test_repair_mode": True,
         "_repo_root": str(tmp_path),
     }
-    sys_prompt, user_prompt = _build_planner_prompts(
+    sys_prompt, _user_prompt = _build_planner_prompts(
         state, repo_root=tmp_path, repo_context={}, route={}, verification={}
     )
     assert "REPAIR MODE" in sys_prompt

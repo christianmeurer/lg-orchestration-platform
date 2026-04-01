@@ -234,7 +234,9 @@ def test_record_model_route_handles_non_list_fallback_classes() -> None:
             "fallback_task_classes": "not_a_list",
         },
     }
-    out = record_model_route(state, node_name="planner", task_class="analysis", model_slot="planner")
+    out = record_model_route(
+        state, node_name="planner", task_class="analysis", model_slot="planner"
+    )
     routing = out["telemetry"]["model_routing"]
     assert len(routing) == 1
 

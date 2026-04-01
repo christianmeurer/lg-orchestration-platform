@@ -245,17 +245,17 @@ def test_checkpoint_payload_minimal() -> None:
 
 
 def test_checkpoint_payload_with_resume_checkpoint_id() -> None:
-    result = RunnerClient._checkpoint_payload({
-        "_checkpoint": {"thread_id": "t1", "resume_checkpoint_id": "cp-2"}
-    })
+    result = RunnerClient._checkpoint_payload(
+        {"_checkpoint": {"thread_id": "t1", "resume_checkpoint_id": "cp-2"}}
+    )
     assert result is not None
     assert result["checkpoint_id"] == "cp-2"
 
 
 def test_checkpoint_payload_with_run_id() -> None:
-    result = RunnerClient._checkpoint_payload({
-        "_checkpoint": {"thread_id": "t1", "run_id": "run-1"}
-    })
+    result = RunnerClient._checkpoint_payload(
+        {"_checkpoint": {"thread_id": "t1", "run_id": "run-1"}}
+    )
     assert result is not None
     assert result["run_id"] == "run-1"
 
@@ -298,9 +298,14 @@ def test_execute_tool_forwards_route_payload() -> None:
     mock_resp = MagicMock()
     mock_resp.raise_for_status.return_value = None
     mock_resp.json.return_value = {
-        "tool": "exec", "ok": True, "exit_code": 0,
-        "stdout": "", "stderr": "", "diagnostics": [],
-        "timing_ms": 1, "artifacts": {},
+        "tool": "exec",
+        "ok": True,
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": "",
+        "diagnostics": [],
+        "timing_ms": 1,
+        "artifacts": {},
     }
     mock_http = MagicMock()
     mock_http.post.return_value = mock_resp

@@ -98,9 +98,7 @@ def _planner_model_output(
     routing_cfg = state.get("_model_routing_policy", {})
     routing_cfg = routing_cfg if isinstance(routing_cfg, dict) else {}
     diversity_models_raw = routing_cfg.get("diversity_models", [])
-    diversity_models = (
-        list(diversity_models_raw) if isinstance(diversity_models_raw, list) else []
-    )
+    diversity_models = list(diversity_models_raw) if isinstance(diversity_models_raw, list) else []
     policy = get_routing_policy(diversity_models=diversity_models or None)
     if policy is None:
         policy = state.get("_sla_routing_policy")

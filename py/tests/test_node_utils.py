@@ -1,11 +1,10 @@
-"""Tests for lg_orch.nodes._utils — extract_json_block, validate_base_url, resolve_inference_client."""
+"""Tests for lg_orch.nodes._utils helpers."""
 
 from __future__ import annotations
 
 import pytest
 
 from lg_orch.nodes._utils import extract_json_block, resolve_inference_client, validate_base_url
-
 
 # ---------------------------------------------------------------------------
 # validate_base_url
@@ -90,7 +89,9 @@ def test_resolve_inference_client_raises_for_empty_model() -> None:
 def test_resolve_inference_client_raises_for_missing_do_api_key() -> None:
     state = {
         "_models": {"planner": {"provider": "digitalocean", "model": "gpt-4.1"}},
-        "_model_provider_runtime": {"digitalocean": {"api_key": "", "base_url": "https://x.com/v1"}},
+        "_model_provider_runtime": {
+            "digitalocean": {"api_key": "", "base_url": "https://x.com/v1"}
+        },
     }
     with pytest.raises(ValueError, match="api_key"):
         resolve_inference_client(state, "planner", "digitalocean")
@@ -119,9 +120,7 @@ def test_resolve_inference_client_raises_for_empty_do_base_url() -> None:
 def test_resolve_inference_client_raises_for_empty_openai_base_url() -> None:
     state = {
         "_models": {"planner": {"provider": "openai_compatible", "model": "gpt-4.1"}},
-        "_model_provider_runtime": {
-            "openai_compatible": {"api_key": "sk-test", "base_url": ""}
-        },
+        "_model_provider_runtime": {"openai_compatible": {"api_key": "sk-test", "base_url": ""}},
     }
     with pytest.raises(ValueError, match="base_url"):
         resolve_inference_client(state, "planner", "digitalocean")

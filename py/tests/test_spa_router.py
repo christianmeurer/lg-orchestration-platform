@@ -13,7 +13,7 @@ def test_spa_router_returns_503_when_dist_missing(tmp_path: Path, monkeypatch: o
         from lg_orch.spa.router import create_spa_router
 
         dispatch = create_spa_router()
-        status, content_type, body = dispatch("")
+        status, _content_type, body = dispatch("")
         assert status == 503
         assert b"SPA dist not found" in body
     finally:
@@ -74,7 +74,7 @@ def test_spa_router_returns_404_when_no_index(tmp_path: Path) -> None:
         from lg_orch.spa.router import create_spa_router
 
         dispatch = create_spa_router()
-        status, content_type, body = dispatch("something")
+        status, _content_type, body = dispatch("something")
         assert status == 404
         assert b"index.html not found" in body
     finally:

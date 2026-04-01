@@ -462,7 +462,7 @@ def test_trace_payload_from_path_returns_dict_for_valid(tmp_path: Path) -> None:
 def test_trace_http_response_returns_404_for_unknown_route(tmp_path: Path) -> None:
     trace_dir = tmp_path / "runs"
     trace_dir.mkdir()
-    status, _, body = _trace_http_response(
+    status, _, _body = _trace_http_response(
         trace_dir, request_path="/unknown/path", mermaid_graph=""
     )
     assert status == 404
@@ -471,7 +471,7 @@ def test_trace_http_response_returns_404_for_unknown_route(tmp_path: Path) -> No
 def test_trace_http_response_index_returns_html(tmp_path: Path) -> None:
     trace_dir = tmp_path / "runs"
     trace_dir.mkdir()
-    status, content_type, body = _trace_http_response(
+    status, content_type, _body = _trace_http_response(
         trace_dir, request_path="/", mermaid_graph=""
     )
     assert status == 200
