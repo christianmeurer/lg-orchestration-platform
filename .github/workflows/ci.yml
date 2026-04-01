@@ -183,7 +183,7 @@ jobs:
           workspaces: "rs -> rs/target"
 
       - name: Install trunk
-        run: curl -sSL https://github.com/trunk-rs/trunk/releases/latest/download/trunk-x86_64-unknown-linux-gnu.tar.gz | tar xz && sudo mv trunk /usr/local/bin/
+        run: curl -sSL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz | tar xz && sudo mv trunk /usr/local/bin/
 
       - name: Build SPA
         working-directory: rs/spa-leptos

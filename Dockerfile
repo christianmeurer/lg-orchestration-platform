@@ -18,7 +18,7 @@ RUN cargo build --manifest-path ./rs/Cargo.toml --release --locked -p lg-runner
 # ── Stage 2: SPA (Leptos/WASM) ──────────────────────────────────────
 FROM rust:1.88-bookworm AS spa-builder
 RUN rustup target add wasm32-unknown-unknown \
-    && curl -sSL https://github.com/trunk-rs/trunk/releases/latest/download/trunk-x86_64-unknown-linux-gnu.tar.gz | tar xz \
+    && curl -sSL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz | tar xz \
     && mv trunk /usr/local/bin/
 WORKDIR /app
 COPY rs/spa-leptos/ rs/spa-leptos/
