@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Any, cast
 
@@ -21,8 +22,6 @@ from langgraph.checkpoint.base import (
 )
 
 from lg_orch.backends._base import BaseCheckpointSaver, parse_config
-
-import re
 
 _TABLE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 

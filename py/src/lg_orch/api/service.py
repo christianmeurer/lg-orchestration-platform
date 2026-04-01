@@ -722,7 +722,7 @@ class RemoteAPIService:
             # HIGH FIX 5: Pass approval data via temp file instead of env var
             # to prevent leaking secrets through /proc/<pid>/environ.
             approvals_json_str = json.dumps(approvals_payload, ensure_ascii=False)
-            approvals_tmpfile = tempfile.NamedTemporaryFile(
+            approvals_tmpfile = tempfile.NamedTemporaryFile(  # noqa: SIM115
                 mode="w",
                 suffix=".json",
                 delete=False,

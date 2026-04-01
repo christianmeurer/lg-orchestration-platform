@@ -40,6 +40,7 @@ def run_command(args: Any, *, cfg: AppConfig, repo_root: Path) -> int:
     repo_root:
         Resolved repository root path.
     """
+    import contextlib
     import os
 
     log = get_logger()
@@ -69,10 +70,8 @@ def run_command(args: Any, *, cfg: AppConfig, repo_root: Path) -> int:
             log.warning("resume_approvals_file_read_failed", error=str(exc))
         finally:
             # Clean up the temp file after reading
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(resume_approvals_file)
-            except OSError:
-                pass
     if not resume_approvals_raw:
         resume_approvals_raw = str(os.environ.get("LG_RESUME_APPROVALS_JSON", "")).strip()
     if resume_approvals_raw:

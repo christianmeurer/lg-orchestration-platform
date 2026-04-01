@@ -90,8 +90,16 @@ class RedisCheckpointSaver(BaseCheckpointSaver[Any]):
         self._key_prefix = key_prefix
         self._ttl_seconds = ttl_seconds
 
-        _conn_timeout = socket_connect_timeout if socket_connect_timeout is not None else self._DEFAULT_SOCKET_CONNECT_TIMEOUT
-        _sock_timeout = socket_timeout if socket_timeout is not None else self._DEFAULT_SOCKET_TIMEOUT
+        _conn_timeout = (
+            socket_connect_timeout
+            if socket_connect_timeout is not None
+            else self._DEFAULT_SOCKET_CONNECT_TIMEOUT
+        )
+        _sock_timeout = (
+            socket_timeout
+            if socket_timeout is not None
+            else self._DEFAULT_SOCKET_TIMEOUT
+        )
 
         # Async client for aget_tuple, aput, etc.
         self._client: Any = aioredis.from_url(
