@@ -124,7 +124,44 @@ _Derived from `docs/quality_report.md` (2026-03-20). Items are ordered by severi
 - [x] Add SBOM generation (CycloneDX) to release workflow — anchore/sbom-action in release.yml
 - [x] VS Code extension published — vscode-publish.yml workflow, VSIX built, marketplace metadata complete
 
-## Remaining Items
-- [ ] Wire DiversityRoutingPolicy into planner (currently opt-in class, not wired to planner.py)
-- [ ] Debug VSCE marketplace propagation (extension packaged and CI ready, marketplace listing pending)
-- [ ] Ratchet coverage gate from 75% to 80%
+## Wave 15 — Product Polish (2026-04-01) ✅
+
+- [x] Leptos WASM SPA replacing 3 legacy frontends — Cyberpunk Minimal design, SSE streaming, approval modals, 4 pages (`rs/spa-leptos/`)
+- [x] VS Code extension rich operations console — webview with live SSE, approval workflow, diff preview, esbuild build (`vscode-extension/`)
+- [x] Rich CLI with `rich` library — panels, tables, colored markup, stderr log separation (`console.py`, `visualize.py`)
+- [x] CI pipeline fully green — nightly rustfmt, ruff/mypy clean, eval JSON fix
+- [x] Codebase cleanup — stale artifacts removed, mixed logging fixed, dead `heal` command wired
+- [x] DiversityRoutingPolicy wired into planner via `get_routing_policy()` factory
+- [x] 1042 tests, 78% coverage, gate enforced at 78% in CI and pyproject.toml
+- [x] Comprehensive documentation overhaul — README, architecture, CONTRIBUTING, SECURITY, quality report
+- [x] SBOM generation (CycloneDX) in release workflow
+- [x] External Secrets Operator manifests at `infra/k8s/external-secrets/`
+- [x] VS Code extension publish workflow (`vscode-publish.yml`)
+
+## Next Level — Wave 16 (Planned)
+
+### Product & UX
+- [ ] Publish VS Code extension to marketplace (VSCE_PAT configured, pending publisher documentation review)
+- [ ] Light/dark mode toggle for Leptos SPA (CSS class toggle with inverted custom properties)
+- [ ] VS Code extension: inject active file/selection context into task submission
+- [ ] Leptos SPA: resizable split panels (currently fixed layout)
+- [ ] Leptos SPA: keyboard shortcuts (Ctrl+Enter submit, Esc dismiss modal, arrow navigation)
+
+### Architecture & Performance
+- [ ] Ratchet coverage gate from 78% to 85% (target modules: verifier.py, remote_api.py, planner.py)
+- [ ] pgvector backend option for long-term memory (supplement sqlite-vec for production PostgreSQL deployments)
+- [ ] Q-RAG embedder optimization — RL-trained embedder for multi-step retrieval (from AI Research docx)
+- [ ] End-to-end integration test: API → SPA → SSE → approval → completion loop
+- [ ] Pin Trunk version in CI and Dockerfile for reproducible WASM builds
+
+### Infrastructure & Operations
+- [ ] Publish Helm chart to OCI registry (GitHub Pages or Artifact Hub)
+- [ ] Upgrade GitHub Actions to Node.js 24 (actions/checkout@v5, setup-python@v6)
+- [ ] Add Grafana dashboard templates for Prometheus metrics
+- [ ] Narrow LLM egress NetworkPolicy from `0.0.0.0/0:443` to specific provider CIDRs
+
+### Research-Aligned (from AI Research docx)
+- [ ] GLEAN verification framework — guideline-grounded agent action auditing
+- [ ] Pluralistic alignment — temperature/prompt diversity to counteract output homogenization
+- [ ] SYMPHONY pool-wise memory sharing — cross-agent failure reflection broadcast
+- [ ] Edge deployment profile — optimized config for local/air-gapped environments
