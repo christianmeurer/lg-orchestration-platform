@@ -37,8 +37,7 @@ pub fn DiffViewer(#[prop(into)] state: Signal<RunState>) -> impl IntoView {
                         <div>
                             {diff_blocks
                                 .into_iter()
-                                .enumerate()
-                                .map(|(_i, block)| {
+                                .map(|block| {
                                     view! {
                                         <DiffBlock content=block />
                                     }

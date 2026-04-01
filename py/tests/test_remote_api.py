@@ -750,7 +750,8 @@ def test_spa_served_at_ui(tmp_path: Path) -> None:
     )
     assert status == 200
     assert content_type == "text/html; charset=utf-8"
-    assert b"<!DOCTYPE html>" in body
+    # /ui now serves a meta-refresh redirect to /app/ (same as root)
+    assert b"/app/" in body
 
 
 def test_spa_method_not_allowed(tmp_path: Path) -> None:

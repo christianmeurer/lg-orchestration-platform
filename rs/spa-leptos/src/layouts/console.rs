@@ -79,8 +79,8 @@ pub fn ConsoleLayout() -> impl IntoView {
                     view! {
                         <ApprovalModal
                             request=req
-                            on_approve=on_approve.clone()
-                            on_reject=on_reject.clone()
+                            on_approve=on_approve
+                            on_reject=on_reject
                         />
                     }
                 })

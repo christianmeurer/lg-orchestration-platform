@@ -41,13 +41,10 @@ pub fn CommandBar(
                     let target = ev.target().unwrap().unchecked_into::<HtmlInputElement>();
                     set_value.set(target.value());
                 }
-                on:keydown={
-                    let do_submit = do_submit;
-                    move |ev: web_sys::KeyboardEvent| {
-                        if ev.key() == "Enter" && !ev.shift_key() {
-                            ev.prevent_default();
-                            do_submit();
-                        }
+                on:keydown=move |ev: web_sys::KeyboardEvent| {
+                    if ev.key() == "Enter" && !ev.shift_key() {
+                        ev.prevent_default();
+                        do_submit();
                     }
                 }
                 style="flex:1;background:var(--bg-void);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:14px;outline:none;"

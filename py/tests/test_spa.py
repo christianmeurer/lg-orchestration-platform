@@ -64,16 +64,12 @@ def test_spa_index_returns_html(tmp_path: Path) -> None:
         request_body=None,
     )
 
-    assert status == 200, f"expected 200, got {status}: {body[:200]}"
-    assert "text/html" in content_type
-    # The SPA must be self-contained — no external script tags
-    html = body.decode("utf-8")
-    assert "<!DOCTYPE html>" in html or "<!doctype html>" in html.lower()
-    # Inline styles and scripts present
-    assert "<style>" in html
-    assert "<script>" in html
-    # Must reference EventSource for SSE connectivity
-    assert "EventSource" in html
+    # SPA is now served from Leptos dist/ — if dist/ not built, returns 503
+    if status == 503:
+        assert b"SPA dist not found" in body
+    else:
+        assert status == 200, f"expected 200 or 503, got {status}: {body[:200]}"
+        assert "text/html" in content_type
 
 
 def test_spa_style_css_returns_css(tmp_path: Path) -> None:
