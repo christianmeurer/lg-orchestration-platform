@@ -1,7 +1,7 @@
 import * as http from 'http';
 import * as https from 'https';
 import * as vscode from 'vscode';
-import { OrchestratorClient } from './api/OrchestratorClient';
+import { OrchestratorClient, RunSummary } from './api/OrchestratorClient';
 import { RunTreeProvider, RunItem } from './RunTreeProvider';
 import { RunPanelProvider } from './RunPanelProvider';
 import { StatusBarManager } from './providers/StatusBarManager';
@@ -59,14 +59,29 @@ async function submitTask(
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-    const serverUrl = getServerUrl();
     const statusBar = new StatusBarManager();
     context.subscriptions.push({ dispose: () => statusBar.dispose() });
 
-    // Tree view for sidebar (uses OrchestratorClient for listing runs)
     let client: OrchestratorClient | null = null;
     let treeProvider: RunTreeProvider | null = null;
-    const panelProvider = new RunPanelProvider();
+
+    // Status callback for RunPanelProvider
+    let statusResetTimer: ReturnType<typeof setTimeout> | undefined;
+    const onStatusUpdate = (run: RunSummary | null): void => {
+        statusBar.update(run);
+        if (statusResetTimer) {
+            clearTimeout(statusResetTimer);
+            statusResetTimer = undefined;
+        }
+        if (run && (run.status === 'succeeded' || run.status === 'failed' || run.status === 'cancelled')) {
+            statusResetTimer = setTimeout(() => {
+                statusBar.update(null);
+            }, 30_000);
+        }
+    };
+
+    const panelProvider = new RunPanelProvider(context.extensionUri, onStatusUpdate);
+    context.subscriptions.push({ dispose: () => panelProvider.dispose() });
 
     const ensureClient = async (): Promise<OrchestratorClient | null> => {
         const token = await getApiToken(context);
@@ -78,13 +93,19 @@ export function activate(context: vscode.ExtensionContext): void {
         return null;
     };
 
-    // Register tree view if client is available
-    void ensureClient().then((c) => {
-        if (c) {
+    // Always register tree view (even without token - it will just show empty)
+    const initTree = async (): Promise<void> => {
+        const c = await ensureClient();
+        if (c && !treeProvider) {
             treeProvider = new RunTreeProvider(c);
-            vscode.window.registerTreeDataProvider('orchestratorRuns', treeProvider);
+            const treeView = vscode.window.createTreeView('orchestratorRuns', {
+                treeDataProvider: treeProvider
+            });
+            context.subscriptions.push(treeView);
+            context.subscriptions.push({ dispose: () => treeProvider?.dispose() });
         }
-    });
+    };
+    void initTree();
 
     // Command: Run Task
     context.subscriptions.push(
@@ -122,15 +143,24 @@ export function activate(context: vscode.ExtensionContext): void {
                         const result = await submitTask(task, currentServerUrl, token);
                         if (result?.run_id) {
                             const shortId = result.run_id.slice(0, 8);
-                            const action = await vscode.window.showInformationMessage(
-                                `Lula task started (${shortId})`,
-                                'Open Console',
-                            );
-                            if (action === 'Open Console') {
-                                await vscode.env.openExternal(
-                                    vscode.Uri.parse(`${currentServerUrl}?run=${result.run_id}`),
-                                );
+                            // Update status bar
+                            onStatusUpdate({
+                                run_id: result.run_id,
+                                status: 'running',
+                                request: task,
+                                started_at: new Date().toISOString(),
+                                cancellable: true,
+                                pending_approval: false
+                            });
+
+                            // Auto-open run panel
+                            if (client) {
+                                panelProvider.openPanel(result.run_id, client, context);
                             }
+
+                            vscode.window.showInformationMessage(
+                                `Lula task started (${shortId})`,
+                            );
                             // Refresh tree view
                             treeProvider?.refresh();
                         } else {
@@ -153,11 +183,93 @@ export function activate(context: vscode.ExtensionContext): void {
         }),
     );
 
-    // Command: Open Console
+    // Command: Open Run Panel (by runId)
     context.subscriptions.push(
-        vscode.commands.registerCommand('lula.openConsole', async () => {
-            const url = getServerUrl();
-            await vscode.env.openExternal(vscode.Uri.parse(url));
+        vscode.commands.registerCommand('lula.openRunPanel', async (runIdOrItem?: string | RunItem) => {
+            let runId: string | undefined;
+            if (typeof runIdOrItem === 'string') {
+                runId = runIdOrItem;
+            } else if (runIdOrItem instanceof RunItem) {
+                runId = runIdOrItem.runId;
+            }
+
+            if (!runId) {
+                // Prompt for run ID if not provided
+                runId = await vscode.window.showInputBox({
+                    prompt: 'Enter the Run ID to open',
+                    placeHolder: 'run-id',
+                });
+            }
+            if (!runId) {
+                return;
+            }
+
+            const c = client || await ensureClient();
+            if (!c) {
+                vscode.window.showErrorMessage('Lula: No API token configured. Run "Lula: Configure" first.');
+                return;
+            }
+            panelProvider.openPanel(runId, c, context);
+        }),
+    );
+
+    // Command: Approve Run
+    context.subscriptions.push(
+        vscode.commands.registerCommand('lula.approveRun', async (runId?: string) => {
+            if (!runId) {
+                runId = await vscode.window.showInputBox({ prompt: 'Run ID to approve' });
+            }
+            if (!runId) return;
+            const c = client || await ensureClient();
+            if (!c) return;
+            try {
+                await c.approveRun(runId);
+                vscode.window.showInformationMessage(`Lula: Run ${runId.slice(0, 8)} approved`);
+                treeProvider?.refresh();
+            } catch (e: unknown) {
+                const msg = e instanceof Error ? e.message : String(e);
+                vscode.window.showErrorMessage(`Lula: ${msg}`);
+            }
+        }),
+    );
+
+    // Command: Reject Run
+    context.subscriptions.push(
+        vscode.commands.registerCommand('lula.rejectRun', async (runId?: string) => {
+            if (!runId) {
+                runId = await vscode.window.showInputBox({ prompt: 'Run ID to reject' });
+            }
+            if (!runId) return;
+            const c = client || await ensureClient();
+            if (!c) return;
+            try {
+                await c.rejectRun(runId);
+                vscode.window.showInformationMessage(`Lula: Run ${runId.slice(0, 8)} rejected`);
+                treeProvider?.refresh();
+            } catch (e: unknown) {
+                const msg = e instanceof Error ? e.message : String(e);
+                vscode.window.showErrorMessage(`Lula: ${msg}`);
+            }
+        }),
+    );
+
+    // Command: Cancel Run
+    context.subscriptions.push(
+        vscode.commands.registerCommand('lula.cancelRun', async (runId?: string) => {
+            if (!runId) {
+                runId = await vscode.window.showInputBox({ prompt: 'Run ID to cancel' });
+            }
+            if (!runId) return;
+            const c = client || await ensureClient();
+            if (!c) return;
+            try {
+                await c.cancelRun(runId);
+                vscode.window.showInformationMessage(`Lula: Run ${runId.slice(0, 8)} cancelled`);
+                treeProvider?.refresh();
+            } catch (e: unknown) {
+                const msg = e instanceof Error ? e.message : String(e);
+                vscode.window.showErrorMessage(`Lula: ${msg}`);
+            }
         }),
     );
 
@@ -191,7 +303,11 @@ export function activate(context: vscode.ExtensionContext): void {
             const c = await ensureClient();
             if (c && !treeProvider) {
                 treeProvider = new RunTreeProvider(c);
-                vscode.window.registerTreeDataProvider('orchestratorRuns', treeProvider);
+                const treeView = vscode.window.createTreeView('orchestratorRuns', {
+                    treeDataProvider: treeProvider
+                });
+                context.subscriptions.push(treeView);
+                context.subscriptions.push({ dispose: () => treeProvider?.dispose() });
             }
             treeProvider?.refresh();
         }),
@@ -203,7 +319,11 @@ export function activate(context: vscode.ExtensionContext): void {
             const c = await ensureClient();
             if (c && !treeProvider) {
                 treeProvider = new RunTreeProvider(c);
-                vscode.window.registerTreeDataProvider('orchestratorRuns', treeProvider);
+                const treeView = vscode.window.createTreeView('orchestratorRuns', {
+                    treeDataProvider: treeProvider
+                });
+                context.subscriptions.push(treeView);
+                context.subscriptions.push({ dispose: () => treeProvider?.dispose() });
             }
             treeProvider?.refresh();
         }),

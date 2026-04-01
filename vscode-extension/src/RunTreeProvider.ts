@@ -17,6 +17,11 @@ export class RunItem extends vscode.TreeItem {
     this.iconPath = RunItem.iconForStatus(status);
     this.contextValue = 'orchestratorRun';
     this.tooltip = `${runId}\n${task}`;
+    this.command = {
+      command: 'lula.openRunPanel',
+      title: 'Open Run Panel',
+      arguments: [runId]
+    };
   }
 
   private static iconForStatus(status: string): vscode.ThemeIcon {
@@ -29,6 +34,8 @@ export class RunItem extends vscode.TreeItem {
       case 'starting':
       case 'queued':
         return new vscode.ThemeIcon('sync~spin');
+      case 'suspended':
+        return new vscode.ThemeIcon('warning', new vscode.ThemeColor('list.warningForeground'));
       default:
         return new vscode.ThemeIcon('circle-outline');
     }
@@ -40,7 +47,14 @@ export class RunTreeProvider implements vscode.TreeDataProvider<RunItem> {
   public readonly onDidChangeTreeData: vscode.Event<RunItem | undefined | void> =
     this._onDidChangeTreeData.event;
 
-  public constructor(private readonly client: OrchestratorClient) {}
+  private refreshTimer: ReturnType<typeof setInterval> | undefined;
+
+  public constructor(private readonly client: OrchestratorClient) {
+    // Auto-refresh every 10 seconds
+    this.refreshTimer = setInterval(() => {
+      this._onDidChangeTreeData.fire();
+    }, 10_000);
+  }
 
   public getTreeItem(element: RunItem): vscode.TreeItem {
     return element;
@@ -53,6 +67,13 @@ export class RunTreeProvider implements vscode.TreeDataProvider<RunItem> {
     } catch {
       return [];
     }
+
+    const pendingCount = summaries.filter(s => s.pending_approval).length;
+    if (pendingCount > 0) {
+      // Update the tree view description via the view
+      // This is informational - the description is set on the view itself
+    }
+
     return summaries.map(
       (s) => new RunItem(s.run_id, s.status, s.request),
     );
@@ -60,5 +81,13 @@ export class RunTreeProvider implements vscode.TreeDataProvider<RunItem> {
 
   public refresh(): void {
     this._onDidChangeTreeData.fire();
+  }
+
+  public dispose(): void {
+    if (this.refreshTimer) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = undefined;
+    }
+    this._onDidChangeTreeData.dispose();
   }
 }

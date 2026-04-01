@@ -1,0 +1,388 @@
+:root {
+    --lula-accent: #00d4aa;
+    --lula-err: #ff6b6b;
+    --lula-warn: #fbbf24;
+    --lula-info: #818cf8;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    background: var(--vscode-editor-background);
+    color: var(--vscode-editor-foreground);
+    font-family: var(--vscode-font-family, system-ui, -apple-system, sans-serif);
+    font-size: var(--vscode-font-size, 13px);
+    padding: 16px;
+    overflow-y: auto;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* Run Header */
+#run-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 6px;
+    margin-bottom: 12px;
+    background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+}
+
+#run-title {
+    flex: 1;
+    font-weight: 600;
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#run-elapsed {
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Status Badges */
+.status-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.status-running,
+.status-starting,
+.status-queued {
+    background: rgba(0, 212, 170, 0.15);
+    color: var(--lula-accent);
+}
+
+.status-completed,
+.status-succeeded {
+    background: rgba(0, 212, 170, 0.2);
+    color: var(--lula-accent);
+}
+
+.status-failed,
+.status-cancelled {
+    background: rgba(255, 107, 107, 0.15);
+    color: var(--lula-err);
+}
+
+.status-suspended {
+    background: rgba(251, 191, 36, 0.15);
+    color: var(--lula-warn);
+}
+
+.status-unknown {
+    background: rgba(129, 140, 248, 0.15);
+    color: var(--lula-info);
+}
+
+/* Pipeline Bar */
+#pipeline-bar {
+    display: flex;
+    gap: 3px;
+    margin-bottom: 12px;
+    height: 6px;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.pipeline-segment {
+    flex: 1;
+    background: var(--vscode-panel-border);
+    border-radius: 3px;
+    transition: background 0.3s ease;
+}
+
+.pipeline-segment.done {
+    background: var(--lula-accent);
+}
+
+.pipeline-segment.active {
+    background: var(--lula-accent);
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* Approval Banner */
+#approval-banner {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+    border-radius: 6px;
+    background: rgba(251, 191, 36, 0.1);
+    border: 1px solid rgba(251, 191, 36, 0.3);
+}
+
+.approval-icon {
+    font-size: 18px;
+    color: var(--lula-warn);
+}
+
+#approval-text {
+    flex: 1;
+    font-weight: 500;
+    font-size: 13px;
+}
+
+.approval-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* Buttons */
+.btn {
+    padding: 6px 16px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    transition: opacity 0.2s, transform 0.1s;
+}
+
+.btn:hover {
+    opacity: 0.85;
+}
+
+.btn:active {
+    transform: scale(0.97);
+}
+
+.btn-approve {
+    background: linear-gradient(135deg, var(--lula-accent), #00b894);
+    color: #000;
+}
+
+.btn-reject {
+    background: transparent;
+    border: 1px solid var(--vscode-panel-border);
+    color: var(--vscode-editor-foreground);
+}
+
+.btn-reject:hover {
+    border-color: var(--lula-err);
+    color: var(--lula-err);
+}
+
+/* Event Stream */
+#event-stream {
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 6px;
+    margin-bottom: 12px;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+/* Node Sections */
+.node-section {
+    border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.node-section:last-child {
+    border-bottom: none;
+}
+
+.node-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s;
+}
+
+.node-header:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.node-arrow {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    width: 12px;
+    text-align: center;
+}
+
+.node-name {
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.node-status {
+    font-size: 10px;
+    margin-left: auto;
+}
+
+.node-status.active {
+    color: var(--lula-accent);
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+.node-status.done {
+    color: var(--lula-accent);
+}
+
+.node-meta {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    margin-left: 8px;
+}
+
+.node-detail {
+    padding: 4px 12px 8px 32px;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.event-line {
+    padding: 2px 0;
+    word-break: break-all;
+}
+
+.ev-error {
+    color: var(--lula-err);
+}
+
+.ev-tool {
+    color: var(--lula-info);
+}
+
+.ev-default {
+    color: var(--vscode-descriptionForeground);
+}
+
+/* Stdout Lines */
+.stdout-line {
+    padding: 2px 12px;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground);
+    line-height: 1.5;
+}
+
+/* Error Messages */
+.error-msg {
+    padding: 8px 12px;
+    color: var(--lula-err);
+    font-weight: 500;
+}
+
+/* Diff Panel */
+#diff-panel {
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 6px;
+    margin-bottom: 12px;
+    overflow: hidden;
+}
+
+.diff-block {
+    border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.diff-block:last-child {
+    border-bottom: none;
+}
+
+.diff-block .label {
+    padding: 6px 12px;
+    font-weight: 600;
+    font-size: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.diff-block pre {
+    padding: 8px 12px;
+    margin: 0;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 12px;
+    line-height: 1.6;
+    overflow-x: auto;
+}
+
+.diff-add {
+    color: var(--lula-accent);
+    background: rgba(0, 212, 170, 0.07);
+}
+
+.diff-del {
+    color: var(--lula-err);
+    background: rgba(255, 107, 107, 0.07);
+}
+
+.diff-hunk {
+    color: var(--lula-info);
+    font-weight: 600;
+}
+
+/* Final Output */
+#final-output {
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+#final-output .label {
+    padding: 8px 12px;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    background: rgba(0, 212, 170, 0.08);
+    color: var(--lula-accent);
+    border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+#final-output pre {
+    padding: 12px;
+    margin: 0;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--vscode-scrollbarSlider-background);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--vscode-scrollbarSlider-hoverBackground);
+}
+
+::-webkit-scrollbar-thumb:active {
+    background: var(--vscode-scrollbarSlider-activeBackground);
+}

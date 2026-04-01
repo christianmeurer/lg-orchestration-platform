@@ -1,4 +1,6 @@
 const esbuild = require('esbuild');
+const path = require('path');
+const fs = require('fs');
 
 const production = process.argv.includes('--production');
 const watch = process.argv.includes('--watch');
@@ -44,6 +46,14 @@ async function main() {
 	} else {
 		await ctx.rebuild();
 		await ctx.dispose();
+	}
+
+	// Copy webview assets
+	const webviewSrc = path.join(__dirname, 'src', 'webview');
+	const webviewDist = path.join(__dirname, 'out', 'webview');
+	fs.mkdirSync(webviewDist, { recursive: true });
+	for (const file of fs.readdirSync(webviewSrc)) {
+		fs.copyFileSync(path.join(webviewSrc, file), path.join(webviewDist, file));
 	}
 }
 
