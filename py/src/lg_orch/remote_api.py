@@ -69,9 +69,15 @@ from lg_orch.auth import (
     authorize_stdlib,
     jwt_settings_from_config,
 )
+from lg_orch.rate_limit import RateLimiter as _PerClientRateLimiter
 
 _JSON_CONTENT_TYPE = "application/json; charset=utf-8"
 _REQUEST_ID_HEADER = "X-Request-ID"
+
+# Per-client rate limiter — enabled via LG_RATE_LIMIT_ENABLED=true
+_per_client_rate_limiter: _PerClientRateLimiter | None = None
+if os.environ.get("LG_RATE_LIMIT_ENABLED", "false").lower() in ("true", "1", "yes"):
+    _per_client_rate_limiter = _PerClientRateLimiter()
 
 
 # ---------------------------------------------------------------------------
@@ -722,6 +728,13 @@ def _api_http_dispatch(
 
     if service._rate_limiter is not None and not service._rate_limiter.acquire():
         return _json_response(429, {"error": "rate_limit_exceeded"})
+
+    if (
+        _per_client_rate_limiter is not None
+        and client_ip
+        and not _per_client_rate_limiter.check(client_ip)
+    ):
+        return _json_response(429, {"error": "per_client_rate_limit_exceeded"})
 
     _jwt = jwt_settings or JWTSettings(jwt_secret=None, jwks_url=None)
     path_parts = [p for p in route.split("/") if p]
