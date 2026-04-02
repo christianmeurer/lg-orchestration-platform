@@ -79,7 +79,27 @@ spec:
         - protocol: TCP
           port: 53
     # LLM provider APIs (external HTTPS).
-    # TODO: restrict to known provider CIDRs in hardened deployments.
+    #
+    # Why 0.0.0.0/0 on 443?
+    #   LLM inference endpoints from major providers use anycast addresses,
+    #   CDN edge nodes, and frequently-rotated IP ranges that cannot be
+    #   enumerated reliably at deploy time.  A blanket CIDR is therefore the
+    #   pragmatic default; the trade-off is accepted knowingly.
+    #
+    # Providers currently covered by this rule:
+    #   - Anthropic Claude      — api.anthropic.com
+    #   - OpenAI / Azure OpenAI — api.openai.com, <region>.openai.azure.com
+    #   - DigitalOcean AI       — inference.do-ai.run
+    #   - Any OpenAI-compatible proxy reachable over public HTTPS
+    #
+    # Port 25061 is used by DigitalOcean managed database connection poolers
+    # (PgBouncer) that may be required for external Postgres access.
+    #
+    # Hardening guidance:
+    #   In environments that support FQDN-based egress policy (e.g. Cilium
+    #   NetworkPolicy with DNS-aware rules, or an external egress firewall),
+    #   replace this ipBlock with explicit FQDN entries for each provider and
+    #   remove port 25061 if managed databases are in-cluster.
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
