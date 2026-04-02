@@ -24,7 +24,7 @@ orchestrator:
       cpu: 1000m
       memory: 1Gi
   service:
-    type: LoadBalancer
+    type: ClusterIP
     port: 80
 
 runner:
@@ -47,7 +47,19 @@ runner:
     port: 8088
 
 ingress:
-  enabled: false  # Using LoadBalancer directly for now
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: lula.eiv.eng.br
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: lula-tls
+      hosts:
+        - lula.eiv.eng.br
 
 secrets:
   remoteApiBearerToken: "5RDK5shDpRMr_2htK5poMfl0NcX2rHqviCPqJFNJSw4"
