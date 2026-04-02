@@ -9,12 +9,23 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from lg_orch.glean import DEFAULT_GUIDELINES, GleanAuditor
 from lg_orch.logging import get_logger
 from lg_orch.memory import _state_to_dict, ensure_history_policy, prune_pre_verification_history
 from lg_orch.model_routing import tool_routing_metadata
 from lg_orch.nodes._utils import validate_base_url as _validate_base_url_fn
 from lg_orch.tools import RunnerClient
 from lg_orch.trace import append_event
+
+
+def _maybe_create_glean_auditor() -> GleanAuditor | None:
+    """Create a GleanAuditor with default guidelines when LG_GLEAN_ENABLED=true."""
+    if os.environ.get("LG_GLEAN_ENABLED", "false").lower() not in ("true", "1", "yes"):
+        return None
+    auditor = GleanAuditor()
+    for g in DEFAULT_GUIDELINES:
+        auditor.add_guideline(g)
+    return auditor
 
 
 def _validate_base_url(url: str) -> bool:
@@ -188,6 +199,8 @@ def executor(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
     state = ensure_history_policy(state)
 
     state = append_event(state, kind="node", data={"name": "executor", "phase": "start"})
+
+    glean_auditor = _maybe_create_glean_auditor()
 
     plan = state.get("plan")
     if not isinstance(plan, dict):
@@ -377,6 +390,21 @@ def executor(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
                         calls = []
                         stop_execution = True
                         break
+                # GLEAN pre-execution check
+                if glean_auditor is not None:
+                    blocking = glean_auditor.check_pre_execution(tool_name, input_payload)
+                    if blocking:
+                        detail = "; ".join(v.detail for v in blocking)
+                        tool_results.append(
+                            _budget_failure_result(
+                                tool=tool_name,
+                                message=f"GLEAN blocked: {detail}",
+                                error_tag="glean_blocked",
+                                route_metadata=route_metadata,
+                            )
+                        )
+                        continue
+
                 input_payload["_route"] = route_metadata
                 if checkpoint_state:
                     input_payload["_checkpoint"] = dict(checkpoint_state)
@@ -388,6 +416,10 @@ def executor(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
                 )
             if calls:
                 batch_results = client.batch_execute_tools(calls=calls)
+                # GLEAN post-execution checks
+                if glean_auditor is not None:
+                    for result in batch_results:
+                        glean_auditor.check_post_execution(str(result.get("tool", "")), result)
                 tool_results.extend(batch_results)
                 tool_calls_used += len(calls)
 
@@ -466,5 +498,7 @@ def executor(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
         "_checkpoint": checkpoint_state,
         "budgets": budgets,
     }
+    if glean_auditor is not None:
+        out = append_event(out, kind="glean", data=glean_auditor.summary())
     out = append_event(out, kind="node", data={"name": "executor", "phase": "end"})
     return prune_pre_verification_history(out)
