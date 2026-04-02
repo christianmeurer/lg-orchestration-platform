@@ -935,6 +935,32 @@ def verifier(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
             log.info("formal_verification_passed", files=files_to_verify)
 
     checks = _build_checks(tool_results)
+
+    # --- GLEAN audit integration ---
+    # If the executor recorded a GLEAN summary with blocking violations,
+    # inject a synthetic check so the verifier fails accordingly.
+    glean_blocking_count = 0
+    trace_events_raw = state.get("_trace_events", [])
+    if isinstance(trace_events_raw, list):
+        for evt in trace_events_raw:
+            if isinstance(evt, dict) and evt.get("kind") == "glean":
+                glean_data = evt.get("data", {})
+                if isinstance(glean_data, dict):
+                    glean_blocking_count = int(glean_data.get("blocking_violations", 0) or 0)
+                    if glean_blocking_count > 0:
+                        checks.append(
+                            VerificationCheck(
+                                name="glean_blocking_violations",
+                                ok=False,
+                                tool="glean_audit",
+                                exit_code=1,
+                                summary=(
+                                    f"GLEAN audit found {glean_blocking_count}"
+                                    f" blocking violation(s)"
+                                ),
+                            )
+                        )
+
     has_failures = len(checks) > 0
     discard_reason = ""
     current_loop_raw = state.get("budgets", {})
