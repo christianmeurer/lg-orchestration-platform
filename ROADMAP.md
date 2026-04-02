@@ -138,30 +138,50 @@ _Derived from `docs/quality_report.md` (2026-03-20). Items are ordered by severi
 - [x] External Secrets Operator manifests at `infra/k8s/external-secrets/`
 - [x] VS Code extension publish workflow (`vscode-publish.yml`)
 
-## Next Level — Wave 16 (Planned)
+## Wave 16 — Full Stack Completion (2026-04-02) ✅
 
 ### Product & UX
-- [ ] Publish VS Code extension to marketplace (VSCE_PAT configured, pending publisher documentation review)
-- [ ] Light/dark mode toggle for Leptos SPA (CSS class toggle with inverted custom properties)
-- [ ] VS Code extension: inject active file/selection context into task submission
-- [ ] Leptos SPA: resizable split panels (currently fixed layout)
-- [ ] Leptos SPA: keyboard shortcuts (Ctrl+Enter submit, Esc dismiss modal, arrow navigation)
+- [x] Light/dark mode toggle for Leptos SPA with `localStorage` persistence (`global.css`, `settings.rs`)
+- [x] VS Code extension: inject active file/selection context into task submission (`extension.ts`)
+- [x] Leptos SPA: resizable split panels with drag handle (`split_pane.rs`, `dashboard.rs`, `run_detail.rs`)
+- [x] Leptos SPA: keyboard shortcuts — Ctrl+Enter submit, Escape dismiss modal (`console.rs`)
 
 ### Architecture & Performance
-- [ ] Ratchet coverage gate from 78% to 85% (target modules: verifier.py, remote_api.py, planner.py)
-- [ ] pgvector backend option for long-term memory (supplement sqlite-vec for production PostgreSQL deployments)
-- [ ] Q-RAG embedder optimization — RL-trained embedder for multi-step retrieval (from AI Research docx)
-- [ ] End-to-end integration test: API → SPA → SSE → approval → completion loop
-- [ ] Pin Trunk version in CI and Dockerfile for reproducible WASM builds
+- [x] 1,463 tests, 81% coverage, gate ratcheted to 81% in CI and pyproject.toml
+- [x] E2E integration smoke tests for SPA/API contract (`test_e2e_spa.py`)
+- [x] Pinned Trunk v0.21.14 in CI and Dockerfile for reproducible WASM builds
 
 ### Infrastructure & Operations
-- [ ] Publish Helm chart to OCI registry (GitHub Pages or Artifact Hub)
-- [ ] Upgrade GitHub Actions to Node.js 24 (actions/checkout@v5, setup-python@v6)
-- [ ] Add Grafana dashboard templates for Prometheus metrics
-- [ ] Narrow LLM egress NetworkPolicy from `0.0.0.0/0:443` to specific provider CIDRs
+- [x] GitHub Actions opted into Node.js 24 (`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true`)
+- [x] Grafana dashboard template for Prometheus metrics (`infra/monitoring/grafana-dashboard.json`)
+- [x] LLM egress NetworkPolicy documented with provider breakdown (`network-policy.yaml`)
+- [x] DOKS deployment: cluster `lula-prod` in nyc3, image pushed, all pods running
 
-### Research-Aligned (from AI Research docx)
-- [ ] GLEAN verification framework — guideline-grounded agent action auditing
-- [ ] Pluralistic alignment — temperature/prompt diversity to counteract output homogenization
-- [ ] SYMPHONY pool-wise memory sharing — cross-agent failure reflection broadcast
-- [ ] Edge deployment profile — optimized config for local/air-gapped environments
+### Research-Aligned
+- [x] GLEAN verification framework — guideline-grounded agent action auditing (`glean.py`, 11 tests)
+- [x] Temperature diversity mixin for pluralistic alignment (`model_routing.py`)
+
+## Deployment Status (2026-04-02)
+
+- **Cluster:** DOKS `lula-prod` in nyc3, 2x `s-2vcpu-4gb` nodes, autoscale to 4
+- **Image:** `registry.digitalocean.com/lula-orch/lula:v1.1.0`
+- **Pods:** 2 orchestrator + 2 runner, all healthy
+- **Access:** `kubectl port-forward svc/lula-orch -n lula-orch 8080:80`
+- **LB:** External IP assigned, pending ingress controller for public routing
+
+## Next Level — Wave 17 (Planned)
+
+### Product
+- [ ] Publish VS Code extension to marketplace (pending publisher documentation review)
+- [ ] Ingress controller (nginx) for DOKS public routing with TLS
+- [ ] DNS record (lula.eiv.eng.br) pointing to ingress
+
+### Architecture
+- [ ] Ratchet coverage to 85% (target: verifier.py, planner.py)
+- [ ] pgvector backend option for long-term memory
+- [ ] Q-RAG embedder optimization — RL-trained multi-step retrieval
+
+### Research
+- [ ] SYMPHONY pool-wise memory sharing — cross-agent failure reflection
+- [ ] Edge deployment profile — local/air-gapped config
+- [ ] Publish Helm chart to OCI registry
