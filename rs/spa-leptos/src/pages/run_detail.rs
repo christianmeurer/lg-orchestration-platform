@@ -9,7 +9,7 @@ use crate::{
     },
     components::{
         audit_trail::AuditTrail, diff_viewer::DiffViewer, pipeline_graph::PipelineGraph,
-        run_stream::RunStream, tabs::Tabs, verifier_panel::VerifierPanel,
+        run_stream::RunStream, split_pane::SplitPane, tabs::Tabs, verifier_panel::VerifierPanel,
     },
 };
 
@@ -43,10 +43,9 @@ pub fn RunDetailPage() -> impl IntoView {
 
     let state_signal: Signal<RunState> = Signal::derive(move || sse_state.get());
 
-    view! {
-        <div style="display:flex;height:100%;">
-            // Left panel: live agent
-            <div style="flex:1;border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;">
+    let left_panel = ViewFn::from(move || {
+        view! {
+            <div style="border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;height:100%;">
                 <div style="padding:16px;font-size:11px;color:var(--text-muted);letter-spacing:0.5px;font-weight:600;">
                     "LIVE AGENT"
                 </div>
@@ -78,8 +77,12 @@ pub fn RunDetailPage() -> impl IntoView {
                     }}
                 </div>
             </div>
-            // Right panel: tabs
-            <div style="flex:1;padding:16px;overflow-y:auto;">
+        }
+    });
+
+    let right_panel = ViewFn::from(move || {
+        view! {
+            <div style="padding:16px;overflow-y:auto;height:100%;">
                 <Tabs
                     tabs=vec![
                         "Diff".to_string(),
@@ -101,6 +104,10 @@ pub fn RunDetailPage() -> impl IntoView {
                     }}
                 </Tabs>
             </div>
-        </div>
+        }
+    });
+
+    view! {
+        <SplitPane initial_left_width=50.0 left=left_panel right=right_panel />
     }
 }

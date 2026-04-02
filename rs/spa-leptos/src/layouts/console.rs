@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 use leptos_router::components::Outlet;
+use wasm_bindgen::{closure::Closure, JsCast};
 
 use crate::{
     api::{
@@ -67,6 +68,49 @@ pub fn ConsoleLayout() -> impl IntoView {
             });
         })
     };
+
+    // Global keyboard shortcuts
+    Effect::new(move |_| {
+        let window = web_sys::window().unwrap();
+        let document = window.document().unwrap();
+        let closure =
+            Closure::<dyn Fn(web_sys::KeyboardEvent)>::new(move |ev: web_sys::KeyboardEvent| {
+                let key = ev.key();
+
+                // Ctrl+Enter or Cmd+Enter → focus command bar and submit
+                if key == "Enter" && (ev.ctrl_key() || ev.meta_key()) {
+                    ev.prevent_default();
+                    let doc = web_sys::window().unwrap().document().unwrap();
+                    if let Some(input) =
+                        doc.query_selector("input[placeholder='Describe a task...']").ok().flatten()
+                    {
+                        if let Some(el) = input.dyn_ref::<web_sys::HtmlElement>() {
+                            let _ = el.focus();
+                        }
+                        // Dispatch an Enter keydown event to trigger submit
+                        let init = web_sys::KeyboardEventInit::new();
+                        init.set_key("Enter");
+                        init.set_bubbles(true);
+                        if let Ok(enter_ev) =
+                            web_sys::KeyboardEvent::new_with_keyboard_event_init_dict(
+                                "keydown", &init,
+                            )
+                        {
+                            let _ = input.dispatch_event(&enter_ev);
+                        }
+                    }
+                }
+
+                // Escape → dismiss approval modal
+                if key == "Escape" {
+                    approval_signal.set(None);
+                }
+            });
+        document
+            .add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref())
+            .unwrap();
+        closure.forget();
+    });
 
     view! {
         <div style="display:flex;flex-direction:column;min-height:100vh;background:var(--bg-void);color:var(--text-primary);font-family:Inter,sans-serif;">
