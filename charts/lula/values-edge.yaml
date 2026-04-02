@@ -1,0 +1,61 @@
+# Edge deployment values — single-node, local LLM, no cloud dependencies
+# Usage: helm install lula charts/lula -f charts/lula/values-edge.yaml
+
+image:
+  repository: lula
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets: []
+
+# Orchestrator Configuration
+orchestrator:
+  replicaCount: 1
+  profile: "local"
+  # Use Ollama as the local LLM provider
+  routerModel: "ollama-llama3.2"
+  plannerModel: "ollama-llama3.2"
+  coderModel: "ollama-llama3.2"
+  reporterModel: "ollama-llama3.2"
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+  service:
+    type: NodePort
+    port: 8001
+
+# Runner Configuration
+runner:
+  replicaCount: 1
+  gvisor:
+    enabled: false
+  workspace:
+    persistent: true
+    storageClass: "local-path"
+    size: "20Gi"
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 4000m
+      memory: 4Gi
+  service:
+    type: ClusterIP
+    port: 8088
+
+ingress:
+  enabled: false
+
+# Secrets Configuration
+secrets:
+  remoteApiBearerToken: "edge-local-token"
+  runnerApiKey: "edge-runner-key"
+  digitalOceanModelAccessKey: ""
+  checkpointRedisUrl: ""
+  checkpointPostgresDsn: ""
+  hmacSecret: "edge-hmac"

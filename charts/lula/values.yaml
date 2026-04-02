@@ -24,6 +24,12 @@ orchestrator:
   service:
     type: LoadBalancer
     port: 80
+  hpa:
+    minReplicas: 1
+    maxReplicas: 5
+    cpuTargetUtilization: 70
+    memoryTargetUtilization: 80
+    scaleDownStabilization: 300
 
 # Runner Configuration
 runner:
@@ -44,6 +50,11 @@ runner:
   service:
     type: ClusterIP
     port: 8088
+  hpa:
+    minReplicas: 1
+    maxReplicas: 10
+    cpuTargetUtilization: 60
+    scaleDownStabilization: 180
 
 ingress:
   enabled: false
