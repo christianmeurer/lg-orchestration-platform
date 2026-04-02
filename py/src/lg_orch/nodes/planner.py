@@ -35,6 +35,8 @@ from lg_orch.memory import (
     prune_pre_verification_history,
 )
 from lg_orch.model_routing import (
+    FailureReflection,
+    SharedReflectionPool,
     get_routing_policy,
     latest_model_route,
     record_inference_telemetry,
@@ -56,6 +58,8 @@ from lg_orch.nodes._planner_prompt import (
 from lg_orch.nodes._utils import resolve_inference_client
 from lg_orch.state import OrchState, PlannerOutput
 from lg_orch.trace import append_event
+
+_reflection_pool = SharedReflectionPool()
 
 _SCHEMA_PATH = (
     Path(__file__).parent.parent.parent.parent.parent / "schemas" / "planner_output.schema.json"
@@ -121,6 +125,11 @@ def _planner_model_output(
         route=route,
         verification=verification,
     )
+
+    # Inject cross-iteration failure reflections into the system prompt
+    reflection_context = _reflection_pool.get_context()
+    if reflection_context:
+        system_prompt = f"{system_prompt}\n\n{reflection_context}"
 
     lane = str(route_decision.get("lane", "deep_planning")).strip()
     try:
@@ -280,6 +289,17 @@ def planner(state: dict[str, Any] | BaseModel) -> dict[str, Any]:
         return prune_pre_verification_history(out)
     except Exception as exc:
         log.error("planner_failed", error=str(exc))
+        # Record failure reflection for cross-iteration learning
+        budgets_raw = state.get("budgets", {})
+        budgets = dict(budgets_raw) if isinstance(budgets_raw, dict) else {}
+        _reflection_pool.add_reflection(
+            FailureReflection(
+                loop_index=int(budgets.get("current_loop", 0)),
+                model_used=str(route_decision.get("model", "unknown")),
+                failure_class="planner_exception",
+                reflection=f"Planner failed with {type(exc).__name__}: {exc}",
+            )
+        )
         fallback_plan = _default_plan(
             request,
             verification=state.get("verification") or {},
