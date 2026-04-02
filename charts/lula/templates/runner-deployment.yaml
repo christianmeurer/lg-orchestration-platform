@@ -70,6 +70,8 @@ spec:
           volumeMounts:
             - name: work-dir
               mountPath: /workspace
+            - name: tmp-dir
+              mountPath: /tmp
       securityContext:
         seccompProfile:
           type: RuntimeDefault
@@ -81,3 +83,5 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        - name: tmp-dir
+          emptyDir: {}

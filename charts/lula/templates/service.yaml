@@ -3,6 +3,11 @@ kind: Service
 metadata:
   name: lula-orch
   namespace: {{ .Release.Namespace }}
+  annotations:
+    service.beta.kubernetes.io/do-loadbalancer-protocol: "http"
+    service.beta.kubernetes.io/do-loadbalancer-healthcheck-port: "{{ .Values.orchestrator.service.port }}"
+    service.beta.kubernetes.io/do-loadbalancer-healthcheck-path: "/healthz"
+    service.beta.kubernetes.io/do-loadbalancer-healthcheck-protocol: "http"
 spec:
   type: {{ .Values.orchestrator.service.type }}
   ports:
