@@ -6,7 +6,7 @@ import collections
 import os
 import threading
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from lg_orch.state import ModelRoutingDecision
 
@@ -505,7 +505,36 @@ def build_sla_policy(config: SlaConfig) -> SlaRoutingPolicy | None:
 # ---------------------------------------------------------------------------
 
 
-class DiversityRoutingPolicy:
+class TemperatureDiversityMixin:
+    """Mixin that cycles through a predefined temperature schedule.
+
+    Provides pluralistic alignment by varying the sampling temperature across
+    successive model calls, discouraging the model from converging on a single
+    reasoning mode.  The schedule is intentionally non-monotonic to interleave
+    focused (low-temperature) and exploratory (high-temperature) calls.
+    """
+
+    _TEMPERATURE_SCHEDULE: ClassVar[list[float]] = [0.7, 0.3, 0.9, 0.5, 0.8, 0.4, 0.6, 1.0]
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self._temp_index: int = 0
+        self._temp_lock = threading.Lock()
+
+    def next_temperature(self) -> float:
+        """Return the next temperature in the schedule, cycling indefinitely."""
+        with self._temp_lock:
+            temp = self._TEMPERATURE_SCHEDULE[self._temp_index % len(self._TEMPERATURE_SCHEDULE)]
+            self._temp_index += 1
+            return temp
+
+    def reset_temperature(self) -> None:
+        """Reset the temperature schedule index to 0."""
+        with self._temp_lock:
+            self._temp_index = 0
+
+
+class DiversityRoutingPolicy(TemperatureDiversityMixin):
     """Round-robin model selection to inject cognitive diversity across planning iterations.
 
     Inspired by the SYMPHONY framework (NeurIPS 2025) which demonstrated that
@@ -519,6 +548,7 @@ class DiversityRoutingPolicy:
     def __init__(self, models: list[str]) -> None:
         if not models:
             raise ValueError("DiversityRoutingPolicy requires at least one model")
+        super().__init__()
         self._models = list(models)
         self._index = 0
         self._lock = threading.Lock()

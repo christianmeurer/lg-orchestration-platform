@@ -3,6 +3,7 @@ from __future__ import annotations
 from lg_orch.model_routing import (
     DiversityRoutingPolicy,
     SlaRoutingPolicy,
+    TemperatureDiversityMixin,
     decide_model_route,
     get_routing_policy,
     record_inference_telemetry,
@@ -248,3 +249,38 @@ def test_diversity_routing_policy_reset() -> None:
     policy.select_model()
     policy.reset()
     assert policy.select_model() == "alpha"
+
+
+def test_temperature_diversity_mixin_cycles_schedule() -> None:
+    """next_temperature() cycles through the full schedule in order."""
+    schedule = TemperatureDiversityMixin._TEMPERATURE_SCHEDULE
+    policy = DiversityRoutingPolicy(models=["m"])
+    temps = [policy.next_temperature() for _ in range(len(schedule))]
+    assert temps == schedule
+
+
+def test_temperature_diversity_mixin_wraps_around() -> None:
+    """next_temperature() wraps around after exhausting the schedule."""
+    schedule = TemperatureDiversityMixin._TEMPERATURE_SCHEDULE
+    policy = DiversityRoutingPolicy(models=["m"])
+    # exhaust one full cycle
+    for _ in range(len(schedule)):
+        policy.next_temperature()
+    # next value should restart from the beginning
+    assert policy.next_temperature() == schedule[0]
+
+
+def test_temperature_diversity_mixin_reset() -> None:
+    """reset_temperature() restarts the schedule from index 0."""
+    schedule = TemperatureDiversityMixin._TEMPERATURE_SCHEDULE
+    policy = DiversityRoutingPolicy(models=["m"])
+    policy.next_temperature()
+    policy.next_temperature()
+    policy.reset_temperature()
+    assert policy.next_temperature() == schedule[0]
+
+
+def test_diversity_policy_inherits_temperature_mixin() -> None:
+    """DiversityRoutingPolicy is an instance of TemperatureDiversityMixin."""
+    policy = DiversityRoutingPolicy(models=["x"])
+    assert isinstance(policy, TemperatureDiversityMixin)
