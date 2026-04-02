@@ -12,6 +12,7 @@
 | File | Description |
 |---|---|
 | [deployment_digitalocean.md](deployment_digitalocean.md) | DigitalOcean Kubernetes deployment guide |
+| [deployment-edge.md](deployment-edge.md) | Edge / local air-gapped deployment guide (k3s + Ollama) |
 | [deployment_plan.md](deployment_plan.md) | Deployment planning notes and rollout strategy |
 | [digitalocean_troubleshooting_2026.md](digitalocean_troubleshooting_2026.md) | Troubleshooting the gVisor empty-output bug and related DOKS issues |
 | [registry_setup.md](registry_setup.md) | Container registry setup (DOCR) |

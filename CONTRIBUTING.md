@@ -63,10 +63,28 @@ cargo clippy --all-targets --all-features -- -D warnings
 Tests must pass the coverage threshold enforced in `pyproject.toml`:
 
 ```bash
-cd py && uv run pytest --cov=lg_orch --cov-fail-under=75
+cd py && uv run pytest --cov=lg_orch --cov-fail-under=84
 ```
 
-The current gate is 75%. Do not submit PRs that reduce coverage below this threshold.
+The current gate is 84%. Do not submit PRs that reduce coverage below this threshold.
+
+## Deployment validation
+
+After deploying to Kubernetes, run the verification script to confirm all pods, ingress, and health endpoints are functional:
+
+```bash
+bash scripts/verify-deployment.sh
+```
+
+## Testing GLEAN
+
+To test with the GLEAN verification framework active, set the environment variable before running:
+
+```bash
+LG_GLEAN_ENABLED=true cd py && uv run pytest
+```
+
+GLEAN adds pre- and post-tool guideline checks to the executor. Tests that exercise the executor node will validate GLEAN's veto and audit paths when this flag is set.
 
 ## Commit discipline
 

@@ -6,12 +6,14 @@
 
 **Production-grade multi-agent coding assistant with a sandboxed Rust execution engine**
 
+> 1,788 tests | 84% coverage | 7 CI jobs green | v1.2.0 on DOKS
+
 [![CI](https://github.com/christianmeurer/Lula/actions/workflows/ci.yml/badge.svg)](https://github.com/christianmeurer/Lula/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![Rust](https://img.shields.io/badge/rust-1.88-orange.svg)](https://www.rust-lang.org/)
 [![LangGraph](https://img.shields.io/badge/langgraph-0.4-green.svg)](https://github.com/langchain-ai/langgraph)
 [![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey.svg)](LICENSE)
-[![Release](https://img.shields.io/badge/release-v1.0.0-blue.svg)](https://github.com/christianmeurer/Lula/releases)
+[![Release](https://img.shields.io/badge/release-v1.2.0-blue.svg)](https://github.com/christianmeurer/Lula/releases)
 [![DOI](https://zenodo.org/badge/1145578823.svg)](https://doi.org/10.5281/zenodo.19138036)
 
 ---
@@ -37,13 +39,15 @@ graph TD
     CLI[Rich CLI] -->|invoke| GRAPH
     API -->|invoke| GRAPH
 
-    subgraph GRAPH [LangGraph StateGraph — Python]
+    subgraph GRAPH [LangGraph StateGraph — 9 nodes, 3 routing lanes]
         A[ingest] --> B[router]
         B --> C[policy_gate]
         C --> D[planner]
+        D -->|SharedReflectionPool| D
         D --> E[context_builder]
         E --> F[coder]
         F --> G[executor]
+        G -->|GLEAN pre/post check| G
         G --> H[verifier]
         H -->|retry| C
         H -->|pass| I[reporter]
@@ -76,6 +80,10 @@ The checkpointing subsystem is implemented as a `backends/` subpackage (`py/src/
 | Multi-agent DAG with dynamic rewiring | yes | no | no | no | no |
 | Tripartite persistent memory (no vector DB) | yes | no | no | no | no |
 | sqlite-vec indexed vector search | yes | no | no | no | no |
+| pgvector PostgreSQL backend | yes | no | no | no | no |
+| GLEAN verification framework | yes | no | no | no | no |
+| SharedReflectionPool (cross-iteration learning) | yes | no | no | no | no |
+| Temperature diversity mixin | yes | no | no | no | no |
 | HMAC approval gates in tool protocol | yes | no | no | no | no |
 | MCP stdio gateway with PII redaction | yes | no | no | no | no |
 | Cross-repo SCIP symbol index | yes | no | no | no | no |
@@ -83,8 +91,9 @@ The checkpointing subsystem is implemented as a `backends/` subpackage (`py/src/
 | DiversityRoutingPolicy (heterogeneous models) | yes | no | no | no | no |
 | Per-node OTel spans + Prometheus | yes | no | no | partial | no |
 | Structured eval framework + SWE-bench | yes | no | yes | no | partial |
-| Leptos SPA (Rust/WASM) | yes | no | no | no | no |
+| Leptos SPA (Rust/WASM) with dark/light mode | yes | no | no | no | no |
 | VS Code extension with approval workflow | yes | no | no | no | no |
+| Edge / air-gapped deployment (k3s + Ollama) | yes | no | no | no | no |
 | Open source | yes | no | yes | no | no |
 
 ---
@@ -98,7 +107,9 @@ The primary web interface is a Leptos single-page application compiled to WebAss
 - **SSE streaming:** Real-time agent progress via signal-based Server-Sent Events
 - **Approval modals:** Inline approve/reject for mutation tool calls with HMAC token flow
 - **Diff preview:** Side-by-side patch visualization before approval
-- **Hybrid theme:** CSS custom properties with dark/light mode support
+- **Dark/light mode toggle:** Persistent theme switching via `localStorage`
+- **Resizable split panels:** Drag-handle layout for dashboard and run detail views
+- **Keyboard shortcuts:** Ctrl+Enter to submit, Escape to dismiss modals
 
 **Build:**
 
@@ -134,6 +145,8 @@ The VS Code extension (`vscode-extension/`) provides a native IDE experience for
 - **Approval workflow:** Notification-based approve/reject for mutation tool calls
 - **Diff preview:** Opens VS Code's native diff editor for patch review
 - **SSE proxy:** Extension proxies SSE events from the API to the webview via `postMessage`
+- **Code context injection:** Active file and selected text are injected into task submissions automatically
+- **Status bar:** Live run status shown in the VS Code status bar
 
 **Build:**
 
@@ -168,7 +181,8 @@ uv run python -m lg_orch heal    # trigger healing loop
 - Rust 1.88+ (`rustup`)
 - [`uv`](https://github.com/astral-sh/uv) package manager
 - [Trunk](https://trunkrs.dev/) (for building the Leptos SPA)
-- Node.js 18+ and esbuild (for building the VS Code extension)
+- Node.js 24+ and esbuild (for building the VS Code extension)
+- PostgreSQL with pgvector extension — optional; only required if using `LG_CHECKPOINT_BACKEND=postgres` with vector search
 
 ### Clone and bootstrap
 
@@ -294,19 +308,43 @@ cd eval && uv run python run.py --task tasks/real_world_repair.json --dry-run
 
 ## Deployment
 
-### Kubernetes (production)
+### Kubernetes (production — DOKS)
 
-All manifests are in [`infra/k8s/`](infra/k8s/). GitOps is managed by ArgoCD with semver image tracking and weekend blackout sync windows. The orchestrator pod runs under `runtimeClassName: gvisor` with a hardened security context.
+The live deployment runs on DOKS cluster `lula-prod` in `nyc3` with nginx ingress, cert-manager, and Let's Encrypt TLS. The Helm chart is published to the DigitalOcean OCI registry.
 
 ```bash
+# Install / upgrade via OCI Helm chart
+helm upgrade --install lula \
+  oci://registry.digitalocean.com/lula-orch/lula \
+  --version 1.2.0 \
+  --namespace lula --create-namespace \
+  -f infra/helm/values.prod.yaml
+
+# Or deploy with the DigitalOcean script
 DO_REGISTRY=your-registry-name bash scripts/do_deploy_k8s.sh
 ```
 
-Tier 3 Firecracker is implemented in the runner/guest-agent code paths. Enabling it in production is now primarily a deployment concern: schedule the runner onto Firecracker-capable nodes and provide `/opt/lula/rootfs.ext4` plus `/opt/lula/vmlinux`.
+After deployment, verify the cluster is healthy:
+
+```bash
+bash scripts/verify-deployment.sh
+```
+
+**Current status:**
+- Cluster: `lula-prod` (nyc3), 2× `s-2vcpu-4gb` nodes, autoscale to 4
+- Image: `registry.digitalocean.com/lula-orch/lula:v1.2.0`
+- Helm chart: `oci://registry.digitalocean.com/lula-orch/lula:1.2.0`
+- HPA: production-tuned scaling policies; PodDisruptionBudget active
+
+Tier 3 Firecracker is implemented in the runner/guest-agent code paths. Enabling it in production is a deployment concern: schedule the runner onto Firecracker-capable nodes and provide `/opt/lula/rootfs.ext4` plus `/opt/lula/vmlinux`.
 
 Key manifests: [`deployment.yaml`](infra/k8s/deployment.yaml), [`runner-deployment.yaml`](infra/k8s/runner-deployment.yaml), [`hpa.yaml`](infra/k8s/hpa.yaml), [`pdb.yaml`](infra/k8s/pdb.yaml), [`network-policy.yaml`](infra/k8s/network-policy.yaml), [`argocd-app.yaml`](infra/k8s/argocd-app.yaml).
 
 Full guide: [`docs/deployment_digitalocean.md`](docs/deployment_digitalocean.md).
+
+### Edge / Local Deployment
+
+For air-gapped or local use (k3s + Ollama), see [`docs/deployment-edge.md`](docs/deployment-edge.md). The edge profile bundles the orchestrator and runner as a single-node k3s workload with Ollama as a local inference provider — no internet access required after initial image pull.
 
 ### DigitalOcean App Platform
 
@@ -383,7 +421,7 @@ Standards enforced in CI and locally:
 - Rust: `clippy --pedantic`, `cargo fmt`
 - Property-based tests: `proptest` (Rust), `Hypothesis` (Python)
 - Supply-chain: `cargo deny check` + `pip-audit` in the `security-audit` CI job
-- Coverage gate: 75% enforced in pyproject.toml (`--cov-fail-under=75`)
+- Coverage gate: 84% enforced in pyproject.toml (`--cov-fail-under=84`)
 
 New features must include a `pytest` unit test in [`py/tests/`](py/tests/). Logic involving collections, numeric boundaries, or string parsing should include a `Hypothesis` property-based test. Rust additions involving boundary conditions should include a `proptest` test.
 
@@ -393,34 +431,50 @@ New features must include a `pytest` unit test in [`py/tests/`](py/tests/). Logi
 
 - [`docs/architecture.md`](docs/architecture.md) — subsystem design and module inventory
 - [`docs/deployment_digitalocean.md`](docs/deployment_digitalocean.md) — DigitalOcean App Platform and DOKS deployment guide
+- [`docs/deployment-edge.md`](docs/deployment-edge.md) — Edge / local air-gapped deployment guide (k3s + Ollama)
 - [`docs/gitops.md`](docs/gitops.md) — ArgoCD GitOps pipeline details
 - [`docs/platform_console.md`](docs/platform_console.md) — REST API reference and console commands
+- [`docs/quality_report.md`](docs/quality_report.md) — Codebase quality audit and component scores
 - [`docs/agent_collaboration_2026.md`](docs/agent_collaboration_2026.md) — Multi-agent collaboration design and SOTA 2026 direction
 - [`eval/fixtures/README.md`](eval/fixtures/README.md) — eval fixture schema; how to add new benchmarks
 - [`eval/golden/README.md`](eval/golden/README.md) — golden assertion schema and pass-rate scoring
 
 ---
 
-## Recent Changes (2026-04-01)
+## Recent Changes
 
-- **Leptos SPA:** New Rust/WASM single-page application (`rs/spa-leptos/`) with Cyberpunk Minimal design, SSE streaming, approval modals, and diff preview. Replaces the three previous JS-based SPAs.
-- **VS Code Extension:** Full-featured extension (`vscode-extension/`) with webview, SSE streaming, approval workflow, and diff preview. Built with esbuild; CI/CD for marketplace publishing.
-- **Rich CLI:** CLI output upgraded to use the `rich` library for styled panels, tables, and colored output. Log/result stream separation (stderr/stdout).
-- **sqlite-vec:** Long-term memory vector search now uses sqlite-vec indexed queries, replacing the O(n) numpy cosine scan. Transparent numpy fallback when sqlite-vec is unavailable.
-- **DiversityRoutingPolicy:** SYMPHONY-inspired heterogeneous model selection via round-robin routing. Opt-in via `LG_MODEL_DIVERSITY=true`.
-- **75% coverage gate:** 827 tests, pyproject.toml enforces `--cov-fail-under=75`. CI gate aligned to match.
-- **65 new tests:** Added in the test ratchet PR, bringing coverage from ~50% to ~76%.
-- **ESO manifests:** External Secrets Operator integration manifests at `infra/k8s/external-secrets/`.
+### Wave 18 (2026-04-02)
+- **GLEAN wired:** GLEAN verification framework active in executor — pre/post tool checks against `DEFAULT_GUIDELINES`; opt-in via `LG_GLEAN_ENABLED=true`.
+- **SharedReflectionPool wired:** Cross-iteration failure learning active in planner via SYMPHONY `SharedReflectionPool`.
+- **84% coverage gate:** 1,788 tests, `--cov-fail-under=84` enforced in pyproject.toml and CI.
+- **Edge deployment profile:** k3s + Ollama single-node config for air-gapped / local use (`docs/deployment-edge.md`).
+- **HPA tuning:** Production-ready horizontal pod autoscaler policies; PodDisruptionBudget active.
+- **v1.2.0 release:** Helm chart at `oci://registry.digitalocean.com/lula-orch/lula:1.2.0`.
+
+### Wave 17 (2026-04-02)
+- **nginx ingress + cert-manager:** TLS termination via Let's Encrypt on the live DOKS cluster.
+- **pgvector backend:** PostgreSQL-backed long-term memory vector search (`backends/pgvector.py`).
+- **SharedReflectionPool:** SYMPHONY cross-iteration learning framework implemented (`model_routing.py`).
+- **Helm OCI:** Chart published to `oci://registry.digitalocean.com/lula-orch/lula:1.1.0`.
+
+### Wave 16 (2026-04-02)
+- **Dark/light mode toggle:** Leptos SPA persistent theme switching.
+- **Resizable split panels:** Drag-handle layout on Dashboard and Run Detail pages.
+- **Keyboard shortcuts:** Ctrl+Enter to submit, Escape to dismiss modals.
+- **Code context injection:** VS Code extension injects active file and selection into task submissions.
+- **GLEAN framework:** Guideline-grounded agent action auditing (`glean.py`, 11 tests).
+- **Temperature diversity mixin:** Pluralistic alignment via temperature spread across model calls.
+
+### Wave 15 (2026-04-01)
+- **Leptos SPA:** New Rust/WASM single-page application with Cyberpunk Minimal design, SSE streaming, approval modals, 4 pages.
+- **VS Code Extension:** Full-featured extension with webview, SSE streaming, approval workflow, diff preview, esbuild build.
+- **Rich CLI:** `rich` library panels, tables, colored output, stderr log separation.
+- **sqlite-vec:** Indexed vector search replacing O(n) numpy cosine scan.
+- **DiversityRoutingPolicy wired:** SYMPHONY-inspired heterogeneous model selection active.
 - **SBOM generation:** CycloneDX SBOM via `anchore/sbom-action` in the release workflow.
 - **VSCE publish workflow:** Automated VS Code extension publishing on `vscode-v*` tags.
 
-### Changelog (2026-03-20)
-
-- All 12 critical security and correctness defects from the quality audit resolved.
-- Sandbox defaults to `LinuxNamespace` isolation when `unshare` is available.
-- Checkpointing backends split into `py/src/lg_orch/backends/` subpackage.
-- Dependency: `python-jose` replaced with `PyJWT[crypto]`.
-- See [`ROADMAP.md`](ROADMAP.md) and [`docs/quality_report.md`](docs/quality_report.md) for details.
+See [`ROADMAP.md`](ROADMAP.md) and [`docs/quality_report.md`](docs/quality_report.md) for full details.
 
 ---
 
@@ -442,7 +496,7 @@ If you use Lula in your research or work, please cite it:
   title = {Lula — Production-grade multi-agent coding assistant},
   year = {2026},
   url = {https://github.com/christianmeurer/Lula},
-  version = {1.0.0}
+  version = {1.2.0}
 }
 ```
 

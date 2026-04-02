@@ -1,16 +1,16 @@
 # Lula Codebase Quality & Maturity Report
 
-## Coverage Gate Status (2026-04-01)
+## Coverage Gate Status (2026-04-02)
 
 | Item | Value |
 |---|---|
-| pyproject.toml gate | 75% (`--cov-fail-under=75`) |
-| CI gate | 75% (`--cov-fail-under=75` in ci.yml) |
-| Actual coverage | ~76% (827 tests) |
-| Target | 80% — next ratchet milestone |
+| pyproject.toml gate | 84% (`--cov-fail-under=84`) |
+| CI gate | 84% (`--cov-fail-under=84` in ci.yml) |
+| Actual coverage | 84% (1,788 tests) |
+| Target | 85% — next ratchet milestone (verifier.py, planner.py focus) |
 | CI coverage | Fresh coverage generated on every PR via `pytest --cov=lg_orch` |
 
-The coverage gate was ratcheted from 30% to 75% after 65 new tests were added in the test ratchet PR. The pyproject.toml and CI workflow are now aligned at 75%. The next milestone is 80%.
+The coverage gate was ratcheted from 75% → 78% (Wave 15) → 81% (Wave 16) → 82% (Wave 17) → 84% (Wave 18). The pyproject.toml and CI workflow are now aligned at 84%.
 
 ---
 
@@ -579,3 +579,36 @@ To activate Tier 3 in production:
 All code, configuration, and deployment infrastructure is in place. The only remaining items are operational:
 - Firecracker activation requires a KVM-capable node (infrastructure constraint, not code gap)
 - VS Code marketplace publish requires a Personal Access Token (one-time setup)
+
+---
+
+## Section 12: Waves 15–18 — Quality Improvements (2026-04-02)
+
+### Coverage Progress
+
+| Wave | Tests | Coverage | Gate |
+|---|---|---|---|
+| Wave 15 | 1,042 | 78% | 78% |
+| Wave 16 | 1,463 | 81% | 81% |
+| Wave 17 | 1,647 | 82% | 82% |
+| Wave 18 | 1,788 | 84% | 84% |
+
+### New Verification Layer: GLEAN
+
+The GLEAN framework (`py/src/lg_orch/glean.py`) adds a guideline-grounded verification layer on top of the existing `VerifierReport` infrastructure. It performs pre- and post-tool checks in the executor node against `DEFAULT_GUIDELINES`. GLEAN operates independently of the Rust runner's invariant checker — it provides semantic-level policy enforcement (e.g. "do not delete test files", "do not modify lock files without updating the manifest") rather than path/command confinement.
+
+Activate with `LG_GLEAN_ENABLED=true`. Default: disabled (zero overhead when not needed).
+
+### Planning Quality: SharedReflectionPool
+
+The `SharedReflectionPool` in `model_routing.py` captures structured failure records from the verifier and makes them available to the planner on subsequent iterations. This eliminates a class of repeated failures where the planner generated the same broken plan multiple times within a single run. The pool is scoped per-run by default; persistent cross-run learning is available when the pool is backed by the SQLite checkpoint store.
+
+### Component Scores (Post Wave 18)
+
+| Component | Score |
+|---|---|
+| Python orchestrator | 9.5 / 10 |
+| Rust runner | 9.0 / 10 |
+| Deployment configuration | 9.5 / 10 |
+
+Remaining 0.5 gap in Rust runner: TOCTOU path traversal with `cap-std` is resolved; one remaining item is full parallel node execution in the main StateGraph (deferred — MetaGraphScheduler provides parallelism at the meta level).

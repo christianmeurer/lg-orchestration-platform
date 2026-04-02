@@ -1,6 +1,6 @@
 # Architecture & Codebase Overview
 
-**Version:** v1.0 — All waves complete through Wave 14. All CRITICAL and HIGH sprint items resolved. Full eval framework coverage with SWE-bench adapter active. ESO manifests deployed at `infra/k8s/external-secrets/`. Leptos SPA, VS Code extension, rich CLI, sqlite-vec vector indexing, and DiversityRoutingPolicy all implemented.
+**Version:** v1.2.0 — All waves complete through Wave 18. GLEAN verification wired into executor. SharedReflectionPool wired into planner. pgvector backend available. 1,788 tests, 84% coverage gate enforced. Edge deployment profile documented. Leptos SPA, VS Code extension, rich CLI, sqlite-vec vector indexing, and DiversityRoutingPolicy all implemented.
 
 This document provides comprehensive documentation on how the Lula Platform codebase currently works. The platform is designed as a split-architecture system: a Python-based intelligent orchestrator and a Rust-based secure tool runner. All features described here are implemented and wired in the current codebase — no stubs or roadmap items are referenced as present unless explicitly marked.
 
@@ -226,9 +226,12 @@ The eval runner gained the following capabilities in Wave D:
 - **`--dry-run` flag** — prints the resolved task list (IDs, requests, golden file paths) without invoking the LangGraph graph. Useful for verifying loader output and fixture availability before a full eval run.
 
 ## Testing & CI
+
 Both sides of the codebase are heavily tested:
 - Python uses `pytest` and `hypothesis` for property-based testing.
 - Rust uses `cargo test` with comprehensive unit tests for fs boundaries and allowed commands.
+- **1,788 tests** total; **84% coverage** enforced via `--cov-fail-under=84` in `pyproject.toml` and CI.
+- 7 CI jobs all green: Python lint/test, Rust lint/test, SPA build, security audit, eval canary.
 
 ## Long-Term Memory (`py/src/lg_orch/long_term_memory.py`)
 
@@ -239,12 +242,52 @@ The embedding provider is configurable via `LG_EMBED_PROVIDER`:
 - `openai` — Uses the OpenAI embeddings API
 - `stub` — Hash-based stub embedder for testing (semantically meaningless)
 
+### pgvector Backend (`py/src/lg_orch/backends/pgvector.py`)
+
+For teams running PostgreSQL, the `pgvector` backend provides a PostgreSQL-native vector index using the `pgvector` extension. Select it with `LG_CHECKPOINT_BACKEND=postgres` and ensure `pgvector` is installed in the target PostgreSQL instance (`CREATE EXTENSION vector`).
+
+| Backend | Index type | Use case |
+|---|---|---|
+| sqlite-vec | ANN (approximate NN) | Default; embedded, zero external deps |
+| pgvector | IVFFlat / HNSW | PostgreSQL deployments; multi-instance shared memory |
+
 ## Model Routing (`py/src/lg_orch/model_routing.py`)
 
 Model routing supports multiple policies:
 
-- **SlaRoutingPolicy:** P95 latency tracking with automatic fallback when thresholds are exceeded
-- **DiversityRoutingPolicy:** SYMPHONY-inspired heterogeneous model selection via round-robin routing across different model providers. Opt-in via `LG_MODEL_DIVERSITY=true`. Currently implemented as a standalone class; wiring into the planner is a remaining backlog item.
+- **SlaRoutingPolicy:** P95 latency tracking with automatic fallback when thresholds are exceeded.
+- **DiversityRoutingPolicy:** SYMPHONY-inspired heterogeneous model selection via round-robin routing across different model providers. Opt-in via `LG_MODEL_DIVERSITY=true`. Wired into the planner via `get_routing_policy()` factory.
+- **Temperature diversity mixin:** Spreads temperature values across model calls for pluralistic alignment.
+
+## GLEAN Verification Framework (`py/src/lg_orch/glean.py`)
+
+GLEAN (Guideline-grounded Evaluation of Agent Actions) is wired into the executor node. It runs pre- and post-tool checks against a set of `DEFAULT_GUIDELINES` — a curated list of safety and correctness invariants.
+
+- **Opt-in:** Set `LG_GLEAN_ENABLED=true` to activate.
+- **Pre-check:** Before each tool call, GLEAN audits the action against the active guidelines and can veto operations that violate them.
+- **Post-check:** After execution, GLEAN verifies the tool output conforms to expected invariants, flagging deviations for the verifier.
+- **11 unit tests** cover the guideline evaluation and veto paths.
+
+## SharedReflectionPool (`py/src/lg_orch/model_routing.py`)
+
+The SYMPHONY `SharedReflectionPool` is wired into the planner node for cross-iteration failure learning.
+
+- The pool accumulates structured failure records from the verifier across iterations of the plan/execute/verify loop.
+- On each planning invocation, the planner queries the pool for similar past failures and injects relevant lessons into the planning prompt.
+- This enables the planner to avoid repeating the same mistakes across loop iterations within a single run, and optionally across runs (when the pool is persisted).
+- Implemented in `model_routing.py`; activated automatically when the planner invokes `get_routing_policy()`.
+
+## Edge Deployment
+
+For air-gapped or resource-constrained environments, Lula ships an edge deployment profile targeting k3s + Ollama. See [`docs/deployment-edge.md`](deployment-edge.md) for the full guide.
+
+Key characteristics:
+- **Single-node k3s** — orchestrator and runner co-located; no cloud dependencies after image pull.
+- **Ollama local inference** — all LLM calls served locally via Ollama; `nomic-embed-text` for embeddings.
+- **sqlite-vec only** — pgvector not required; SQLite WAL mode checkpoint store.
+- **SafeFallback / LinuxNamespace sandbox** — Firecracker not required (no KVM needed).
+
+---
 
 ## Getting Started / Run Flow
 When a user issues a command via the CLI (`uv run lg-orch run "task"`):

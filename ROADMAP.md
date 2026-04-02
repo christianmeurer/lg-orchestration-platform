@@ -174,21 +174,33 @@ _Derived from `docs/quality_report.md` (2026-03-20). Items are ordered by severi
 - [x] pgvector backend for PostgreSQL-backed long-term memory (`backends/pgvector.py`)
 - [x] SYMPHONY SharedReflectionPool for cross-iteration failure learning (`model_routing.py`)
 
-## Deployment Status (2026-04-02)
+## Deployment Status after Wave 17 (superseded by Wave 18 status above)
 
-- **Cluster:** DOKS `lula-prod` in nyc3, 2x `s-2vcpu-4gb` nodes, autoscale to 4
 - **Image:** `registry.digitalocean.com/lula-orch/lula:v1.1.0`
 - **Helm chart:** `oci://registry.digitalocean.com/lula-orch/lula:1.1.0`
+
+## Wave 18 — Coverage, GLEAN, Edge (2026-04-02) ✅
+
+- [x] GLEAN verification framework wired into executor (`glean.py`, `LG_GLEAN_ENABLED=true`)
+- [x] SharedReflectionPool wired into planner for cross-iteration failure learning (`model_routing.py`)
+- [x] 84% coverage gate — 1,788 tests, `--cov-fail-under=84` in pyproject.toml and CI
+- [x] Edge deployment profile documented — k3s + Ollama single-node (`docs/deployment-edge.md`)
+- [x] HPA tuning — production-ready scaling policies and PodDisruptionBudget active
+- [x] v1.2.0 release — Helm chart at `oci://registry.digitalocean.com/lula-orch/lula:1.2.0`
+
+## Deployment Status (2026-04-02)
+
+- **Cluster:** DOKS `lula-prod` in nyc3, 2× `s-2vcpu-4gb` nodes, autoscale to 4
+- **Image:** `registry.digitalocean.com/lula-orch/lula:v1.2.0`
+- **Helm chart:** `oci://registry.digitalocean.com/lula-orch/lula:1.2.0`
 - **Pods:** 2 orchestrator + 2 runner, all healthy
 - **Ingress:** nginx + cert-manager, TLS via Let's Encrypt
 - **DNS:** `lula.eiv.eng.br` A record created (NS delegation pending at registrar)
 - **Direct access:** `curl -sk https://134.199.245.159/healthz -H "Host: lula.eiv.eng.br"`
 
-## Next Level — Wave 18 (Planned)
+## Wave 19 (Planned)
 
 - [ ] Publish VS Code extension to marketplace (pending publisher documentation review)
 - [ ] Complete DNS NS delegation at registrar for lula.eiv.eng.br
 - [ ] Ratchet coverage to 85% (target: verifier.py, planner.py)
 - [ ] Q-RAG embedder optimization — RL-trained multi-step retrieval
-- [ ] Edge deployment profile — local/air-gapped config
-- [ ] Horizontal pod autoscaler tuning based on production load patterns
