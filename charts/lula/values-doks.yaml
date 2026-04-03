@@ -4,7 +4,7 @@
 image:
   repository: registry.digitalocean.com/lula-orch/lula
   pullPolicy: Always
-  tag: "v1.1.0"
+  tag: "v1.2.3"
 
 imagePullSecrets:
   - name: registry-lula-orch
@@ -12,10 +12,10 @@ imagePullSecrets:
 orchestrator:
   replicaCount: 1  # Start with 1 to save cost, HPA scales up
   profile: "prod"
-  routerModel: "anthropic-claude-4.6-sonnet"
-  plannerModel: "anthropic-claude-4.6-sonnet"
-  coderModel: "anthropic-claude-4.6-sonnet"
-  reporterModel: "anthropic-claude-4.6-sonnet"
+  routerModel: "alibaba-qwen3-32b"
+  plannerModel: "alibaba-qwen3-32b"
+  coderModel: "alibaba-qwen3-32b"
+  reporterModel: "alibaba-qwen3-32b"
   resources:
     requests:
       cpu: 250m
@@ -64,7 +64,7 @@ ingress:
 secrets:
   remoteApiBearerToken: "5RDK5shDpRMr_2htK5poMfl0NcX2rHqviCPqJFNJSw4"
   runnerApiKey: "doks-deploy-key"
-  digitalOceanModelAccessKey: ""
+  digitalOceanModelAccessKey: "sk-do-y-skEuklMEpR_-KkkbLkhGX9KITUGnihD1EWAOiSzWU6oFc5OxIws3O6Xs"
   checkpointRedisUrl: ""
   checkpointPostgresDsn: ""
   hmacSecret: "doks-hmac-secret"
