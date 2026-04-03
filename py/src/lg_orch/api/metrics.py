@@ -43,6 +43,30 @@ LULA_TOOL_CALLS_TOTAL: Counter = Counter(
 _PROMETHEUS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 
 
+def _rate_limiter_metrics_lines() -> str:
+    """Return Prometheus text-format lines for the per-client rate limiter.
+
+    Imports the module-level ``_per_client_rate_limiter`` from ``remote_api``
+    lazily to avoid circular imports.
+    """
+    try:
+        from lg_orch.remote_api import _per_client_rate_limiter
+    except ImportError:
+        return ""
+    if _per_client_rate_limiter is None:
+        return ""
+    m = _per_client_rate_limiter.metrics()
+    lines = [
+        "# HELP rate_limit_requests_total Total requests checked by per-client rate limiter",
+        "# TYPE rate_limit_requests_total counter",
+        f"rate_limit_requests_total {m['total_requests']}",
+        "# HELP rate_limit_rejections_total Total requests rejected by per-client rate limiter",
+        "# TYPE rate_limit_rejections_total counter",
+        f"rate_limit_rejections_total {m['total_rejections']}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def handle_metrics(method: str) -> tuple[int, str, bytes]:
     """Return the Prometheus metrics page.
 
@@ -55,4 +79,8 @@ def handle_metrics(method: str) -> tuple[int, str, bytes]:
         body = json.dumps({"error": "method_not_allowed"}).encode("utf-8")
         return 405, "application/json; charset=utf-8", body
     body = prometheus_client.generate_latest()
+    # Append per-client rate limiter metrics
+    rl_lines = _rate_limiter_metrics_lines()
+    if rl_lines:
+        body = body + rl_lines.encode("utf-8")
     return 200, _PROMETHEUS_CONTENT_TYPE, body

@@ -47,13 +47,29 @@ class RateLimiter:
         self._lock = threading.Lock()
         self._capacity = capacity
         self._refill_rate = refill_rate
+        self.total_requests: int = 0
+        self.total_rejections: int = 0
 
     def check(self, client_id: str) -> bool:
         """Check if request from client_id is allowed."""
+        self.total_requests += 1
         with self._lock:
             if client_id not in self._buckets:
                 self._buckets[client_id] = TokenBucket(self._capacity, self._refill_rate)
-        return self._buckets[client_id].acquire()
+        allowed = self._buckets[client_id].acquire()
+        if not allowed:
+            self.total_rejections += 1
+        return allowed
+
+    def metrics(self) -> dict[str, int]:
+        """Return current metrics as a dict suitable for Prometheus exposition."""
+        with self._lock:
+            active = len(self._buckets)
+        return {
+            "total_requests": self.total_requests,
+            "total_rejections": self.total_rejections,
+            "active_buckets": active,
+        }
 
     def cleanup(self, max_idle_seconds: float = 3600.0) -> int:
         """Remove idle buckets. Returns number removed."""
