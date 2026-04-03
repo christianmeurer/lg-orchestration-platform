@@ -419,13 +419,56 @@ class LongTermMemoryStore:
 
         When sqlite-vec is available the search is an indexed O(log n) lookup.
         Otherwise falls back to the original numpy O(n) cosine scan.
+
+        When ``LG_QRAG_ENABLED=true`` is set, raw vector results are re-ranked
+        through :class:`~lg_orch.qrag.QRAGRetriever` for value-based ordering.
         """
         top_k = max(1, top_k)
         query_vec = self._embed(query)
 
         if self._has_vec:
-            return self._search_semantic_vec(query_vec, top_k)
-        return self._search_semantic_numpy(query_vec, top_k)
+            results = self._search_semantic_vec(query_vec, top_k)
+        else:
+            results = self._search_semantic_numpy(query_vec, top_k)
+
+        # Optional Q-RAG re-ranking
+        if os.environ.get("LG_QRAG_ENABLED", "false").lower() in ("true", "1", "yes"):
+            results = self._rerank_qrag(results, query, top_k)
+
+        return results
+
+    def _rerank_qrag(
+        self, results: list[MemoryRecord], query: str, top_k: int
+    ) -> list[MemoryRecord]:
+        """Re-rank *results* using Q-RAG value-based retrieval."""
+        from lg_orch.qrag import QRAGRetriever
+
+        if not results:
+            return results
+
+        task_type = _infer_task_type(query)
+        candidates: list[dict[str, Any]] = []
+        for rec in results:
+            cand: dict[str, Any] = {
+                "content": rec.content,
+                "metadata": {**rec.metadata, "created_at": rec.created_at},
+                "similarity": 1.0,  # already ranked by similarity
+            }
+            if rec.embedding is not None:
+                cand["embedding"] = rec.embedding.tolist()
+            candidates.append(cand)
+
+        retriever = QRAGRetriever()
+        scored = retriever.retrieve(candidates, query_task_type=task_type, top_k=top_k)
+
+        # Map scored results back to MemoryRecords (preserve order from Q-RAG)
+        content_to_rec: dict[str, MemoryRecord] = {r.content: r for r in results}
+        reranked: list[MemoryRecord] = []
+        for sm in scored:
+            matched = content_to_rec.get(sm.content)
+            if matched is not None:
+                reranked.append(matched)
+        return reranked
 
     # -- sqlite-vec accelerated path --
 
