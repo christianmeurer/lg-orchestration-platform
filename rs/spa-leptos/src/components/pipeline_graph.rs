@@ -27,15 +27,19 @@ fn compute_stage_states(state: &RunState) -> Vec<(&'static str, StageState)> {
         .iter()
         .map(|&stage| {
             let has_start = state.events.iter().any(|ev| {
-                ev.node.as_deref() == Some(stage) && ev.kind.as_deref() == Some("node_start")
+                ev.node_name() == stage
+                    && ev.kind.as_deref() == Some("node")
+                    && ev.phase().as_deref() == Some("start")
             });
             let has_end = state.events.iter().any(|ev| {
-                ev.node.as_deref() == Some(stage) && ev.kind.as_deref() == Some("node_end")
+                ev.node_name() == stage
+                    && ev.kind.as_deref() == Some("node")
+                    && ev.phase().as_deref() == Some("end")
             });
             let has_error = state
                 .events
                 .iter()
-                .any(|ev| ev.node.as_deref() == Some(stage) && ev.kind.as_deref() == Some("error"));
+                .any(|ev| ev.node_name() == stage && ev.kind.as_deref() == Some("error"));
 
             let s = if has_error {
                 StageState::Error

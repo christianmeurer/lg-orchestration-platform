@@ -40,7 +40,7 @@ pub fn AuditTrail(#[prop(into)] state: Signal<RunState>) -> impl IntoView {
                     .iter()
                     .map(|ev| {
                         let ts = format_timestamp(ev.ts_ms);
-                        let node = ev.node.clone().unwrap_or_else(|| "--".to_string());
+                        let node = ev.node_name();
                         let kind = ev.kind.clone().unwrap_or_else(|| "--".to_string());
                         let color = kind_color(ev.kind.as_deref());
                         view! {

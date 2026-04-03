@@ -12,15 +12,15 @@ struct NodeGroup {
 fn build_groups(events: &[TraceEvent]) -> Vec<NodeGroup> {
     let mut groups: Vec<NodeGroup> = Vec::new();
     for ev in events {
-        let node_name = ev.node.clone().unwrap_or_else(|| "unknown".to_string());
+        let node_name = ev.node_name();
+        let is_end = ev.kind.as_deref() == Some("node") && ev.phase().as_deref() == Some("end");
         if let Some(group) = groups.iter_mut().find(|g| g.name == node_name) {
-            if ev.kind.as_deref() == Some("node_end") {
+            if is_end {
                 group.done = true;
             }
             group.events.push(ev.clone());
         } else {
-            let done = ev.kind.as_deref() == Some("node_end");
-            groups.push(NodeGroup { name: node_name, events: vec![ev.clone()], done });
+            groups.push(NodeGroup { name: node_name, events: vec![ev.clone()], done: is_end });
         }
     }
     groups
