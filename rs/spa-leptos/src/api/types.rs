@@ -110,9 +110,29 @@ pub struct TraceEvent {
 }
 
 impl TraceEvent {
-    pub fn as_sse_event(&self) -> Option<SseEvent> {
-        let val = serde_json::to_value(self).ok()?;
-        serde_json::from_value(val).ok()
+    /// Extract the node name — may be top-level `node` or nested in `data.name`
+    pub fn node_name(&self) -> String {
+        if let Some(ref n) = self.node {
+            if !n.is_empty() {
+                return n.clone();
+            }
+        }
+        // Fall back to data.name (actual server format)
+        self.data
+            .as_ref()
+            .and_then(|d| d.get("name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string()
+    }
+
+    /// Extract phase from data.phase ("start"/"end")
+    pub fn phase(&self) -> Option<String> {
+        self.data
+            .as_ref()
+            .and_then(|d| d.get("phase"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
     }
 }
 
