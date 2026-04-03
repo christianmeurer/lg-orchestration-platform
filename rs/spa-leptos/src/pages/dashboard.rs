@@ -73,8 +73,13 @@ pub fn DashboardPage() -> impl IntoView {
                         if current_runs.is_empty() {
                             vec![view! {
                                 <div class="empty-state">
-                                    <div class="empty-state-icon">"\u{1F680}"</div>
-                                    <div class="empty-state-text">"No runs yet. Submit a task above."</div>
+                                    <div style="margin-bottom:16px;">
+                                        <span class="brand-text" style="font-size:14px;letter-spacing:4px;">"LULA"</span>
+                                    </div>
+                                    <div class="empty-state-text">"No runs yet. Enter a task above to get started."</div>
+                                    <div style="font-size:12px;color:var(--text-faint);margin-top:8px;">
+                                        "Runs will appear here as they are created."
+                                    </div>
                                 </div>
                             }.into_any()]
                         } else {
