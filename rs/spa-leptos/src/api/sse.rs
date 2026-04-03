@@ -4,6 +4,28 @@ use web_sys::{EventSource, MessageEvent};
 
 use super::types::*;
 
+/// Run summary sent by the SSE stream (not a trace event).
+/// The server polls the run and sends its full state each time.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RunSummaryEvent {
+    #[serde(default)]
+    run_id: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    request: Option<String>,
+    #[serde(default)]
+    new_log_lines: Vec<String>,
+    #[serde(default)]
+    pending_approval: bool,
+    #[serde(default)]
+    pending_approval_summary: Option<String>,
+    #[serde(default)]
+    trace: Option<serde_json::Value>,
+    #[serde(default)]
+    _current_node: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -18,8 +40,11 @@ pub struct StdoutLine {
 pub struct RunState {
     pub events: Vec<TraceEvent>,
     pub stdout_lines: Vec<StdoutLine>,
+    pub log_lines: Vec<String>,
     pub final_output: Option<String>,
     pub is_done: bool,
+    pub status: Option<String>,
+    pub request: Option<String>,
     pub approval: Option<ApprovalRequest>,
 }
 
@@ -60,18 +85,21 @@ pub fn connect_sse(
                 None => return,
             };
 
-            // Try to parse as a known SseEvent first.
-            match serde_json::from_str::<SseEvent>(&data) {
-                Ok(sse_event) => match sse_event {
+            // 1. Check for done sentinel
+            if let Ok(sse) = serde_json::from_str::<SseEvent>(&data) {
+                match sse {
                     SseEvent::Done => {
                         sw.update(|s| s.is_done = true);
                         es_close.close();
+                        return;
                     }
                     SseEvent::ToolStdout { tool, line } => {
                         sw.update(|s| s.stdout_lines.push(StdoutLine { tool, line }));
+                        return;
                     }
                     SseEvent::FinalOutput { text } => {
                         sw.update(|s| s.final_output = Some(text));
+                        return;
                     }
                     SseEvent::ApprovalRequested { challenge_id, summary, operation_class } => {
                         let rid = run_id_owned.clone();
@@ -83,20 +111,67 @@ pub fn connect_sse(
                                 operation_class,
                             });
                         });
+                        return;
                     }
-                    SseEvent::Unknown => {
-                        // Fall through to TraceEvent parsing.
-                        if let Ok(trace) = serde_json::from_str::<TraceEvent>(&data) {
-                            sw.update(|s| s.events.push(trace));
-                        }
-                    }
-                },
-                Err(_) => {
-                    // Not a recognised SseEvent — try as a raw TraceEvent.
-                    if let Ok(trace) = serde_json::from_str::<TraceEvent>(&data) {
-                        sw.update(|s| s.events.push(trace));
-                    }
+                    SseEvent::Unknown => {}
                 }
+            }
+
+            // 2. Check for run summary (the server sends full run state each poll)
+            if let Ok(summary) = serde_json::from_str::<RunSummaryEvent>(&data) {
+                if summary.run_id.is_some() {
+                    sw.update(|s| {
+                        // Update status
+                        if let Some(ref st) = summary.status {
+                            s.status = Some(st.clone());
+                            if st == "succeeded" || st == "failed" || st == "cancelled" {
+                                s.is_done = true;
+                            }
+                        }
+                        s.request = summary.request.clone().or_else(|| s.request.clone());
+
+                        // Append new log lines
+                        for line in &summary.new_log_lines {
+                            if !line.is_empty() && !s.log_lines.contains(line) {
+                                s.log_lines.push(line.clone());
+                            }
+                        }
+
+                        // Check for approval
+                        if summary.pending_approval {
+                            s.approval = Some(ApprovalRequest {
+                                run_id: summary.run_id.clone().unwrap_or_default(),
+                                challenge_id: None,
+                                summary: summary.pending_approval_summary.clone(),
+                                operation_class: None,
+                            });
+                        }
+
+                        // Extract trace events if present
+                        if let Some(ref trace_val) = summary.trace {
+                            if let Some(events) = trace_val.get("events") {
+                                if let Ok(trace_events) =
+                                    serde_json::from_value::<Vec<TraceEvent>>(events.clone())
+                                {
+                                    if trace_events.len() > s.events.len() {
+                                        s.events = trace_events;
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    if summary.status.as_deref() == Some("succeeded")
+                        || summary.status.as_deref() == Some("failed")
+                    {
+                        es_close.close();
+                    }
+                    return;
+                }
+            }
+
+            // 3. Fall back to raw TraceEvent
+            if let Ok(trace) = serde_json::from_str::<TraceEvent>(&data) {
+                sw.update(|s| s.events.push(trace));
             }
         });
 
