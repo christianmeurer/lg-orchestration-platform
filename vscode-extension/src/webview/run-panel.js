@@ -66,8 +66,10 @@
         });
     }
 
+    let seenLogLines = new Set();
+
     function handleSseEvent(data) {
-        // Parse as typed event
+        // 1. Typed events (tool_stdout, final_output, approval)
         if (data.type === 'tool_stdout') {
             appendStdout(data.tool, data.line);
             return;
@@ -80,9 +82,73 @@
             showApprovalBanner(data);
             return;
         }
+        if (data.type === 'done') {
+            markDone();
+            return;
+        }
 
-        // Trace event
-        const node = data.node || 'unknown';
+        // 2. Run summary format (server sends full run state each poll)
+        if (data.run_id && data.status !== undefined) {
+            // Update header
+            renderRunHeader(data);
+
+            // Show new log lines
+            if (data.new_log_lines && data.new_log_lines.length > 0) {
+                const stream = document.getElementById('event-stream');
+                for (const line of data.new_log_lines) {
+                    if (!line || seenLogLines.has(line)) continue;
+                    seenLogLines.add(line);
+                    const el = document.createElement('div');
+                    el.className = 'log-line';
+                    // Color code log lines
+                    if (line.includes('error') || line.includes('ERROR') || line.includes('FAIL')) {
+                        el.style.color = 'var(--lula-err, #ff6b6b)';
+                    } else if (line.includes('warning')) {
+                        el.style.color = 'var(--lula-warn, #fbbf24)';
+                    } else if (line.startsWith('[') && line.includes(']')) {
+                        el.style.color = 'var(--lula-accent, #00d4aa)';
+                    } else if (line.startsWith('\u256D') || line.startsWith('\u2502') || line.startsWith('\u2570')) {
+                        el.style.color = 'var(--vscode-descriptionForeground)';
+                    } else {
+                        el.style.color = 'var(--vscode-editor-foreground)';
+                    }
+                    el.style.fontFamily = 'var(--vscode-editor-font-family)';
+                    el.style.fontSize = '12px';
+                    el.style.whiteSpace = 'pre-wrap';
+                    el.textContent = line;
+                    stream.appendChild(el);
+                    stream.scrollTop = stream.scrollHeight;
+                }
+            }
+
+            // Check for approval
+            if (data.pending_approval) {
+                showApprovalBanner({
+                    summary: data.pending_approval_summary || 'Approval required',
+                    challenge_id: ''
+                });
+            }
+
+            // Check for completion
+            if (data.status === 'succeeded' || data.status === 'failed' || data.status === 'cancelled') {
+                markDone();
+                // Extract trace events if available
+                if (data.trace && data.trace.events) {
+                    for (const ev of data.trace.events) {
+                        handleTraceEvent(ev);
+                    }
+                }
+            }
+            return;
+        }
+
+        // 3. Raw trace event
+        handleTraceEvent(data);
+    }
+
+    function handleTraceEvent(data) {
+        // Extract node name from data.name (actual server format) or top-level node
+        const node = (data.data && data.data.name) || data.node || 'unknown';
         const kind = data.kind || '';
 
         if (!nodes[node]) {
@@ -90,7 +156,7 @@
             createNodeSection(node);
         }
         nodes[node].events.push(data);
-        if (kind === 'node_end') nodes[node].done = true;
+        if (kind === 'node' && data.data && data.data.phase === 'end') nodes[node].done = true;
 
         updateNodeSection(node);
 

@@ -43,14 +43,40 @@ pub fn RunStream(#[prop(into)] state: Signal<RunState>) -> impl IntoView {
             {move || {
                 let s = state.get();
                 let groups = build_groups(&s.events);
-                groups
-                    .into_iter()
-                    .map(|group| {
-                        view! {
-                            <NodeSection group=group />
-                        }
-                    })
-                    .collect::<Vec<_>>()
+
+                if !groups.is_empty() && groups.iter().any(|g| g.name != "unknown") {
+                    // Structured trace events available — show node groups
+                    groups
+                        .into_iter()
+                        .map(|group| view! { <NodeSection group=group /> }.into_any())
+                        .collect::<Vec<_>>()
+                } else if !s.log_lines.is_empty() {
+                    // No structured events but log lines from run summary
+                    vec![view! {
+                        <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:6px;padding:12px;font-family:var(--font-mono);font-size:12px;white-space:pre-wrap;color:var(--text-secondary);max-height:600px;overflow-y:auto;">
+                            {s.log_lines.iter().map(|line| {
+                                let color = if line.contains("error") || line.contains("ERROR") || line.contains("FAIL") {
+                                    "var(--err)"
+                                } else if line.contains("warning") {
+                                    "var(--warn)"
+                                } else if line.starts_with('[') && line.contains(']') {
+                                    "var(--accent)"
+                                } else if line.starts_with('╭') || line.starts_with('│') || line.starts_with('╰') {
+                                    "var(--text-faint)"
+                                } else {
+                                    "var(--text-secondary)"
+                                };
+                                view! { <div style=format!("color:{color}")>{line.clone()}</div> }
+                            }).collect::<Vec<_>>()}
+                        </div>
+                    }.into_any()]
+                } else {
+                    vec![view! {
+                        <div style="color:var(--text-muted);font-size:13px;padding:20px;">
+                            "Waiting for events..."
+                        </div>
+                    }.into_any()]
+                }
             }}
             <StdoutPanel state=state />
         </div>

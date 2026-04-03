@@ -25,7 +25,7 @@ async function submitTask(
     const url = new URL('/v1/runs', serverUrl);
 
     return new Promise((resolve, reject) => {
-        const body = JSON.stringify({ task });
+        const body = JSON.stringify({ request: task });
         const client = url.protocol === 'https:' ? https : http;
         const options: http.RequestOptions = {
             hostname: url.hostname,
@@ -168,9 +168,10 @@ export function activate(context: vscode.ExtensionContext): void {
                                 pending_approval: false
                             });
 
-                            // Auto-open run panel
-                            if (client) {
-                                panelProvider.openPanel(result.run_id, client, context);
+                            // Auto-open run panel — ensure client exists
+                            const c = await ensureClient();
+                            if (c) {
+                                panelProvider.openPanel(result.run_id, c, context);
                             }
 
                             vscode.window.showInformationMessage(
