@@ -1,100 +1,186 @@
 use leptos::prelude::*;
 
-use crate::api::sse::RunState;
+use crate::api::sse::{PipelineNode, RunState};
 
-const PIPELINE_STAGES: [&str; 9] = [
-    "ingest",
-    "router",
-    "policy_gate",
-    "planner",
-    "context_builder",
-    "coder",
-    "executor",
-    "verifier",
-    "reporter",
-];
+/// Radius of each node circle in the SVG.
+const R: f64 = 20.0;
+/// Horizontal spacing between node centers.
+const SPACING: f64 = 100.0;
+/// Vertical center of the circles.
+const CY: f64 = 40.0;
+/// SVG height.
+const SVG_H: f64 = 100.0;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum StageState {
-    Pending,
-    Active,
-    Done,
-    Error,
+fn node_color(node: &PipelineNode, is_last: bool, is_done: bool) -> &'static str {
+    if is_done && node.done {
+        "var(--ok)"
+    } else if is_last && !is_done {
+        "var(--accent)"
+    } else if node.done {
+        "var(--ok)"
+    } else {
+        "var(--border)"
+    }
 }
 
-fn compute_stage_states(state: &RunState) -> Vec<(&'static str, StageState)> {
-    PIPELINE_STAGES
-        .iter()
-        .map(|&stage| {
-            let has_start = state.events.iter().any(|ev| {
-                ev.node_name() == stage
-                    && ev.kind.as_deref() == Some("node")
-                    && ev.phase().as_deref() == Some("start")
-            });
-            let has_end = state.events.iter().any(|ev| {
-                ev.node_name() == stage
-                    && ev.kind.as_deref() == Some("node")
-                    && ev.phase().as_deref() == Some("end")
-            });
-            let has_error = state
-                .events
-                .iter()
-                .any(|ev| ev.node_name() == stage && ev.kind.as_deref() == Some("error"));
-
-            let s = if has_error {
-                StageState::Error
-            } else if has_end {
-                StageState::Done
-            } else if has_start {
-                StageState::Active
-            } else {
-                StageState::Pending
-            };
-
-            (stage, s)
-        })
-        .collect()
+fn node_text_color(node: &PipelineNode, is_last: bool, is_done: bool) -> &'static str {
+    if is_done && node.done {
+        "var(--ok)"
+    } else if is_last && !is_done {
+        "var(--accent)"
+    } else if node.done {
+        "var(--ok)"
+    } else {
+        "var(--text-muted)"
+    }
 }
 
 #[component]
 pub fn PipelineGraph(#[prop(into)] state: Signal<RunState>) -> impl IntoView {
     view! {
-        <div style="display:flex;flex-direction:column;gap:4px;">
+        <div class="pipeline-svg-container">
             {move || {
-                let stages = compute_stage_states(&state.get());
-                stages
-                    .into_iter()
-                    .map(|(name, stage_state)| {
-                        let (dot_color, text_color) = match stage_state {
-                            StageState::Done => ("var(--ok)", "var(--ok)"),
-                            StageState::Active => ("var(--accent)", "var(--accent)"),
-                            StageState::Error => ("var(--err)", "var(--err)"),
-                            StageState::Pending => ("var(--border)", "var(--text-muted)"),
-                        };
-                        let active_class = if stage_state == StageState::Active {
-                            " pipeline-active"
-                        } else {
-                            ""
-                        };
-                        view! {
-                            <div
-                                class=format!("pipeline-stage{}", active_class)
-                                style="display:flex;align-items:center;gap:10px;padding:6px 12px;"
+                let s = state.get();
+                let nodes = &s.pipeline_nodes;
+                let is_done = s.is_done;
+
+                if nodes.is_empty() {
+                    return view! {
+                        <div class="empty-state" style="padding:40px 20px;">
+                            <div style="font-size:13px;color:var(--text-muted);">"Waiting for pipeline data..."</div>
+                        </div>
+                    }
+                    .into_any();
+                }
+
+                let count = nodes.len();
+                let svg_w = (count as f64 - 1.0) * SPACING + R * 4.0;
+                let view_box = format!("0 0 {} {}", svg_w, SVG_H);
+
+                // Build connector lines and node circles
+                let mut lines_html = Vec::new();
+                let mut circles_html = Vec::new();
+
+                for (i, node) in nodes.iter().enumerate() {
+                    let cx = R * 2.0 + (i as f64) * SPACING;
+                    let is_last = i + 1 == count;
+                    let fill = node_color(node, is_last, is_done);
+                    let text_col = node_text_color(node, is_last, is_done);
+                    let is_active = is_last && !is_done;
+
+                    // Connector line to the next node
+                    if i + 1 < count {
+                        let x2 = cx + SPACING;
+                        let line_color = if node.done { "var(--ok)" } else { "var(--border)" };
+                        lines_html.push(view! {
+                            <line
+                                x1=format!("{}", cx + R)
+                                y1=format!("{}", CY)
+                                x2=format!("{}", x2 - R)
+                                y2=format!("{}", CY)
+                                stroke=line_color
+                                stroke-width="2"
+                            />
+                        });
+                    }
+
+                    let circle_class = if is_active {
+                        "pipeline-node-active"
+                    } else {
+                        ""
+                    };
+
+                    // Checkmark for done nodes
+                    let check_icon = if node.done {
+                        Some(view! {
+                            <text
+                                x=format!("{}", cx)
+                                y=format!("{}", CY + 5.0)
+                                text-anchor="middle"
+                                fill="var(--bg-void)"
+                                font-size="16"
+                                font-weight="bold"
                             >
-                                <span style=format!(
-                                    "width:8px;height:8px;border-radius:50%;background:{};flex-shrink:0;",
-                                    dot_color,
-                                )></span>
-                                <span style=format!(
-                                    "font-size:13px;font-weight:500;color:{};",
-                                    text_color,
-                                )>
-                                    {name}
-                                </span>
-                            </div>
-                        }
-                    })
-                    .collect::<Vec<_>>()
+                                "\u{2713}"
+                            </text>
+                        })
+                    } else {
+                        None
+                    };
+
+                    // Tool count badge
+                    let tool_badge = if node.tools > 0 {
+                        Some(view! {
+                            <g>
+                                <circle
+                                    cx=format!("{}", cx + R * 0.7)
+                                    cy=format!("{}", CY - R * 0.7)
+                                    r="8"
+                                    fill="var(--accent-blue)"
+                                />
+                                <text
+                                    x=format!("{}", cx + R * 0.7)
+                                    y=format!("{}", CY - R * 0.7 + 3.5)
+                                    text-anchor="middle"
+                                    fill="white"
+                                    font-size="9"
+                                    font-weight="600"
+                                >
+                                    {format!("{}", node.tools)}
+                                </text>
+                            </g>
+                        })
+                    } else {
+                        None
+                    };
+
+                    let node_name = node.name.clone();
+                    let cx_str = format!("{}", cx);
+                    let cy_str = format!("{}", CY);
+                    let r_str = format!("{}", R);
+                    let label_y = format!("{}", CY + R + 16.0);
+
+                    circles_html.push(view! {
+                        <g class=circle_class>
+                            <circle
+                                cx=cx_str.clone()
+                                cy=cy_str.clone()
+                                r=r_str
+                                fill=fill
+                                stroke=fill
+                                stroke-width="2"
+                                opacity={if node.done || is_active { "1" } else { "0.4" }}
+                            />
+                            {check_icon}
+                            {tool_badge}
+                            <text
+                                x=cx_str
+                                y=label_y
+                                text-anchor="middle"
+                                fill=text_col
+                                font-size="11"
+                                font-family="var(--font-sans)"
+                            >
+                                {node_name}
+                            </text>
+                        </g>
+                    });
+                }
+
+                view! {
+                    <div style="overflow-x:auto;padding:8px 0;">
+                        <svg
+                            width=format!("{}", svg_w)
+                            height=format!("{}", SVG_H)
+                            viewBox=view_box
+                            style="display:block;min-width:100%;"
+                        >
+                            {lines_html}
+                            {circles_html}
+                        </svg>
+                    </div>
+                }
+                .into_any()
             }}
         </div>
     }

@@ -30,7 +30,7 @@ orchestrator:
 runner:
   replicaCount: 1
   gvisor:
-    enabled: false  # DOKS default pool doesn't have gVisor runtime
+    enabled: true  # gVisor pool with sandbox=gvisor label + taint
   workspace:
     persistent: false
     storageClass: "do-block-storage"

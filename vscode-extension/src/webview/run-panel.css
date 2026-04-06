@@ -386,3 +386,141 @@ body {
 ::-webkit-scrollbar-thumb:active {
     background: var(--vscode-scrollbarSlider-activeBackground);
 }
+
+/* ── Terminal-style log output ── */
+.log-terminal {
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-bottom: 12px;
+}
+
+.log-terminal-titlebar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.log-terminal-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+}
+.log-terminal-dot.red { background: #ff5f57; }
+.log-terminal-dot.yellow { background: #febc2e; }
+.log-terminal-dot.green { background: #28c840; }
+
+.log-terminal-body {
+    padding: 10px 12px;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    max-height: 50vh;
+    overflow-y: auto;
+}
+
+.log-line-step { color: var(--lula-accent); }
+.log-line-error { color: var(--lula-err); }
+.log-line-warning { color: var(--lula-warn); }
+.log-line-box { color: var(--vscode-descriptionForeground); opacity: 0.5; }
+
+/* ── Pipeline bar glow on active ── */
+.pipeline-segment.active {
+    box-shadow: 0 0 8px rgba(0, 212, 170, 0.4);
+}
+.pipeline-segment.done {
+    box-shadow: 0 0 4px rgba(0, 212, 170, 0.15);
+}
+
+/* ── Approval banner polish ── */
+#approval-banner {
+    backdrop-filter: blur(4px);
+    transition: opacity 0.3s, transform 0.3s;
+}
+.approval-icon {
+    font-size: 20px;
+}
+
+/* ── Status badge transitions ── */
+.status-badge {
+    transition: background 0.2s, color 0.2s;
+}
+
+/* ── General transitions ── */
+.node-section {
+    transition: background 0.15s;
+}
+
+#event-stream {
+    transition: border-color 0.2s;
+}
+
+#run-header {
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+#run-header:hover {
+    border-color: rgba(0, 212, 170, 0.2);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* ── Streaming indicator ── */
+.streaming-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    color: var(--vscode-descriptionForeground);
+    font-size: 12px;
+}
+.streaming-dots {
+    display: inline-flex;
+    gap: 3px;
+}
+.streaming-dots span {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--lula-accent);
+    animation: stream-dot 1.4s infinite;
+}
+.streaming-dots span:nth-child(2) { animation-delay: 0.2s; }
+.streaming-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes stream-dot {
+    0%, 60%, 100% { opacity: 0.2; transform: scale(0.8); }
+    30% { opacity: 1; transform: scale(1); }
+}
+
+/* ── Better spacing ── */
+body {
+    padding: 12px 16px;
+    line-height: 1.5;
+}
+
+#run-title {
+    font-size: 14px;
+    letter-spacing: 0.2px;
+}
+
+.btn {
+    letter-spacing: 0.3px;
+}
+
+.btn-approve {
+    box-shadow: 0 2px 8px rgba(0, 212, 170, 0.2);
+}
+.btn-approve:hover {
+    box-shadow: 0 4px 12px rgba(0, 212, 170, 0.35);
+}
+
+/* ── Final output polish ── */
+#final-output {
+    transition: border-color 0.2s;
+}
+#final-output:hover {
+    border-color: rgba(0, 212, 170, 0.2);
+}

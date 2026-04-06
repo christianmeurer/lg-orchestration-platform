@@ -69,17 +69,32 @@ pub fn DashboardPage() -> impl IntoView {
                 }}
                 <div style="flex:1;overflow-y:auto;padding:0 12px 12px 12px;display:flex;flex-direction:column;gap:8px;">
                     {move || {
-                        runs.get()
-                            .into_iter()
-                            .map(|run| {
-                                let run_id = run.run_id.clone();
-                                view! {
-                                    <a href=format!("/app/runs/{}", run_id) style="text-decoration:none;">
-                                        <RunCard run=run />
-                                    </a>
-                                }
-                            })
-                            .collect::<Vec<_>>()
+                        let current_runs = runs.get();
+                        if current_runs.is_empty() {
+                            vec![view! {
+                                <div class="empty-state">
+                                    <div style="margin-bottom:16px;">
+                                        <span class="brand-text" style="font-size:14px;letter-spacing:4px;">"LULA"</span>
+                                    </div>
+                                    <div class="empty-state-text">"No runs yet. Enter a task above to get started."</div>
+                                    <div style="font-size:12px;color:var(--text-faint);margin-top:8px;">
+                                        "Runs will appear here as they are created."
+                                    </div>
+                                </div>
+                            }.into_any()]
+                        } else {
+                            current_runs
+                                .into_iter()
+                                .map(|run| {
+                                    let run_id = run.run_id.clone();
+                                    view! {
+                                        <a href=format!("/app/runs/{}", run_id) style="text-decoration:none;" class="card-enter">
+                                            <RunCard run=run />
+                                        </a>
+                                    }.into_any()
+                                })
+                                .collect::<Vec<_>>()
+                        }
                     }}
                 </div>
             </div>
@@ -89,6 +104,9 @@ pub fn DashboardPage() -> impl IntoView {
     let right_panel = ViewFn::from(move || {
         view! {
             <div style="padding:24px;overflow-y:auto;height:100%;">
+                <div style="margin-bottom:24px;">
+                    <span class="brand-text" style="font-size:18px;letter-spacing:6px;">"LULA CONSOLE"</span>
+                </div>
                 <div style="font-size:11px;color:var(--text-muted);letter-spacing:0.5px;font-weight:600;margin-bottom:16px;">
                     "OVERVIEW"
                 </div>

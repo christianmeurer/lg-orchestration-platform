@@ -29,9 +29,9 @@ pub fn CommandBar(
     let do_submit_click = do_submit;
 
     view! {
-        <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-surface);border-bottom:1px solid var(--border);">
-            <span style="color:var(--text-muted);font-size:16px;flex-shrink:0;">
-                "\u{2318}"
+        <div class="command-bar">
+            <span style="color:var(--accent);font-size:18px;flex-shrink:0;font-weight:700;">
+                "\u{25C6}"
             </span>
             <input
                 type="text"
@@ -47,7 +47,6 @@ pub fn CommandBar(
                         do_submit();
                     }
                 }
-                style="flex:1;background:var(--bg-void);color:var(--text-primary);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-size:14px;outline:none;"
             />
             {move || {
                 approval_count.and_then(|sig| {
@@ -56,7 +55,8 @@ pub fn CommandBar(
                         Some(view! {
                             <a
                                 href="/app/approvals"
-                                style="background:var(--warn);color:var(--bg-void);padding:4px 10px;border-radius:4px;font-size:12px;font-weight:600;text-decoration:none;"
+                                class="badge badge-pending"
+                                style="text-decoration:none;font-weight:600;"
                             >
                                 {format!("{} pending", count)}
                             </a>
@@ -67,9 +67,9 @@ pub fn CommandBar(
                 })
             }}
             <button
+                class="submit-btn"
                 on:click=move |_| do_submit_click()
                 disabled=move || is_submitting.get()
-                style="background:linear-gradient(135deg,var(--accent),var(--accent-alt));color:var(--bg-void);border:none;border-radius:6px;padding:8px 20px;font-weight:600;font-size:13px;cursor:pointer;flex-shrink:0;"
             >
                 "Submit"
             </button>

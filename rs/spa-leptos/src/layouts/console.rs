@@ -112,8 +112,26 @@ pub fn ConsoleLayout() -> impl IntoView {
         closure.forget();
     });
 
+    // Health check for status dot
+    let (is_healthy, set_is_healthy) = signal(true);
+    {
+        let config = config.clone();
+        leptos::task::spawn_local(async move {
+            loop {
+                let url = format!("{}/api/health", config.base_url);
+                let ok = gloo_net::http::Request::get(&url).send().await.is_ok();
+                set_is_healthy.set(ok);
+                gloo_timers::future::TimeoutFuture::new(10_000).await;
+            }
+        });
+    }
+
     view! {
         <div style="display:flex;flex-direction:column;min-height:100vh;background:var(--bg-void);color:var(--text-primary);font-family:Inter,sans-serif;">
+            <div class="brand-bar">
+                <span class="brand-text">"LULA"</span>
+                <span class=move || if is_healthy.get() { "status-dot" } else { "status-dot disconnected" }></span>
+            </div>
             <CommandBar on_submit=on_submit approval_count=approval_count_signal />
             <div style="flex:1;overflow:auto;">
                 <Outlet />

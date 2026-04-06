@@ -53,29 +53,54 @@ pub fn RunStream(#[prop(into)] state: Signal<RunState>) -> impl IntoView {
                 } else if !s.log_lines.is_empty() {
                     // No structured events but log lines from run summary
                     vec![view! {
-                        <div style="background:var(--bg-surface);border:1px solid var(--border);border-radius:6px;padding:12px;font-family:var(--font-mono);font-size:12px;white-space:pre-wrap;color:var(--text-secondary);max-height:600px;overflow-y:auto;">
-                            {s.log_lines.iter().map(|line| {
-                                let color = if line.contains("error") || line.contains("ERROR") || line.contains("FAIL") {
-                                    "var(--err)"
-                                } else if line.contains("warning") {
-                                    "var(--warn)"
-                                } else if line.starts_with('[') && line.contains(']') {
-                                    "var(--accent)"
-                                } else if line.starts_with('╭') || line.starts_with('│') || line.starts_with('╰') {
-                                    "var(--text-faint)"
-                                } else {
-                                    "var(--text-secondary)"
-                                };
-                                view! { <div style=format!("color:{color}")>{line.clone()}</div> }
-                            }).collect::<Vec<_>>()}
+                        <div class="terminal-window">
+                            <div class="terminal-titlebar">
+                                <span class="terminal-dot red"></span>
+                                <span class="terminal-dot yellow"></span>
+                                <span class="terminal-dot green"></span>
+                            </div>
+                            <div class="terminal-body">
+                                {s.log_lines.iter().map(|line| {
+                                    let css_class = if line.contains("error") || line.contains("ERROR") || line.contains("FAIL") {
+                                        "log-line-error"
+                                    } else if line.contains("warning") || line.contains("WARNING") {
+                                        "log-line-warning"
+                                    } else if line.starts_with('[') && line.contains(']') {
+                                        "log-line-step"
+                                    } else if line.starts_with('\u{256D}') || line.starts_with('\u{2502}') || line.starts_with('\u{2570}') || line.starts_with('\u{2500}') {
+                                        "log-line-box"
+                                    } else {
+                                        ""
+                                    };
+                                    view! { <div class=css_class>{line.clone()}</div> }
+                                }).collect::<Vec<_>>()}
+                            </div>
                         </div>
                     }.into_any()]
                 } else {
                     vec![view! {
-                        <div style="color:var(--text-muted);font-size:13px;padding:20px;">
-                            "Waiting for events..."
+                        <div class="empty-state" style="padding:40px 20px;">
+                            <div class="empty-state-icon">"\u{1F4E1}"</div>
+                            <div class="empty-state-text">"Waiting for events..."</div>
                         </div>
                     }.into_any()]
+                }
+            }}
+            {move || {
+                let s = state.get();
+                if !s.is_done && (!s.log_lines.is_empty() || !s.events.is_empty()) {
+                    Some(view! {
+                        <div style="display:flex;align-items:center;gap:8px;padding:12px 0;color:var(--text-muted);font-size:13px;">
+                            <span class="streaming-dots">
+                                <span></span>
+                                <span></span>
+                                <span></span>
+                            </span>
+                            "Streaming"
+                        </div>
+                    })
+                } else {
+                    None
                 }
             }}
             <StdoutPanel state=state />

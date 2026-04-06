@@ -129,6 +129,12 @@
                 });
             }
 
+            // Extract final output (from top-level "final" or trace.final)
+            const finalText = data['final'] || (data.trace && data.trace['final']) || null;
+            if (finalText) {
+                showFinalOutput(finalText);
+            }
+
             // Check for completion
             if (data.status === 'succeeded' || data.status === 'failed' || data.status === 'cancelled') {
                 markDone();

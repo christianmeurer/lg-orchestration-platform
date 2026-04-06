@@ -23,7 +23,10 @@ struct RunSummaryEvent {
     #[serde(default)]
     trace: Option<serde_json::Value>,
     #[serde(default)]
-    _current_node: Option<String>,
+    #[serde(rename = "final")]
+    final_text: Option<String>,
+    #[serde(default)]
+    _trace_ready: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -36,6 +39,70 @@ pub struct StdoutLine {
     pub line: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct PipelineNode {
+    pub index: u32,
+    pub name: String,
+    pub events: u32,
+    pub tools: u32,
+    pub done: bool,
+}
+
+/// Parse a single log line for pipeline node info.
+/// Expected format: `[NN] node_name     events=N   tools=N`
+fn parse_pipeline_line(line: &str) -> Option<PipelineNode> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('[') {
+        return None;
+    }
+    let close_bracket = trimmed.find(']')?;
+    let index_str = trimmed[1..close_bracket].trim();
+    let index: u32 = index_str.parse().ok()?;
+    let rest = trimmed[close_bracket + 1..].trim_start();
+    // Extract the node name (first whitespace-delimited token)
+    let name_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    let name = rest[..name_end].to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let remainder = &rest[name_end..];
+    // Parse events=N and tools=N
+    let mut events_count: u32 = 0;
+    let mut tools_count: u32 = 0;
+    for part in remainder.split_whitespace() {
+        if let Some(val) = part.strip_prefix("events=") {
+            events_count = val.parse().unwrap_or(0);
+        } else if let Some(val) = part.strip_prefix("tools=") {
+            tools_count = val.parse().unwrap_or(0);
+        }
+    }
+    Some(PipelineNode { index, name, events: events_count, tools: tools_count, done: false })
+}
+
+/// Build pipeline nodes from all log lines. Later entries for the same index
+/// overwrite earlier ones (they carry updated counts).
+fn build_pipeline_nodes(log_lines: &[String]) -> Vec<PipelineNode> {
+    let mut nodes: Vec<PipelineNode> = Vec::new();
+    for line in log_lines {
+        if let Some(node) = parse_pipeline_line(line) {
+            if let Some(existing) = nodes.iter_mut().find(|n| n.index == node.index) {
+                existing.events = node.events;
+                existing.tools = node.tools;
+                existing.name = node.name;
+            } else {
+                nodes.push(node);
+            }
+        }
+    }
+    nodes.sort_by_key(|n| n.index);
+    // Mark all but the last as done (the last one is the currently active node)
+    let len = nodes.len();
+    for (i, node) in nodes.iter_mut().enumerate() {
+        node.done = i + 1 < len;
+    }
+    nodes
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RunState {
     pub events: Vec<TraceEvent>,
@@ -46,6 +113,8 @@ pub struct RunState {
     pub status: Option<String>,
     pub request: Option<String>,
     pub approval: Option<ApprovalRequest>,
+    pub pipeline_nodes: Vec<PipelineNode>,
+    pub trace_json: Option<serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +205,14 @@ pub fn connect_sse(
                                 s.log_lines.push(line.clone());
                             }
                         }
+                        // Rebuild pipeline nodes from log lines
+                        s.pipeline_nodes = build_pipeline_nodes(&s.log_lines);
+                        // If run is done, mark all nodes as done
+                        if s.is_done {
+                            for node in &mut s.pipeline_nodes {
+                                node.done = true;
+                            }
+                        }
 
                         // Check for approval
                         if summary.pending_approval {
@@ -147,8 +224,31 @@ pub fn connect_sse(
                             });
                         }
 
+                        // Extract final output
+                        if s.final_output.is_none() {
+                            // Try top-level "final" field first
+                            if let Some(ref f) = summary.final_text {
+                                if !f.is_empty() {
+                                    s.final_output = Some(f.clone());
+                                }
+                            }
+                            // Then try trace.final
+                            if s.final_output.is_none() {
+                                if let Some(ref trace_val) = summary.trace {
+                                    if let Some(f) = trace_val.get("final").and_then(|v| v.as_str())
+                                    {
+                                        if !f.is_empty() {
+                                            s.final_output = Some(f.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         // Extract trace events if present
                         if let Some(ref trace_val) = summary.trace {
+                            // Store the full trace JSON for tabs
+                            s.trace_json = Some(trace_val.clone());
                             if let Some(events) = trace_val.get("events") {
                                 if let Ok(trace_events) =
                                     serde_json::from_value::<Vec<TraceEvent>>(events.clone())
